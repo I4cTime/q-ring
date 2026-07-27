@@ -2,7 +2,7 @@
   "name": "@i4ctime/q-ring",
   "version": "0.13.0",
   "mcpName": "io.github.I4cTime/q-ring",
-  "description": "Quantum keyring for AI coding tools — Cursor, Kiro, Claude Code. Secrets, superposition, entanglement, MCP.",
+  "description": "Quantum keyring for AI coding tools \u2014 Cursor, Kiro, Claude Code. Secrets, superposition, entanglement, MCP.",
   "type": "module",
   "bin": {
     "qring": "dist/index.js",
@@ -85,10 +85,11 @@
       "vite": "8.1.4",
       "qs": "6.15.2",
       "ip-address": ">=10.1.1",
-      "fast-uri": ">=3.1.2 <4",
+      "fast-uri": ">=3.1.4 <4",
       "esbuild": ">=0.28.1",
-      "postcss": ">=8.5.10",
-      "js-yaml": ">=4.2.0"
+      "postcss": ">=8.5.18",
+      "js-yaml": ">=4.2.0",
+      "brace-expansion": ">=5.0.8"
     }
   }
 }
