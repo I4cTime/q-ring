@@ -48,7 +48,7 @@ export function registerToolingTools(server: McpServer): void {
         .optional()
         .default("restricted")
         .describe(
-          "Exec sandbox profile. 'restricted' (default) limits PATH and inheritable env vars; 'ci' is restricted plus CI-friendly defaults (no TTY); 'unrestricted' inherits the full server environment — only pick this when you understand the leak risk.",
+          "Exec sandbox profile. 'restricted' (default) denies a fixed list of network-tool binaries (curl, wget, ssh, scp, nc, netcat, ncat), strips proxy env vars, and caps runtime at 30s — it is NOT a real sandbox: it does not restrict PATH, and interpreters invoked directly (python, node, perl, etc.) can still make network requests and read the injected secret env vars. 'ci' allows network with a 300s cap and blocks a few destructive commands; 'unrestricted' inherits the full server environment. For untrusted commands use OS-level isolation (containers, network namespaces), not this profile.",
         ),
       scope,
       projectPath,

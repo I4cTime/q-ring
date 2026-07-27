@@ -1,6 +1,6 @@
 {
   "name": "@i4ctime/q-ring",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "mcpName": "io.github.I4cTime/q-ring",
   "description": "Quantum keyring for AI coding tools — Cursor, Kiro, Claude Code. Secrets, superposition, entanglement, MCP.",
   "type": "module",
@@ -60,6 +60,7 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@napi-rs/keyring": "^1.3.0",
     "commander": "^15.0.0",
+    "ipaddr.js": "^1.9.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {

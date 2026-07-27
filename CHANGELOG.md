@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.13.1] — 2026-07-27
+
+### Security
+- **Hardened SSRF IP-literal matching for IPv6-mapped forms.** The private/loopback/
+  link-local guard (`isPrivateIP`) now parses addresses structurally via `ipaddr.js`
+  instead of regex-matching them, so IPv4-mapped IPv6 addresses are blocked in every
+  canonical spelling — including the hex-group form the WHATWG URL parser produces
+  (e.g. `[::ffff:127.0.0.1]` → `::ffff:7f00:1`), which the previous dotted-decimal-only
+  match let through. Applies to all four guard entry points (`checkSSRF`,
+  `checkSSRFSync`, the connect-time `guardedLookup` rebinding guard, and
+  `checkJitHttpProvisionUrl`), closing the bypass for outbound hook URLs and HTTP JIT
+  provisioning targets. Public unicast addresses (including IPv4-mapped public
+  addresses) are unaffected. Regression tests added.
+
+### Fixed
+- **`exec_with_secrets` profile description now states the real guarantee.** The
+  `restricted` profile's MCP tool description claimed it "limits PATH and inheritable
+  env vars"; in fact it denies a fixed list of network-tool binaries, strips proxy env
+  vars, and caps runtime — it does not restrict `PATH`, and interpreters invoked
+  directly (`python`, `node`, …) can still perform network I/O and read the injected
+  secrets. The description now says so and points to OS-level isolation for untrusted
+  commands. (No behavior change; a hardened `restricted` profile follows in 0.14.0.)
+
+### Dependencies
+- **`ipaddr.js` promoted to a direct dependency** (`^1.9.1`; already present transitively).
+  It backs the SSRF address parsing above. The published package's runtime dependency
+  set is otherwise unchanged.
+
 ## [0.13.0] — 2026-07-11
 
 ### Dependencies
