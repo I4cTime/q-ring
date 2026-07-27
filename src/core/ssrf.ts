@@ -9,6 +9,7 @@ import { lookup } from "node:dns/promises";
 import * as dns from "node:dns";
 import { lookup as dnsLookup, type LookupAddress } from "node:dns";
 import { isIPv4, isIPv6 } from "node:net";
+import ipaddr from "ipaddr.js";
 
 /** `lookupSync` exists at runtime (Node 18+); some @types/node versions omit it from typings. */
 function lookupAddressesSync(hostname: string): { address: string; family: number }[] {
@@ -29,22 +30,64 @@ function isHostnameIpLiteral(hostname: string): boolean {
   return isIPv6(hostname);
 }
 
-export function isPrivateIP(ip: string): boolean {
-  const octet = "(?:25[0-5]|2[0-4]\\d|1?\\d{1,2})";
-  const ipv4Re = new RegExp(`^::ffff:(${octet}\\.${octet}\\.${octet}\\.${octet})$`, "i");
-  const ipv4Mapped = ip.match(ipv4Re);
-  if (ipv4Mapped) return isPrivateIP(ipv4Mapped[1]);
+/**
+ * IPv4 ranges an outbound request must never reach. `reserved` (which includes
+ * the TEST-NET documentation blocks) and `multicast` are deliberately omitted to
+ * preserve the historical "public IPs pass" contract.
+ */
+const BLOCKED_IPV4_RANGES = new Set<string>([
+  "unspecified",
+  "broadcast",
+  "linkLocal",
+  "loopback",
+  "carrierGradeNat",
+  "private",
+]);
 
-  if (/^127\./.test(ip)) return true;
-  if (/^10\./.test(ip)) return true;
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return true;
-  if (/^192\.168\./.test(ip)) return true;
-  if (/^169\.254\./.test(ip)) return true;
-  if (ip === "0.0.0.0") return true;
-  if (ip === "::1" || ip === "::") return true;
-  if (/^f[cd][0-9a-f]{2}:/i.test(ip)) return true;
-  if (/^fe80:/i.test(ip)) return true;
-  return false;
+/**
+ * True if an IP *literal* points somewhere an outbound request must never go:
+ * loopback, private, link-local, carrier-grade NAT, unspecified/broadcast, and —
+ * for IPv6 — every non-unicast range plus the IPv4-in-IPv6 transition forms that
+ * can smuggle those targets past a naive string check.
+ *
+ * Parsing is delegated to `ipaddr.js` rather than matched with regexes, because
+ * the WHATWG URL parser canonicalizes an IPv4-mapped literal like
+ * `[::ffff:127.0.0.1]` to the hex-group form `::ffff:7f00:1` (and
+ * `[::ffff:169.254.169.254]` → `::ffff:a9fe:a9fe`, i.e. cloud metadata), which a
+ * dotted-decimal-only regex silently let through. Structured parsing covers every
+ * canonical form of the same address.
+ *
+ * Returns false for non-IP strings (hostnames); DNS resolution is handled by the
+ * callers, which re-run this check against each resolved address.
+ */
+export function isPrivateIP(ip: string): boolean {
+  let addr: ipaddr.IPv4 | ipaddr.IPv6;
+  try {
+    addr = ipaddr.parse(ip);
+  } catch {
+    return false;
+  }
+
+  if (addr.kind() === "ipv6") {
+    const v6 = addr as ipaddr.IPv6;
+    // Unwrap IPv4-mapped addresses and judge the embedded IPv4, so both the
+    // dotted (`::ffff:127.0.0.1`) and hex-group (`::ffff:7f00:1`) canonical forms
+    // resolve to the same verdict.
+    if (v6.isIPv4MappedAddress()) {
+      return isBlockedIPv4(v6.toIPv4Address());
+    }
+    // Only genuine global unicast IPv6 is allowed out. Everything else —
+    // loopback, link-local, unique-local, unspecified, multicast, reserved, and
+    // the IPv4-embedding 6to4/teredo/rfc6052/rfc6145 transition ranges — is a
+    // potential internal-target smuggling vector and is blocked.
+    return v6.range() !== "unicast";
+  }
+
+  return isBlockedIPv4(addr as ipaddr.IPv4);
+}
+
+function isBlockedIPv4(addr: ipaddr.IPv4): boolean {
+  return BLOCKED_IPV4_RANGES.has(addr.range());
 }
 
 /**
