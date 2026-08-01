@@ -5,14 +5,24 @@
  * can remember decisions, rotations performed, and project-specific
  * context between conversations.
  *
- * Data is encrypted using AES-256-GCM derived from a machine-specific
- * fingerprint (hostname + username), so it only decrypts on the same machine.
+ * Data is encrypted with AES-256-GCM. The key is a random 32-byte key stored in
+ * the OS keyring. Where no keyring is available (headless Linux, most
+ * containers/CI), a key is derived from QRING_MEMORY_PASSPHRASE (PBKDF2); if
+ * neither is present, writes fail closed rather than fall back to a
+ * machine-derivable key that any local process could recompute (A4). The old
+ * hostname+username-derived key is retained for *reading* pre-existing stores.
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, hostname, userInfo } from "node:os";
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+  pbkdf2Sync,
+} from "node:crypto";
 import { Entry } from "@napi-rs/keyring";
 
 const MEMORY_FILE = "agent-memory.enc";
@@ -45,23 +55,52 @@ function getMemoryPath(): string {
   return join(getMemoryDir(), MEMORY_FILE);
 }
 
+const PBKDF2_ITERATIONS = 210_000; // OWASP 2023 floor, matches teleport.ts
+const KEY_LENGTH = 32;
+const PASSPHRASE_ENV = "QRING_MEMORY_PASSPHRASE";
+const V2_PREFIX = "qmem2"; // passphrase-encrypted blob: qmem2:<salt>:<iv:tag:ct>
+
+/** Thrown when no secure key is available to encrypt (or decrypt) memory. */
+export class MemoryKeyUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MemoryKeyUnavailableError";
+  }
+}
+
+/**
+ * The pre-A4 fallback key: SHA-256 of hostname+username. NOT secret — any local
+ * process can recompute it. Retained ONLY to read stores written by older
+ * versions; never used to encrypt new data.
+ */
 function deriveLegacyKey(): Buffer {
   const fingerprint = `qring-memory:${hostname()}:${userInfo().username}`;
   return createHash("sha256").update(fingerprint).digest();
 }
 
-function getOrCreateKey(): Buffer {
+function passphrase(): string | undefined {
+  const p = process.env[PASSPHRASE_ENV];
+  return p && p.length > 0 ? p : undefined;
+}
+
+function derivePassphraseKey(salt: Buffer): Buffer {
+  return pbkdf2Sync(passphrase()!, salt, PBKDF2_ITERATIONS, KEY_LENGTH, "sha512");
+}
+
+/**
+ * The random key from the OS keyring (created on first use), or null if no
+ * keyring backend is available on this host.
+ */
+function keyringKey(): Buffer | null {
   try {
     const entry = new Entry(KEYRING_SERVICE, KEYRING_ACCOUNT);
     const stored = entry.getPassword();
     if (stored) return Buffer.from(stored, "base64");
-
-    const key = randomBytes(32);
+    const key = randomBytes(KEY_LENGTH);
     entry.setPassword(key.toString("base64"));
     return key;
   } catch {
-    console.warn("[q-ring] OS keyring unavailable for memory key — falling back to machine-derived key");
-    return deriveLegacyKey();
+    return null;
   }
 }
 
@@ -86,20 +125,59 @@ function decryptWith(blob: string, key: Buffer): string {
 }
 
 function encrypt(data: string): string {
-  return encryptWith(data, getOrCreateKey());
+  const kk = keyringKey();
+  if (kk) return encryptWith(data, kk);
+
+  if (passphrase()) {
+    const salt = randomBytes(16);
+    const key = derivePassphraseKey(salt);
+    return `${V2_PREFIX}:${salt.toString("base64")}:${encryptWith(data, key)}`;
+  }
+
+  throw new MemoryKeyUnavailableError(
+    `Cannot persist agent memory: the OS keyring is unavailable and ${PASSPHRASE_ENV} ` +
+      `is not set. Refusing to encrypt with a machine-derivable key (any local process ` +
+      `could recompute it and read your memory). Set ${PASSPHRASE_ENV} to a strong ` +
+      `passphrase, or run on a host with an OS keyring.`,
+  );
 }
 
 function decrypt(blob: string): string {
-  const key = getOrCreateKey();
-  try {
-    return decryptWith(blob, key);
-  } catch {
-    // Migration: try legacy key, re-encrypt with new key if successful
-    const legacy = deriveLegacyKey();
-    const plain = decryptWith(blob, legacy);
-    writeMemoryFile(getMemoryPath(), encryptWith(plain, key));
-    return plain;
+  // Passphrase-encrypted (v2): salt is embedded; needs QRING_MEMORY_PASSPHRASE.
+  if (blob.startsWith(`${V2_PREFIX}:`)) {
+    if (!passphrase()) {
+      throw new MemoryKeyUnavailableError(
+        `Agent memory was encrypted with ${PASSPHRASE_ENV} but it is not set — cannot decrypt.`,
+      );
+    }
+    const rest = blob.slice(V2_PREFIX.length + 1);
+    const sep = rest.indexOf(":");
+    const salt = Buffer.from(rest.slice(0, sep), "base64");
+    return decryptWith(rest.slice(sep + 1), derivePassphraseKey(salt));
   }
+
+  // Legacy 3-part format: try the keyring key first, then the machine-derived
+  // key for read-only migration of pre-A4 stores.
+  const kk = keyringKey();
+  if (kk) {
+    try {
+      return decryptWith(blob, kk);
+    } catch {
+      /* fall through to legacy machine key */
+    }
+  }
+
+  const plain = decryptWith(blob, deriveLegacyKey());
+  // Re-encrypt under the keyring key if one is now available — but never persist
+  // under the derivable legacy key. Without a secure key, read but don't rewrite.
+  if (kk) {
+    try {
+      writeMemoryFile(getMemoryPath(), encryptWith(plain, kk));
+    } catch {
+      /* best-effort migration */
+    }
+  }
+  return plain;
 }
 
 interface MemoryStore {
@@ -115,7 +193,13 @@ function loadStore(): MemoryStore {
     const raw = readFileSync(path, "utf8");
     const decrypted = decrypt(raw);
     return JSON.parse(decrypted);
-  } catch {
+  } catch (err) {
+    // A store that exists but can't be decrypted because the key is unavailable
+    // is surfaced loudly (so "empty memory" isn't mistaken for "no memory"),
+    // but reads still degrade to empty rather than crashing the caller.
+    if (err instanceof MemoryKeyUnavailableError) {
+      console.error(`q-ring: ${err.message}`);
+    }
     return { entries: {} };
   }
 }
