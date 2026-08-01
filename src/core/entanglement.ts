@@ -12,6 +12,13 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { loadJsonRegistry } from "../utils/registry.js";
 
+export interface EntanglementProvenance {
+  /** Audit source that created the link (cli/mcp/...). */
+  source?: string;
+  /** Pinned policy root in effect when an MCP caller created the link, if any. */
+  policyRoot?: string | null;
+}
+
 export interface EntanglementPair {
   /** Source: service/key */
   source: { service: string; key: string };
@@ -19,11 +26,17 @@ export interface EntanglementPair {
   target: { service: string; key: string };
   /** When this entanglement was created */
   createdAt: string;
+  /** Who created this link. Absent on pre-v0.14 pairs (treat as "legacy"). */
+  createdBy?: EntanglementProvenance;
 }
 
 interface EntanglementRegistry {
+  /** Schema version. Absent = pre-v0.14. */
+  version?: number;
   pairs: EntanglementPair[];
 }
+
+const REGISTRY_VERSION = 1;
 
 function getRegistryPath(): string {
   const dir = join(homedir(), ".config", "q-ring");
@@ -38,6 +51,7 @@ function loadRegistry(): EntanglementRegistry {
 }
 
 function saveRegistry(registry: EntanglementRegistry): void {
+  registry.version = REGISTRY_VERSION;
   writeFileSync(getRegistryPath(), JSON.stringify(registry, null, 2), {
     mode: 0o600,
   });
@@ -46,6 +60,7 @@ function saveRegistry(registry: EntanglementRegistry): void {
 export function entangle(
   source: { service: string; key: string },
   target: { service: string; key: string },
+  createdBy?: EntanglementProvenance,
 ): void {
   const registry = loadRegistry();
 
@@ -58,17 +73,10 @@ export function entangle(
   );
 
   if (!exists) {
-    registry.pairs.push({
-      source,
-      target,
-      createdAt: new Date().toISOString(),
-    });
+    const createdAt = new Date().toISOString();
+    registry.pairs.push({ source, target, createdAt, createdBy });
     // Bidirectional: add reverse link too
-    registry.pairs.push({
-      source: target,
-      target: source,
-      createdAt: new Date().toISOString(),
-    });
+    registry.pairs.push({ source: target, target: source, createdAt, createdBy });
     saveRegistry(registry);
   }
 }

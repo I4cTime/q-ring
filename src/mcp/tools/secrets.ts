@@ -587,6 +587,20 @@ export function registerSecretTools(server: McpServer): void {
       );
       if (toolBlock) return toolBlock;
 
+      // Entangling links two keys so a write to one propagates to the other —
+      // i.e. it grants write access to targetKey. Gate BOTH keys with the same
+      // key-level policy a direct read/write would face, so an agent can't link
+      // a scratch key to a denied one and overwrite it via propagation (A2).
+      for (const key of [params.sourceKey, params.targetKey]) {
+        const decision = checkKeyReadPolicy(key, undefined, params.sourceProjectPath);
+        if (!decision.allowed) {
+          return text(
+            `Policy Denied: ${decision.reason} (source: ${decision.policySource})`,
+            true,
+          );
+        }
+      }
+
       entangleSecrets(
         params.sourceKey,
         {

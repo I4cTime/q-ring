@@ -29,7 +29,7 @@ import { findEntangled, entangle as entangleLink, disentangle as disentangleLink
 import { fireHooks } from "./hooks.js";
 import { hasApproval } from "./approval.js";
 import { registry as jitRegistry } from "./provision.js";
-import { checkKeyReadPolicy, checkSecretLifecyclePolicy } from "./policy.js";
+import { checkKeyReadPolicy, checkSecretLifecyclePolicy, getPolicyRoot } from "./policy.js";
 
 function withJitEnvelopeLock<T>(service: string, key: string, fn: () => T): T {
   const dir = join(homedir(), ".config", "q-ring", "jit-locks");
@@ -392,6 +392,23 @@ export function setSecret(
   const entangled = findEntangled({ service, key });
   for (const target of entangled) {
     try {
+      // An MCP-sourced write must not silently propagate into a key the
+      // caller's policy forbids — otherwise entanglement is a write primitive
+      // that bypasses deniedKeys/deniedTags (A2). CLI writes are unrestricted
+      // by design (the local operator already has full access).
+      if (source === "mcp") {
+        const decision = checkKeyReadPolicy(target.key, undefined, opts.projectPath);
+        if (!decision.allowed) {
+          logAudit({
+            action: "entangle",
+            key: target.key,
+            scope: "global",
+            source,
+            detail: `blocked propagation from ${key}: ${decision.reason}`,
+          });
+          continue;
+        }
+      }
       const targetEnvelope = readEnvelope(target.service, target.key);
       if (targetEnvelope) {
         if (opts.states) {
@@ -667,7 +684,10 @@ export function entangleSecrets(
   const source = { service: sourceScopes[0].service, key: sourceKey };
   const target = { service: targetScopes[0].service, key: targetKey };
 
-  entangleLink(source, target);
+  entangleLink(source, target, {
+    source: sourceOpts.source ?? "cli",
+    policyRoot: getPolicyRoot(),
+  });
   logAudit({
     action: "entangle",
     key: sourceKey,
