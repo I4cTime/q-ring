@@ -7,9 +7,10 @@
  * lookup: given a secret, find all its entangled partners.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { loadJsonRegistry } from "../utils/registry.js";
 
 export interface EntanglementPair {
   /** Source: service/key */
@@ -27,21 +28,13 @@ interface EntanglementRegistry {
 function getRegistryPath(): string {
   const dir = join(homedir(), ".config", "q-ring");
   if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
   return join(dir, "entanglement.json");
 }
 
 function loadRegistry(): EntanglementRegistry {
-  const path = getRegistryPath();
-  if (!existsSync(path)) {
-    return { pairs: [] };
-  }
-  try {
-    return JSON.parse(readFileSync(path, "utf8"));
-  } catch {
-    return { pairs: [] };
-  }
+  return loadJsonRegistry<EntanglementRegistry>(getRegistryPath(), { pairs: [] });
 }
 
 function saveRegistry(registry: EntanglementRegistry): void {

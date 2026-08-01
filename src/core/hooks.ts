@@ -5,12 +5,13 @@
  * Registry stored at ~/.config/q-ring/hooks.json
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { httpRequest } from "../utils/http-request.js";
+import { loadJsonRegistry } from "../utils/registry.js";
 import { logAudit } from "./observer.js";
 import { checkSSRF } from "./ssrf.js";
 
@@ -58,21 +59,13 @@ interface HookRegistry {
 function getRegistryPath(): string {
   const dir = join(homedir(), ".config", "q-ring");
   if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
   return join(dir, "hooks.json");
 }
 
 function loadRegistry(): HookRegistry {
-  const path = getRegistryPath();
-  if (!existsSync(path)) {
-    return { hooks: [] };
-  }
-  try {
-    return JSON.parse(readFileSync(path, "utf8"));
-  } catch {
-    return { hooks: [] };
-  }
+  return loadJsonRegistry<HookRegistry>(getRegistryPath(), { hooks: [] });
 }
 
 function saveRegistry(registry: HookRegistry): void {
