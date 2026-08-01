@@ -11,7 +11,7 @@
  */
 
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Environment } from "./envelope.js";
 
@@ -28,18 +28,40 @@ const BRANCH_ENV_MAP: Record<string, Environment> = {
   testing: "test",
 };
 
+// getSecret/exportSecrets call collapseEnvironment on every read that omits an
+// explicit env; without caching that shelled out `git rev-parse` (sync, up to a
+// 3s timeout) and re-read .q-ring.json on every call, blocking the MCP event
+// loop. Git branch is cached per-cwd for a short window (a branch switch is
+// picked up within the TTL); the config is cached by mtime (always current).
+const BRANCH_CACHE_TTL_MS = 2000;
+let branchCache: { cwd: string; at: number; branch: string | null } | null = null;
+
 function detectGitBranch(cwd?: string): string | null {
+  const dir = cwd ?? process.cwd();
+  const now = Date.now();
+  if (branchCache && branchCache.cwd === dir && now - branchCache.at < BRANCH_CACHE_TTL_MS) {
+    return branchCache.branch;
+  }
+  let branch: string | null = null;
   try {
-    const branch = execSync("git rev-parse --abbrev-ref HEAD", {
-      cwd: cwd ?? process.cwd(),
+    const out = execSync("git rev-parse --abbrev-ref HEAD", {
+      cwd: dir,
       stdio: ["pipe", "pipe", "pipe"],
       encoding: "utf8",
       timeout: 3000,
     }).trim();
-    return branch || null;
+    branch = out || null;
   } catch {
-    return null;
+    // not a git repo / git absent — branch stays null
   }
+  branchCache = { cwd: dir, at: now, branch };
+  return branch;
+}
+
+/** Reset the collapse caches (config + git branch). Primarily for tests. */
+export function clearCollapseCache(): void {
+  branchCache = null;
+  configCache = null;
 }
 
 export interface ManifestEntry {
@@ -65,16 +87,29 @@ export interface ProjectConfig {
   policy?: import("./policy.js").PolicyConfig;
 }
 
+let configCache: { path: string; mtimeMs: number; config: ProjectConfig | null } | null = null;
+
 export function readProjectConfig(projectPath?: string): ProjectConfig | null {
   const configPath = join(projectPath ?? process.cwd(), ".q-ring.json");
+  let mtimeMs = 0;
   try {
-    if (existsSync(configPath)) {
-      return JSON.parse(readFileSync(configPath, "utf8"));
-    }
+    mtimeMs = statSync(configPath).mtimeMs;
   } catch {
-    // invalid config
+    // absent — mtimeMs stays 0 as a stable sentinel
   }
-  return null;
+  if (configCache && configCache.path === configPath && configCache.mtimeMs === mtimeMs) {
+    return configCache.config;
+  }
+  let config: ProjectConfig | null = null;
+  if (mtimeMs > 0) {
+    try {
+      config = JSON.parse(readFileSync(configPath, "utf8")) as ProjectConfig;
+    } catch {
+      config = null; // invalid config
+    }
+  }
+  configCache = { path: configPath, mtimeMs, config };
+  return config;
 }
 
 export interface CollapseContext {

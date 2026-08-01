@@ -8,6 +8,7 @@ import {
   clearPolicyCache,
   PolicyConfigError,
 } from "../../core/policy.js";
+import { clearCollapseCache } from "../../core/collapse.js";
 
 const dir = join(tmpdir(), `qring-config-schema-${process.pid}`);
 const cfg = join(dir, ".q-ring.json");
@@ -15,6 +16,7 @@ const cfg = join(dir, ".q-ring.json");
 function writePolicy(policy: unknown): void {
   writeFileSync(cfg, JSON.stringify({ policy }), "utf8");
   clearPolicyCache();
+  clearCollapseCache(); // policy reads via collapse's config cache
 }
 
 describe(".q-ring.json policy validation (B3)", () => {
