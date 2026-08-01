@@ -9,7 +9,7 @@
  * fingerprint (hostname + username), so it only decrypts on the same machine.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, hostname, userInfo } from "node:os";
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
@@ -22,9 +22,23 @@ const KEYRING_ACCOUNT = "encryption-key";
 function getMemoryDir(): string {
   const dir = join(homedir(), ".config", "q-ring");
   if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
   return dir;
+}
+
+/**
+ * Persist the encrypted memory blob with owner-only permissions. `mode` on
+ * writeFileSync only applies when creating the file, so chmod additionally fixes
+ * a store written world-readable by an older version. Best-effort chmod.
+ */
+function writeMemoryFile(path: string, data: string): void {
+  writeFileSync(path, data, { mode: 0o600 });
+  try {
+    chmodSync(path, 0o600);
+  } catch {
+    /* ignore */
+  }
 }
 
 function getMemoryPath(): string {
@@ -83,7 +97,7 @@ function decrypt(blob: string): string {
     // Migration: try legacy key, re-encrypt with new key if successful
     const legacy = deriveLegacyKey();
     const plain = decryptWith(blob, legacy);
-    writeFileSync(getMemoryPath(), encryptWith(plain, key), "utf8");
+    writeMemoryFile(getMemoryPath(), encryptWith(plain, key));
     return plain;
   }
 }
@@ -109,7 +123,7 @@ function loadStore(): MemoryStore {
 function saveStore(store: MemoryStore): void {
   const json = JSON.stringify(store);
   const encrypted = encrypt(json);
-  writeFileSync(getMemoryPath(), encrypted, "utf8");
+  writeMemoryFile(getMemoryPath(), encrypted);
 }
 
 /**

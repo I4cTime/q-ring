@@ -14,6 +14,7 @@ import {
   existsSync,
   mkdirSync,
   appendFileSync,
+  chmodSync,
   readFileSync,
   openSync,
   fstatSync,
@@ -59,13 +60,13 @@ export interface AuditEvent {
 function getAuditDir(): string {
   if (process.env.QRING_AUDIT_DIR) {
     if (!existsSync(process.env.QRING_AUDIT_DIR)) {
-      mkdirSync(process.env.QRING_AUDIT_DIR, { recursive: true });
+      mkdirSync(process.env.QRING_AUDIT_DIR, { recursive: true, mode: 0o700 });
     }
     return process.env.QRING_AUDIT_DIR;
   }
   const dir = join(homedir(), ".config", "q-ring");
   if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
   return dir;
 }
@@ -116,7 +117,16 @@ export function logAudit(
   };
 
   try {
-    appendFileSync(getAuditPath(), JSON.stringify(full) + "\n");
+    const path = getAuditPath();
+    appendFileSync(path, JSON.stringify(full) + "\n", { mode: 0o600 });
+    // `mode` only applies when appendFileSync creates the file; chmod fixes the
+    // perms of an audit log created by an older version (world-readable default)
+    // on the next write. Best-effort — never let it crash the app.
+    try {
+      chmodSync(path, 0o600);
+    } catch {
+      /* ignore */
+    }
   } catch {
     // audit logging should never crash the app
   }
