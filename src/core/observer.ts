@@ -24,7 +24,64 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { createHash } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
+import { Entry } from "@napi-rs/keyring";
+import { withFileLock } from "../utils/file-lock.js";
+
+// The audit chain's tamper-evidence root is a keyed anchor — the HMAC of the
+// head line — stored in the OS keyring, OUTSIDE the log file. The per-line
+// SHA-256 chain (below) stays for cheap in-file consistency and backward
+// compatibility, but it's forgeable on its own (no secret). The keyed anchor is
+// what defeats tail-truncation and full-file rewrite: an attacker who can write
+// audit.jsonl still can't produce a head line whose HMAC matches the anchor, nor
+// update the anchor, without OS-keyring access. Fixed key, never rotated.
+const AUDIT_KEYRING_SERVICE = "qring-audit-chain";
+const AUDIT_KEY_ACCOUNT = "hmac-key";
+const AUDIT_ANCHOR_ACCOUNT = "chain-head";
+
+let warnedNoKeyring = false;
+
+/** Random HMAC key from the OS keyring, or null (with a one-time warning). */
+function getAuditKey(): Buffer | null {
+  try {
+    const entry = new Entry(AUDIT_KEYRING_SERVICE, AUDIT_KEY_ACCOUNT);
+    const stored = entry.getPassword();
+    if (stored) return Buffer.from(stored, "base64");
+    const key = randomBytes(32);
+    entry.setPassword(key.toString("base64"));
+    return key;
+  } catch {
+    if (!warnedNoKeyring) {
+      console.error(
+        "q-ring: WARNING — OS keyring unavailable; the audit chain has no keyed " +
+          "anchor on this host and is NOT tamper-evident against truncation or " +
+          "full-file rewrite. (In-file SHA-256 chaining still detects edits.)",
+      );
+      warnedNoKeyring = true;
+    }
+    return null;
+  }
+}
+
+function headAnchor(line: string, key: Buffer): string {
+  return createHmac("sha256", key).update(line).digest("hex");
+}
+
+function readStoredAnchor(): string | null {
+  try {
+    return new Entry(AUDIT_KEYRING_SERVICE, AUDIT_ANCHOR_ACCOUNT).getPassword() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredAnchor(hash: string): void {
+  try {
+    new Entry(AUDIT_KEYRING_SERVICE, AUDIT_ANCHOR_ACCOUNT).setPassword(hash);
+  } catch {
+    /* ignore — anchor is best-effort when the keyring is unavailable */
+  }
+}
 
 export type AuditAction =
   | "read"
@@ -107,28 +164,39 @@ function getLastLineHash(): string | undefined {
 export function logAudit(
   event: Omit<AuditEvent, "timestamp" | "pid" | "prevHash">,
 ): void {
-  const prevHash = getLastLineHash();
-
-  const full: AuditEvent = {
-    ...event,
-    timestamp: new Date().toISOString(),
-    pid: process.pid,
-    prevHash,
-  };
-
   try {
-    const path = getAuditPath();
-    appendFileSync(path, JSON.stringify(full) + "\n", { mode: 0o600 });
-    // `mode` only applies when appendFileSync creates the file; chmod fixes the
-    // perms of an audit log created by an older version (world-readable default)
-    // on the next write. Best-effort — never let it crash the app.
-    try {
-      chmodSync(path, 0o600);
-    } catch {
-      /* ignore */
-    }
+    // Reading the previous head, appending, and updating the keyed anchor must
+    // be one atomic critical section — otherwise two concurrent writers (MCP +
+    // CLI + dashboard) can compute the same prevHash/anchor and branch the chain.
+    // Reuses the same on-disk lock as the JIT path (B1).
+    withFileLock(
+      "audit-chain",
+      () => {
+        const prevHash = getLastLineHash();
+        const full: AuditEvent = {
+          ...event,
+          timestamp: new Date().toISOString(),
+          pid: process.pid,
+          prevHash,
+        };
+        const line = JSON.stringify(full);
+        const path = getAuditPath();
+        appendFileSync(path, line + "\n", { mode: 0o600 });
+        // `mode` only applies when appendFileSync creates the file; chmod fixes
+        // the perms of a log created by an older (world-readable) version.
+        try {
+          chmodSync(path, 0o600);
+        } catch {
+          /* ignore */
+        }
+        // Advance the keyed anchor to the HMAC of the new head line.
+        const key = getAuditKey();
+        if (key) writeStoredAnchor(headAnchor(line, key));
+      },
+      { timeoutMs: 5000 },
+    );
   } catch {
-    // audit logging should never crash the app
+    // audit logging (incl. a lock timeout) must never crash the app
   }
 }
 
@@ -201,6 +269,8 @@ export interface VerifyResult {
   brokenAt?: number;
   brokenEvent?: AuditEvent;
   intact: boolean;
+  /** Set when the break is explained by something other than a per-line hash. */
+  reason?: string;
 }
 
 /**
@@ -256,6 +326,28 @@ export function verifyAuditChain(): VerifyResult {
     }
 
     validEvents++;
+  }
+
+  // Keyed-anchor check: the head line's HMAC must match the anchor stored in the
+  // keyring. This is what catches tail truncation (the head line changed) and a
+  // full self-consistent rewrite (the attacker can't recompute a matching HMAC
+  // without the key). Only enforced when both a key and a stored anchor exist —
+  // a keyless host, or a log predating the anchor, degrades to per-line checks.
+  const key = getAuditKey();
+  const anchor = key ? readStoredAnchor() : null;
+  if (key && anchor !== null) {
+    const head = headAnchor(lines[lines.length - 1], key);
+    if (head !== anchor) {
+      return {
+        totalEvents: lines.length,
+        validEvents,
+        brokenAt: lines.length - 1,
+        intact: false,
+        reason:
+          "audit head does not match the keyed anchor in the OS keyring — the " +
+          "log was truncated or rewritten",
+      };
+    }
   }
 
   return { totalEvents: lines.length, validEvents, intact: true };
