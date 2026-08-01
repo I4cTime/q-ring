@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Entry, findCredentials } from "@napi-rs/keyring";
 import {
   resolveScope,
+  serviceForScope,
   globalService,
   projectService,
   teamService,
@@ -208,7 +209,7 @@ export function getSecret(
 
     // Check approvals for MCP
     if (envelope.meta.requiresApproval && source === "mcp") {
-      if (!hasApproval(key, scope)) {
+      if (!hasApproval(key, scope, service)) {
         if (!opts.silent) {
           logAudit({
             action: "read",
@@ -600,7 +601,7 @@ export function exportSecrets(
       if (
         source === "mcp" &&
         entry.envelope.meta.requiresApproval &&
-        !hasApproval(entry.key, entry.scope)
+        !hasApproval(entry.key, entry.scope, serviceForScope(entry.scope, opts))
       ) {
         logAudit({
           action: "read",

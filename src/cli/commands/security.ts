@@ -4,6 +4,7 @@ import {
   revokeApproval,
   listApprovals,
 } from "../../core/approval.js";
+import { serviceForScope } from "../../core/scope.js";
 import { getPolicySummary } from "../../core/policy.js";
 import { c, SYMBOLS } from "../../utils/colors.js";
 import { wantsJsonOutput, emitJson } from "../helpers.js";
@@ -25,6 +26,10 @@ export function registerSecurityCommands(program: Command): void {
     .action((key: string, cmd) => {
       const opts = buildOpts(cmd);
       const scope = opts.scope ?? "global";
+      // Bind the approval to the concrete project/team/org identity, not just
+      // the coarse scope label (A5) — the label "project" is identical across
+      // every project, so an approval must be keyed on the resolved service.
+      const service = serviceForScope(scope, opts);
 
       if (cmd.list) {
         const approvals = listApprovals();
@@ -52,7 +57,7 @@ export function registerSecurityCommands(program: Command): void {
       }
 
       if (cmd.revoke) {
-        const revoked = revokeApproval(key, scope);
+        const revoked = revokeApproval(key, scope, service);
         if (revoked) {
           console.log(
             `${SYMBOLS.check} ${c.yellow("revoked")} approval for ${c.bold(key)}`,
@@ -63,7 +68,7 @@ export function registerSecurityCommands(program: Command): void {
         return;
       }
 
-      const entry = grantApproval(key, scope, cmd.for, {
+      const entry = grantApproval(key, scope, service, cmd.for, {
         reason: cmd.reason ?? "manual approval",
       });
       console.log(

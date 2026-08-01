@@ -22,6 +22,15 @@ export interface ApprovalEntry {
   id: string;
   key: string;
   scope: string;
+  /**
+   * The resolved service identity the approval is bound to (e.g.
+   * `q-ring:project:<hashProjectPath>`), not the coarse `scope` label. This is
+   * what actually isolates one project from another — the `scope` string is
+   * `"project"` for *every* project. Absent on pre-v0.14 entries; a check that
+   * requires a service will not match those (fail closed) — they must be
+   * re-granted.
+   */
+  service?: string;
   reason: string;
   grantedBy: string;
   grantedAt: string;
@@ -55,6 +64,7 @@ function computeHmac(entry: Omit<ApprovalEntry, "hmac">): string {
     entry.id,
     entry.key,
     entry.scope,
+    entry.service ?? "",
     entry.reason,
     entry.grantedBy,
     entry.grantedAt,
@@ -110,6 +120,7 @@ export interface GrantOptions {
 export function grantApproval(
   key: string,
   scope: string,
+  service: string,
   ttlSeconds: number = 3600,
   grantOpts: GrantOptions = {},
 ): ApprovalEntry {
@@ -124,6 +135,7 @@ export function grantApproval(
     id,
     key,
     scope,
+    service,
     reason: grantOpts.reason ?? "no reason provided",
     grantedBy: grantOpts.grantedBy ?? "cli-user",
     grantedAt,
@@ -135,7 +147,7 @@ export function grantApproval(
   const entry: ApprovalEntry = { ...partial, hmac: computeHmac(partial) };
 
   const existingIdx = registry.approvals.findIndex(
-    (a) => a.key === key && a.scope === scope,
+    (a) => a.key === key && a.scope === scope && a.service === service,
   );
   if (existingIdx >= 0) {
     registry.approvals[existingIdx] = entry;
@@ -147,20 +159,20 @@ export function grantApproval(
   return entry;
 }
 
-export function revokeApproval(key: string, scope: string): boolean {
+export function revokeApproval(key: string, scope: string, service: string): boolean {
   const registry = loadRegistry();
   const before = registry.approvals.length;
   registry.approvals = registry.approvals.filter(
-    (a) => !(a.key === key && a.scope === scope),
+    (a) => !(a.key === key && a.scope === scope && a.service === service),
   );
   saveRegistry(registry);
   return registry.approvals.length < before;
 }
 
-export function hasApproval(key: string, scope: string): boolean {
+export function hasApproval(key: string, scope: string, service: string): boolean {
   const registry = loadRegistry();
   const entry = registry.approvals.find(
-    (a) => a.key === key && a.scope === scope,
+    (a) => a.key === key && a.scope === scope && a.service === service,
   );
   if (!entry) return false;
   if (new Date(entry.expiresAt).getTime() < Date.now()) return false;
@@ -168,14 +180,23 @@ export function hasApproval(key: string, scope: string): boolean {
   return true;
 }
 
-export function getApprovalDetail(key: string, scope: string): ApprovalEntry | null {
+export function getApprovalDetail(
+  key: string,
+  scope: string,
+  service: string,
+): ApprovalEntry | null {
   const registry = loadRegistry();
   const entry = registry.approvals.find(
-    (a) => a.key === key && a.scope === scope,
+    (a) => a.key === key && a.scope === scope && a.service === service,
   );
   if (!entry) return null;
   if (new Date(entry.expiresAt).getTime() < Date.now()) return null;
   return entry;
+}
+
+/** Count approvals with no service binding (pre-v0.14) — used by `qring doctor`. */
+export function countLegacyApprovals(): number {
+  return loadRegistry().approvals.filter((a) => a.service === undefined).length;
 }
 
 export function listApprovals(): (ApprovalEntry & { valid: boolean; tampered: boolean })[] {
