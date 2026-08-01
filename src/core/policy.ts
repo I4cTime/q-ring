@@ -86,6 +86,11 @@ export function setPolicyRoot(root: string): void {
   cachedPolicy = null;
 }
 
+/** The pinned policy root, if the MCP server set one (else null). */
+export function getPolicyRoot(): string | null {
+  return policyRoot;
+}
+
 function resolvePolicyPath(projectPath?: string): string {
   return policyRoot ?? projectPath ?? process.cwd();
 }
