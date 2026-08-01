@@ -8,27 +8,58 @@
 
 import { statSync } from "node:fs";
 import { join } from "node:path";
+import { z } from "zod";
 import { readProjectConfig } from "./collapse.js";
 
-export interface PolicyConfig {
-  mcp?: {
-    allowTools?: string[];
-    denyTools?: string[];
-    readableKeys?: string[];
-    deniedKeys?: string[];
-    deniedTags?: string[];
-  };
-  exec?: {
-    allowCommands?: string[];
-    denyCommands?: string[];
-    maxRuntimeSeconds?: number;
-    allowNetwork?: boolean;
-  };
-  secrets?: {
-    requireApprovalForTags?: string[];
-    requireRotationFormatForTags?: string[];
-    maxTtlSeconds?: number;
-  };
+/**
+ * Strict schema for the `.q-ring.json` `policy` object. `.strict()` at every
+ * level is the point of B3: an unknown key (a typo like `denytools` for
+ * `denyTools`) is a hard error rather than a silently-ignored no-op. Because
+ * this object is a deny-by-default security control, a misspelled deny rule that
+ * is silently dropped fails *open* — the tool/key the user meant to block stays
+ * allowed. Validating strictly and failing closed (see loadPolicy) closes that.
+ */
+const stringArray = z.array(z.string());
+const mcpPolicySchema = z
+  .object({
+    allowTools: stringArray.optional(),
+    denyTools: stringArray.optional(),
+    readableKeys: stringArray.optional(),
+    deniedKeys: stringArray.optional(),
+    deniedTags: stringArray.optional(),
+  })
+  .strict();
+const execPolicySchema = z
+  .object({
+    allowCommands: stringArray.optional(),
+    denyCommands: stringArray.optional(),
+    maxRuntimeSeconds: z.number().optional(),
+    allowNetwork: z.boolean().optional(),
+  })
+  .strict();
+const secretsPolicySchema = z
+  .object({
+    requireApprovalForTags: stringArray.optional(),
+    requireRotationFormatForTags: stringArray.optional(),
+    maxTtlSeconds: z.number().optional(),
+  })
+  .strict();
+const policySchema = z
+  .object({
+    mcp: mcpPolicySchema.optional(),
+    exec: execPolicySchema.optional(),
+    secrets: secretsPolicySchema.optional(),
+  })
+  .strict();
+
+export type PolicyConfig = z.infer<typeof policySchema>;
+
+/** Thrown when `.q-ring.json` has a `policy` object that fails validation. */
+export class PolicyConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PolicyConfigError";
+  }
 }
 
 export interface PolicyDecision {
@@ -37,7 +68,10 @@ export interface PolicyDecision {
   policySource: string;
 }
 
-let cachedPolicy: { path: string; mtimeMs: number; policy: PolicyConfig } | null = null;
+let cachedPolicy:
+  | { path: string; mtimeMs: number; policy: PolicyConfig; error?: undefined }
+  | { path: string; mtimeMs: number; error: PolicyConfigError; policy?: undefined }
+  | null = null;
 
 /**
  * Trusted policy root. When set (by the MCP server at startup), all policy
@@ -68,13 +102,37 @@ export function loadPolicy(projectPath?: string): PolicyConfig {
   const pp = resolvePolicyPath(projectPath);
   const mtimeMs = configMtime(pp);
   if (cachedPolicy && cachedPolicy.path === pp && cachedPolicy.mtimeMs === mtimeMs) {
+    if (cachedPolicy.error) throw cachedPolicy.error;
     return cachedPolicy.policy;
   }
 
-  const config = readProjectConfig(pp);
-  const policy: PolicyConfig = (config as any)?.policy ?? {};
-  cachedPolicy = { path: pp, mtimeMs, policy };
-  return policy;
+  const config = readProjectConfig(pp) as { policy?: unknown } | null;
+  const rawPolicy = config?.policy;
+
+  if (rawPolicy === undefined || rawPolicy === null) {
+    const policy: PolicyConfig = {};
+    cachedPolicy = { path: pp, mtimeMs, policy };
+    return policy;
+  }
+
+  const parsed = policySchema.safeParse(rawPolicy);
+  if (!parsed.success) {
+    const issues = parsed.error.issues
+      .map((i) => `policy${i.path.length ? "." + i.path.join(".") : ""}: ${i.message}`)
+      .join("; ");
+    const error = new PolicyConfigError(
+      `Invalid policy in ${join(pp, ".q-ring.json")} — refusing to run under an ` +
+        `unparseable security policy (fail closed). Fix these and retry: ${issues}`,
+    );
+    // Loud, and cached by mtime so it surfaces on every call until the file is
+    // corrected (a dropped deny rule must never silently allow access).
+    console.error(`q-ring: ${error.message}`);
+    cachedPolicy = { path: pp, mtimeMs, error };
+    throw error;
+  }
+
+  cachedPolicy = { path: pp, mtimeMs, policy: parsed.data };
+  return parsed.data;
 }
 
 export function clearPolicyCache(): void {
