@@ -16,6 +16,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { loadJsonRegistry } from "../utils/registry.js";
 
 export interface ApprovalEntry {
   id: string;
@@ -85,15 +86,7 @@ function getRegistryPath(): string {
 }
 
 function loadRegistry(): ApprovalRegistry {
-  const path = getRegistryPath();
-  if (!existsSync(path)) {
-    return { approvals: [] };
-  }
-  try {
-    return JSON.parse(readFileSync(path, "utf8"));
-  } catch {
-    return { approvals: [] };
-  }
+  return loadJsonRegistry<ApprovalRegistry>(getRegistryPath(), { approvals: [] });
 }
 
 function saveRegistry(registry: ApprovalRegistry): void {
