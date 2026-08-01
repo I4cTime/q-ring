@@ -1,6 +1,4 @@
-import { mkdirSync, writeFileSync, unlinkSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { withFileLock } from "../utils/file-lock.js";
 import { Entry, findCredentials } from "@napi-rs/keyring";
 import {
   resolveScope,
@@ -32,31 +30,7 @@ import { registry as jitRegistry } from "./provision.js";
 import { checkKeyReadPolicy, checkSecretLifecyclePolicy, getPolicyRoot } from "./policy.js";
 
 function withJitEnvelopeLock<T>(service: string, key: string, fn: () => T): T {
-  const dir = join(homedir(), ".config", "q-ring", "jit-locks");
-  mkdirSync(dir, { recursive: true });
-  const safe = Buffer.from(`${service}\0${key}`, "utf8").toString("base64url");
-  const lockPath = join(dir, `${safe}.lock`);
-  const deadline = Date.now() + 8000;
-  while (Date.now() < deadline) {
-    try {
-      writeFileSync(lockPath, `${process.pid}\n`, { flag: "wx", mode: 0o600 });
-      try {
-        return fn();
-      } finally {
-        try {
-          unlinkSync(lockPath);
-        } catch {
-          /* ignore */
-        }
-      }
-    } catch {
-      const start = Date.now();
-      while (Date.now() - start < 15) {
-        /* busy-wait spin (~15ms) before retry */
-      }
-    }
-  }
-  throw new Error("Could not acquire JIT envelope lock (timeout)");
+  return withFileLock(`${service}\0${key}`, fn, { dir: "jit-locks" });
 }
 
 export interface SecretEntry {
