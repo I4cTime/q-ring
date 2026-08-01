@@ -4,6 +4,98 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+This is a security- and reliability-hardening release from an internal adversarial
+audit. Findings were self-discovered (no external reporter, no evidence of
+exploitation); each is fixed here and documented below. All fixes ship with
+regression tests, and the whole suite now runs against an in-memory keyring fake
+instead of the host keychain.
+
+### Security
+- **Entanglement can no longer be used as a policy-bypass write primitive.**
+  `entangle_secrets` was gated only by the coarse tool policy, and `set_secret`'s
+  propagation loop wrote entangled targets with no policy check at all. An MCP
+  agent could link a scratch key to a policy-denied key (e.g. `PROD_DB_PASSWORD`)
+  and then overwrite the denied value by writing the scratch key. Both keys are
+  now checked against the key-level policy at entangle time (against the pinned
+  policy root), and every MCP-sourced propagation re-checks the target's policy
+  before writing. The entanglement registry gained a `version` field and per-pair
+  `createdBy` provenance.
+- **Approvals are bound to the resolved project, not the coarse scope label.**
+  `hasApproval` matched on the `"project"` label, which is identical for every
+  project — so an approval for a key at `--scope project` in project A also
+  satisfied the same key's approval gate in project B. Approvals now carry (and
+  HMAC-cover) the resolved service identity (`q-ring:project:<hash>`).
+- **`exec_with_secrets` `restricted` profile now denies interpreters and shells**
+  (`python`, `node`, `deno`, `bun`, `perl`, `ruby`, `php`, `sh`, `bash`, `zsh`)
+  in addition to network tools — otherwise `python -c '…'` could egress the
+  injected secrets while the profile claimed to block network access. The tool
+  description now states the real (still-not-a-sandbox) guarantee.
+- **Agent memory no longer falls back to a machine-derivable key.** When the OS
+  keyring was unavailable, memory was encrypted under `sha256(hostname+username)`
+  — recomputable by any local process, i.e. functionally plaintext-at-rest on
+  headless/CI hosts. Writes now use the keyring key, else a PBKDF2 key from
+  `QRING_MEMORY_PASSPHRASE`, else fail closed. The old key is used only to *read*
+  pre-existing stores.
+- **The audit hash chain is now tamper-evident against truncation and rewrite.**
+  The unkeyed SHA-256 per-line chain let an attacker drop trailing events or
+  rewrite the whole file into a self-consistent chain. A keyed anchor — the HMAC
+  of the head line under a random key in the OS keyring, stored outside the log —
+  now backs `audit:verify`. Keyring-unavailable hosts degrade to per-line checks
+  with a one-time warning (no derivable key).
+- **Owner-only permissions on the audit log and agent memory.** `audit.jsonl` and
+  `agent-memory.enc` (and their directory) are created `0o600`/`0o700`, with a
+  best-effort chmod to tighten files left world-readable by older versions.
+- **`RedactionTransform` no longer leaks multi-byte secrets split across output
+  chunks.** `chunk.toString()` corrupted a UTF-8 sequence straddling a chunk
+  boundary before matching ran; it now decodes with `StringDecoder`.
+
+### Changed
+- **`.q-ring.json` policy is validated with a strict schema and fails closed.** A
+  typo in a deny rule (`denytools` for `denyTools`) was silently ignored, leaving
+  the tool/key allowed. An invalid `policy` object now raises a
+  `PolicyConfigError` (cached by mtime) so enforcement checks deny rather than
+  fall through to allow.
+- **`qring doctor`** reports pre-v0.14 approvals that lack a project binding and
+  will not grant access until re-granted.
+
+### Fixed
+- **Corrupt registry files no longer silently wipe your data.** `entanglement.json`,
+  `approvals.json`, and `hooks.json` treated an unparseable file the same as an
+  absent one, so the next write overwrote it with an empty registry — destroying
+  every link/grant/hook. A corrupt file is now moved aside to
+  `<path>.corrupt-<timestamp>` with a loud warning, and the registry reinitializes
+  from empty (data preserved in the backup).
+- **The JIT provisioning lock no longer busy-waits or deadlocks.** It spun the CPU
+  (freezing the single-threaded MCP event loop for up to 8s under contention) and
+  a crashed holder deadlocked all future JIT reads. A shared file-lock util now
+  steals locks held by a dead process or older than the stale window, and sleeps
+  via `Atomics.wait` instead of spinning. The audit append reuses the same lock so
+  concurrent writers can't branch the chain.
+- **Concurrent writes are no longer clobbered by the read-time access counter.**
+  `get_secret`'s "observer effect" wrote the access count back onto a stale
+  envelope; it now re-reads first, so a value written concurrently is preserved
+  (the counter is last-write-wins).
+- **Environment collapse is cached.** `get_secret`/`export_secrets` shelled out
+  `git rev-parse` (sync, up to 3s) and re-read `.q-ring.json` on every call that
+  omitted an explicit env; the git branch is cached per-cwd for a short window and
+  the config by mtime.
+
+### Dependencies
+- Cleared all high/moderate advisories from the audit gate: `fast-uri` ≥3.1.4
+  (was `>=3.1.2 <4`), `@hono/node-server` ≥2.0.10 (the old `>=1.19.13` override
+  targeted the wrong version line), `postcss` ≥8.5.18 (was `>=8.5.10`, still under
+  the vulnerable ≤8.5.17), and a new `brace-expansion` ≥5.0.8 override.
+
+### Notes
+- **Breaking (approvals):** approvals granted before this release have no project
+  binding and are invalidated — re-run `qring approve <key>`. Most self-resolve
+  within the default 1h TTL; `qring doctor` flags any that remain.
+- **Breaking (exec):** the `restricted` exec profile now blocks interpreters and
+  shells by default. To run them with secrets, define a custom profile in
+  `.q-ring.json` or use the `ci`/`unrestricted` profile.
+- **Headless/CI:** agent memory now requires an OS keyring or
+  `QRING_MEMORY_PASSPHRASE`; it will not persist under a derivable key.
+
 ## [0.13.1] — 2026-07-27
 
 ### Security
