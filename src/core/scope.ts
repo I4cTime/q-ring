@@ -83,6 +83,19 @@ export function resolveScope(opts: ScopeOpts): ResolvedScope[] {
   return chain;
 }
 
+/**
+ * The single service string for one specific scope, given resolution opts.
+ * Unlike resolveScope (which builds the precedence chain when scope is omitted),
+ * this always returns exactly one service — used to bind an approval to the
+ * concrete project/team/org identity rather than the coarse scope label.
+ */
+export function serviceForScope(
+  scope: Scope,
+  opts: Omit<ScopeOpts, "scope"> = {},
+): string {
+  return resolveScope({ ...opts, scope })[0].service;
+}
+
 export function parseServiceName(service: string): ResolvedScope {
   if (service === globalService()) {
     return { scope: "global", service };

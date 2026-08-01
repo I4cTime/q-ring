@@ -4,6 +4,7 @@ import { join, delimiter } from "node:path";
 import { homedir } from "node:os";
 import { verifyAuditChain } from "../../core/observer.js";
 import { getPolicySummary } from "../../core/policy.js";
+import { countLegacyApprovals } from "../../core/approval.js";
 import { c, SYMBOLS } from "../../utils/colors.js";
 import { emitJson } from "../helpers.js";
 import { PACKAGE_VERSION } from "../../version.js";
@@ -135,6 +136,22 @@ function checkPolicy(): CheckResult {
   };
 }
 
+function checkLegacyApprovals(): CheckResult {
+  const n = countLegacyApprovals();
+  if (n === 0) {
+    return {
+      name: "approval bindings",
+      status: "ok",
+      detail: "no legacy approvals; all bound to a project/team/org identity",
+    };
+  }
+  return {
+    name: "approval bindings",
+    status: "warn",
+    detail: `${n} pre-v0.14 approval(s) have no project binding and will NOT grant access — re-run \`qring approve\` for each`,
+  };
+}
+
 function checkMcpBinary(): CheckResult {
   const exts = process.platform === "win32" ? [".cmd", ".exe", ".bat", ""] : [""];
   for (const dir of (process.env.PATH ?? "").split(delimiter)) {
@@ -172,6 +189,7 @@ export function registerDoctorCommand(program: Command): void {
         checkAuditLog(),
         checkManifest(projectPath),
         checkPolicy(),
+        checkLegacyApprovals(),
         checkMcpBinary(),
       ];
 
