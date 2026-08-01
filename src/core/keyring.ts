@@ -245,10 +245,13 @@ export function getSecret(
     // Resolve templates
     value = resolveTemplates(value, { ...opts, _seen: nextSeen }, nextSeen);
 
-    // Observer effect: record access and persist
+    // Observer effect: record access and persist. Re-read the current envelope
+    // first so a value written concurrently between our read above and this
+    // write-back is preserved — the access counter is deliberately
+    // last-write-wins, but the secret value must never be clobbered (B4).
     if (!opts.silent) {
-      const updated = recordAccess(envelope);
-      writeEnvelope(service, key, updated);
+      const latest = readEnvelope(service, key) ?? envelope;
+      writeEnvelope(service, key, recordAccess(latest));
       logAudit({ action: "read", key, scope, env, source });
     }
 
