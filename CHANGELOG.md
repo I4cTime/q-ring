@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-08-01
+
 This is a security- and reliability-hardening release from an internal adversarial
 audit. Findings were self-discovered (no external reporter, no evidence of
 exploitation); each is fixed here and documented below. All fixes ship with
