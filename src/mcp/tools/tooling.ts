@@ -48,7 +48,7 @@ export function registerToolingTools(server: McpServer): void {
         .optional()
         .default("restricted")
         .describe(
-          "Exec sandbox profile. 'restricted' (default) denies a fixed list of network-tool binaries (curl, wget, ssh, scp, nc, netcat, ncat), strips proxy env vars, and caps runtime at 30s — it is NOT a real sandbox: it does not restrict PATH, and interpreters invoked directly (python, node, perl, etc.) can still make network requests and read the injected secret env vars. 'ci' allows network with a 300s cap and blocks a few destructive commands; 'unrestricted' inherits the full server environment. For untrusted commands use OS-level isolation (containers, network namespaces), not this profile.",
+          "Exec sandbox profile. 'restricted' (default) denies network-tool binaries (curl, wget, ssh, scp, nc, netcat, ncat) AND common interpreters/shells (python, node, deno, bun, perl, ruby, php, sh, bash, zsh) — since those could otherwise egress the injected secrets — strips proxy env vars, and caps runtime at 30s. It still is NOT a real OS sandbox (it does not restrict PATH, and some allowed binary could in principle make network calls); for genuinely untrusted commands use OS-level isolation (containers, network namespaces). 'ci' allows network and interpreters with a 300s cap and blocks a few destructive commands; 'unrestricted' inherits the full server environment. Define a custom profile in .q-ring.json to allow specific interpreters with secrets.",
         ),
       scope,
       projectPath,
