@@ -10,6 +10,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { Transform } from "node:stream";
 import { listSecrets, getSecret, type KeyringOptions } from "./keyring.js";
 import { checkDecay } from "./envelope.js";
@@ -28,7 +29,17 @@ const BUILTIN_PROFILES: Record<string, ExecProfile> = {
   unrestricted: { name: "unrestricted" },
   restricted: {
     name: "restricted",
-    denyCommands: ["curl", "wget", "ssh", "scp", "nc", "netcat", "ncat"],
+    denyCommands: [
+      // Network tools.
+      "curl", "wget", "ssh", "scp", "nc", "netcat", "ncat",
+      // Interpreters and shells: given the secret env vars, `python -c`,
+      // `node -e`, `bash -c`, etc. can perform arbitrary network I/O and
+      // exfiltrate them, defeating allowNetwork. Denied by default in
+      // `restricted`; to run them with secrets use a custom profile in
+      // .q-ring.json, or the `ci` / `unrestricted` profile.
+      "python", "python2", "python3", "node", "deno", "bun",
+      "perl", "ruby", "php", "sh", "bash", "zsh",
+    ],
     maxRuntimeSeconds: 30,
     allowNetwork: false,
     stripEnvVars: ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"],
@@ -77,6 +88,11 @@ export class RedactionTransform extends Transform {
   private patterns: { value: string; replacement: string }[] = [];
   private tail: string = "";
   private maxLen: number = 0;
+  // Decodes UTF-8 across chunk boundaries: a multi-byte character split between
+  // two Buffer chunks would otherwise be corrupted to U+FFFD by chunk.toString()
+  // BEFORE matching runs, letting a multi-byte secret slip through unredacted.
+  // StringDecoder buffers the incomplete trailing bytes until the rest arrives.
+  private decoder = new StringDecoder("utf8");
 
   constructor(secretsToRedact: string[]) {
     super();
@@ -101,7 +117,9 @@ export class RedactionTransform extends Transform {
       return callback();
     }
 
-    const text = this.tail + chunk.toString();
+    const decoded =
+      typeof chunk === "string" ? chunk : this.decoder.write(chunk);
+    const text = this.tail + decoded;
     let redacted = text;
 
     for (const { value, replacement } of this.patterns) {
@@ -122,8 +140,10 @@ export class RedactionTransform extends Transform {
   }
 
   _flush(callback: () => void) {
-    if (this.tail) {
-      let final = this.tail;
+    // Flush any bytes the decoder is still holding (an incomplete sequence at
+    // end-of-stream) along with the retained tail, then redact once more.
+    let final = this.tail + this.decoder.end();
+    if (final) {
       for (const { value, replacement } of this.patterns) {
         final = final.split(value).join(replacement);
       }
