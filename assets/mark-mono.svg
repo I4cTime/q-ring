@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <!-- q-ring brand mark, single-color cut (badges/stickers/engraving). -->
+  <defs>
+    <mask id="qhole" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
+      <rect width="512" height="512" fill="#fff"/>
+      <ellipse cx="256" cy="243" rx="78" ry="73" fill="#000"/>
+    </mask>
+  </defs>
+  <g stroke="#f8f8ff" fill="none" stroke-linecap="round">
+    <path d="M256 84C204 110 146 116 94 122C92 242 130 364 256 452C382 364 420 242 418 122C366 116 308 110 256 84Z" stroke-width="9"/>
+    <path d="M256 102C209.2 125.4 157 130.8 110.2 136.2C108.4 244.2 142.6 354 256 433.2C369.4 354 403.6 244.2 401.8 136.2C355 130.8 302.8 125.4 256 102Z" stroke-width="4.5"/>
+    <g mask="url(#qhole)">
+      <ellipse cx="256" cy="243" rx="118" ry="46" transform="rotate(-62 256 243)" stroke-width="4"/>
+      <ellipse cx="256" cy="243" rx="118" ry="46" transform="rotate(0 256 243)" stroke-width="4"/>
+      <ellipse cx="256" cy="243" rx="118" ry="46" transform="rotate(62 256 243)" stroke-width="4"/>
+    </g>
+    <ellipse cx="256" cy="243" rx="72" ry="72" stroke-width="6.5"/>
+    <ellipse cx="256" cy="243" rx="76.5" ry="65.5" transform="rotate(30 256 243)" stroke-width="5.5"/>
+    <ellipse cx="256" cy="243" rx="76.5" ry="65.5" transform="rotate(-30 256 243)" stroke-width="5.5"/>
+    <circle cx="323.37" cy="157.7" r="8" fill="#f8f8ff" stroke="none"/>
+    <circle cx="188.63" cy="328.3" r="8" fill="#f8f8ff" stroke="none"/>
+    <circle cx="155.93" cy="267.38" r="8" fill="#f8f8ff" stroke="none"/>
+    <circle cx="356.07" cy="218.62" r="8" fill="#f8f8ff" stroke="none"/>
+    <circle cx="189.28" cy="192.57" r="8" fill="#f8f8ff" stroke="none"/>
+    <circle cx="322.72" cy="293.43" r="8" fill="#f8f8ff" stroke="none"/>
+  </g>
+</svg>
