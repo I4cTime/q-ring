@@ -4,11 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.14.1] — 2026-08-03
+
+### Added
+- `PRIVACY.md` — local-first privacy policy (secrets in the OS vault, `0600`
+  local files, no telemetry, no network calls except user-configured JIT
+  providers). Linked from the Kiro plugin's new "License and support" footer
+  in `POWER.md`, which now carries the SPDX license, privacy, support, and
+  security-policy links directory submissions require.
+
 ### Changed
 - README pass: replaced the unverifiable "first quantum-inspired keyring" tagline
   with the canonical one-liner, added a Security section (local-first posture,
   v0.14 hardening, disclosure process), and updated exec-profile / audit-chain /
   policy-validation descriptions to match the v0.14 behavior they undersold.
+- Brand asset kit from the site rollout now ships in the npm package: vector
+  mark SVGs (`mark.svg`, `mark-mono.svg`, `mark-small.svg`), square icons,
+  and the regenerated social card — the v0.14.0 tarball predated the sync and
+  kept serving the old card art on npm and unpkg.
+- README hero image is served from the repo (`raw.githubusercontent.com` on
+  `main`) instead of the unpkg tarball path, so future brand updates land
+  without waiting for a publish. Added the Discord community badge.
 
 ## [0.14.0] — 2026-08-01
 
