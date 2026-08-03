@@ -37,11 +37,22 @@
   "keywords": [
     "keyring",
     "secrets",
+    "secrets-manager",
+    "secret-management",
     "mcp",
+    "mcp-server",
+    "modelcontextprotocol",
     "cursor",
+    "claude",
     "claude-code",
     "kiro",
-    "api-keys"
+    "keychain",
+    "credential",
+    "dotenv",
+    "api-keys",
+    "ai-agents",
+    "devtools",
+    "security"
   ],
   "license": "AGPL-3.0-only",
   "packageManager": "pnpm@10.32.1",

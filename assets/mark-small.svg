@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <!-- q-ring brand mark, small-size cut (favicon-legible): shield + ring.
+       Colors canonical; source of truth: apps/qring/lib/palette.ts. -->
+  <defs>
+    <linearGradient id="qg" gradientUnits="userSpaceOnUse" x1="72" y1="256" x2="440" y2="256">
+      <stop offset="0" stop-color="#00D1FF"/>
+      <stop offset="0.52" stop-color="#7B2DFF"/>
+      <stop offset="1" stop-color="#D946EF"/>
+    </linearGradient>
+  </defs>
+  <g stroke="url(#qg)" fill="none" stroke-linecap="round">
+    <path d="M256 84C204 110 146 116 94 122C92 242 130 364 256 452C382 364 420 242 418 122C366 116 308 110 256 84Z" stroke-width="24"/>
+    <circle cx="256" cy="246" r="96" stroke-width="28"/>
+  </g>
+</svg>

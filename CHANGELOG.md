@@ -59,6 +59,11 @@ instead of the host keychain.
   fall through to allow.
 - **`qring doctor`** reports pre-v0.14 approvals that lack a project binding and
   will not grant access until re-granted.
+- **Brand asset kit refresh.** New constructed vector mark (`assets/mark.svg`,
+  `mark-mono.svg`, `mark-small.svg`), square icons (`icon-512.png`, `icon-192.png`),
+  GitHub social preview, and a lighter OG card. The Cursor plugin manifests now
+  use the square `icon-512.png` as their logo instead of the landscape social
+  card. npm keywords expanded for MCP-directory discoverability.
 
 ### Fixed
 - **Corrupt registry files no longer silently wipe your data.** `entanglement.json`,
