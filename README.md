@@ -1,10 +1,10 @@
 <div align="center">
-  <img src="https://unpkg.com/@i4ctime/q-ring@latest/assets/social-card-optimized.jpg" alt="q-ring logo" width="100%" />
+  <img src="https://unpkg.com/@i4ctime/q-ring@latest/assets/social-card-optimized.jpg" alt="q-ring — never paste an API key into .env again" width="100%" />
 </div>
 
 # q-ring
 
-**The first quantum-inspired keyring built specifically for AI coding agents.**
+**OS keychain secrets for AI coding agents, over MCP.**
 
 [![NPM Version](https://img.shields.io/npm/v/@i4ctime/q-ring?style=flat-square&color=0ea5e9)](https://www.npmjs.com/package/@i4ctime/q-ring)
 [![Docs](https://img.shields.io/badge/docs-website-0ea5e9?style=flat-square)](https://qring.i4c.studio/docs)
@@ -383,7 +383,7 @@ qring exec -- npm run deploy
 # Inject only specific tags
 qring exec --tags backend -- node server.js
 
-# Run with a restricted profile (blocks curl/wget/ssh, 30s timeout)
+# Run with a restricted profile (blocks network tools and interpreters/shells, 30s timeout)
 qring exec --profile restricted -- npm test
 ```
 
@@ -533,6 +533,8 @@ Define project-level governance rules in `.q-ring.json` to control which MCP too
 
 Over MCP, policy is resolved from the directory the server was **launched** in — not from the `projectPath` a caller passes — so an agent can't sidestep restrictions by pointing at a directory with no policy. Launch the MCP server from your project root (where `.q-ring.json` lives). Edits to `.q-ring.json` are picked up automatically (the policy cache invalidates on file change), so you don't need to restart the server.
 
+Policy files are schema-validated and **fail closed**: an invalid `policy` object (say, a typo like `denytools`) raises a `PolicyConfigError` instead of being silently ignored, so a malformed rule can never widen access.
+
 ```bash
 # View the active policy
 qring policy
@@ -568,7 +570,7 @@ Example policy in `.q-ring.json`:
 Restrict command execution with named profiles that control allowed commands, network access, timeouts, and environment sanitization.
 
 ```bash
-# Run with the "restricted" profile (blocks curl, wget, ssh; 30s timeout)
+# Run with the "restricted" profile (blocks network tools and interpreters/shells; 30s timeout)
 qring exec --profile restricted -- npm test
 
 # Run with the "ci" profile (5min timeout, allows network)
@@ -578,11 +580,11 @@ qring exec --profile ci -- npm run deploy
 qring exec -- echo "hello"
 ```
 
-**Built-in profiles:** `unrestricted`, `restricted` (no network tools, 30s limit), `ci` (5min limit, blocks destructive commands).
+**Built-in profiles:** `unrestricted`, `restricted` (denies network tools *and* interpreters/shells — `python -c`, `node -e`, `bash` and friends can't exfiltrate injected secrets; 30s limit), `ci` (5min limit, blocks destructive commands).
 
 ### Tamper-Evident Audit
 
-Every audit event includes a SHA-256 hash of the previous event, creating a tamper-evident chain. Verify integrity and export logs in multiple formats.
+Every audit event includes a SHA-256 hash of the previous event, creating a tamper-evident chain. Since v0.14 the chain is also anchored with a keyed HMAC stored in the OS keyring, so `qring audit:verify` detects truncation and whole-file rewrites — not just in-place edits. Verify integrity and export logs in multiple formats.
 
 ```bash
 # Verify the entire audit chain
@@ -986,6 +988,12 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide (dev environment, conv
   - **Kiro:** `pnpm run plugin:sync:kiro` copies `kiro-plugin/mcp.json` → `~/.kiro/settings/mcp.json`, plus `steering/` and `hooks/` (or pass a project `.kiro` path). Prefer adding `kiro-plugin/` as a [Power](https://kiro.dev/docs/powers/create/) from the Powers panel instead.
   - **Claude Code:** `pnpm run plugin:sync:claude` copies `claude-code-plugin/` into the current directory (or pass a project path; add `--user` to install at `~/.claude/`).
 - See also [docs/cli-mcp-parity.md](docs/cli-mcp-parity.md).
+
+## 🔒 Security
+
+- **Local-first.** Core storage is your OS keychain — there is no q-ring cloud and no account. The MCP surface, audit log, and agent memory live on your machine (audit and memory files are written owner-only, `0600`).
+- **Hardened by adversarial review.** v0.14.0 shipped the results of an internal adversarial audit — policy-bypass, approval-scoping, and exec-profile findings all fixed, each with regression tests. Details are in the [CHANGELOG](CHANGELOG.md) `Security` sections (house style since 0.12.0: fix first, then disclose there).
+- **Reporting a vulnerability.** Use [GitHub private vulnerability reporting](https://github.com/I4cTime/q-ring/security/advisories/new) — see [SECURITY.md](SECURITY.md) for the supported-versions table and response commitments (48-hour acknowledgement, 7-day assessment).
 
 ## 📜 License
 

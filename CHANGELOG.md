@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- README pass: replaced the unverifiable "first quantum-inspired keyring" tagline
+  with the canonical one-liner, added a Security section (local-first posture,
+  v0.14 hardening, disclosure process), and updated exec-profile / audit-chain /
+  policy-validation descriptions to match the v0.14 behavior they undersold.
+
 ## [0.14.0] — 2026-08-01
 
 This is a security- and reliability-hardening release from an internal adversarial
