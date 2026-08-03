@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://unpkg.com/@i4ctime/q-ring@latest/assets/social-card-optimized.jpg" alt="q-ring — never paste an API key into .env again" width="100%" />
+  <img src="https://raw.githubusercontent.com/I4cTime/q-ring/main/assets/social-card-optimized.jpg" alt="q-ring — never paste an API key into .env again" width="100%" />
 </div>
 
 # q-ring
