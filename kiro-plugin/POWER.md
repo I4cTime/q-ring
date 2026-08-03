@@ -108,3 +108,12 @@ Use the steering files under `steering/` for focused context. Reference them wit
 - For one-off values, use `tunnel_create`; for machine-to-machine transfer, use `teleport_pack` / `teleport_unpack`.
 
 Full install notes and tables live in [`README.md`](README.md) in this directory.
+
+## License and support
+
+This power integrates with the q-ring MCP server (AGPL-3.0-only).
+
+- [Privacy Policy](https://github.com/I4cTime/q-ring/blob/main/PRIVACY.md)
+- [Support](https://discord.gg/5uEApw5uEz) — Discord, or email
+  i4c.studio.dev@gmail.com, or [GitHub issues](https://github.com/I4cTime/q-ring/issues)
+- [Security policy](https://github.com/I4cTime/q-ring/blob/main/SECURITY.md)
