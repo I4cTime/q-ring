@@ -68,13 +68,31 @@ writeFileSync(join(stage, "manifest.json"), JSON.stringify({
   license: "AGPL-3.0-only",
   repository: { type: "git", url: "https://github.com/I4cTime/q-ring" },
   keywords: ["secrets", "keychain", "security", "mcp", "api-keys", "credentials"],
+  icon: "icon.png",
   server: {
     type: "node",
     entry_point: "node_modules/@i4ctime/q-ring/dist/mcp.js",
-    mcp_config: { command: "node", args: ["${__dirname}/node_modules/@i4ctime/q-ring/dist/mcp.js"] },
+    mcp_config: {
+      command: "node",
+      args: ["${__dirname}/node_modules/@i4ctime/q-ring/dist/mcp.js"],
+      env: { QRING_ENV: "${user_config.qring_env}" },
+    },
+  },
+  // Smithery's deploy step 400s ("No values to set") on manifests with no
+  // icon/user_config to project into the listing — keep both present.
+  user_config: {
+    qring_env: {
+      type: "string",
+      title: "Environment override",
+      description:
+        "Force a q-ring environment context (dev, staging, prod). Leave " +
+        "empty to auto-detect from QRING_ENV/NODE_ENV/git branch.",
+      required: false,
+    },
   },
   compatibility: { platforms: ["darwin", "linux", "win32"], runtimes: { node: ">=20" } },
 }, null, 2));
+copyFileSync(join(root, "assets", "icon-512.png"), join(stage, "icon.png"));
 
 const run = (cmd, cwd) => execSync(cmd, { cwd, stdio: "inherit" });
 run("npm install --omit=dev --no-audit --no-fund --force", stage);
