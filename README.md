@@ -11,6 +11,7 @@
 [![MCP Tools](https://img.shields.io/badge/MCP_tools-44-0ea5e9?style=flat-square)](https://glama.ai/mcp/servers/I4cTime/q-ring)
 [![License](https://img.shields.io/npm/l/@i4ctime/q-ring?style=flat-square&color=0ea5e9)](https://github.com/I4cTime/q-ring/blob/main/LICENSE)
 [![Discord](https://img.shields.io/badge/discord-join%20the%20studio-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/5uEApw5uEz)
+[![YouTube](https://img.shields.io/badge/youtube-%40qring__dev-FF0000?style=flat-square&logo=youtube&logoColor=white)](https://www.youtube.com/@qring_dev)
 
 <a href="https://glama.ai/mcp/servers/I4cTime/q-ring">
   <img src="https://glama.ai/mcp/servers/I4cTime/q-ring/badges/card.svg" alt="q-ring MCP server" width="400" />
