@@ -10,6 +10,7 @@ import { registerAuditCommands } from "./commands/audit.js";
 import { registerHookCommands } from "./commands/hooks.js";
 import { registerAgentCommands } from "./commands/agent.js";
 import { registerSecurityCommands } from "./commands/security.js";
+import { registerBridgeCommands } from "./commands/bridges.js";
 import { registerDoctorCommand } from "./commands/doctor.js";
 import { registerCompletionCommand } from "./commands/completion.js";
 
@@ -63,6 +64,11 @@ const COMMAND_GROUPS: Array<{
     name: "Dev Tooling",
     symbol: SYMBOLS.zap,
     commands: ["exec", "scan", "lint", "status", "doctor", "completion"],
+  },
+  {
+    name: "Bridges",
+    symbol: SYMBOLS.link,
+    commands: ["run", "setup"],
   },
   {
     name: "Audit & Health",
@@ -234,6 +240,7 @@ export function createProgram(): Command {
   registerHookCommands(program);
   registerAgentCommands(program);
   registerSecurityCommands(program);
+  registerBridgeCommands(program);
   registerDoctorCommand(program);
   registerCompletionCommand(program);
 
