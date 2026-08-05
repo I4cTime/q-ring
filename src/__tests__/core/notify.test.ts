@@ -17,7 +17,12 @@ function fakeChild() {
   return { on: vi.fn(), unref: vi.fn() };
 }
 
+// notifyUser branches on process.platform (and no-ops on win32) — pin it to
+// linux so these tests behave identically on every CI runner.
+const realPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+
 beforeEach(() => {
+  Object.defineProperty(process, "platform", { value: "linux" });
   resetNotifyThrottle();
   spawnMock.mockReset();
   spawnMock.mockReturnValue(fakeChild());
@@ -25,13 +30,13 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  Object.defineProperty(process, "platform", realPlatform);
   delete process.env.QRING_NOTIFY;
   vi.useRealTimers();
 });
 
 describe("notifyUser", () => {
   it("uses notify-send on linux, detached, without a shell", () => {
-    if (process.platform !== "linux") return;
     const launched = notifyUser("title", "body");
     expect(launched).toBe(true);
     const [cmd, args, opts] = spawnMock.mock.calls[0];
