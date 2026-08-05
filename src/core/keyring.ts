@@ -26,6 +26,7 @@ import { logAudit } from "./observer.js";
 import { findEntangled, entangle as entangleLink, disentangle as disentangleLink } from "./entanglement.js";
 import { fireHooks } from "./hooks.js";
 import { hasApproval } from "./approval.js";
+import { notifyApprovalRequested } from "./notify.js";
 import { registry as jitRegistry } from "./provision.js";
 import { checkKeyReadPolicy, checkSecretLifecyclePolicy, getPolicyRoot } from "./policy.js";
 
@@ -192,6 +193,7 @@ export function getSecret(
             source,
             detail: "blocked: requires user approval",
           });
+          notifyApprovalRequested(key, source);
         }
         throw new Error(`Access Denied: This secret requires user approval. Please ask the user to run 'qring approve ${key}'`);
       }
