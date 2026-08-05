@@ -97,7 +97,8 @@ export type AuditAction =
   | "approve"
   | "revoke"
   | "policy_deny"
-  | "rotate";
+  | "rotate"
+  | "push";
 
 export interface AuditEvent {
   timestamp: string;

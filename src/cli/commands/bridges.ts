@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { runCommand, buildRunPlan, type RunOptions } from "../../core/run.js";
 import { setupEditor, EDITORS, type Editor } from "../../core/setup.js";
+import { pushSecrets, PUSH_TARGETS, type PushTarget } from "../../core/push.js";
 import { c, SYMBOLS } from "../../utils/colors.js";
 import { wantsJsonOutput } from "../helpers.js";
 
@@ -62,6 +63,73 @@ export function registerBridgeCommands(program: Command): void {
         console.error(
           c.red(
             `${SYMBOLS.cross} Run failed: ${err instanceof Error ? err.message : String(err)}`,
+          ),
+        );
+        process.exit(1);
+      }
+    });
+
+  program
+    .command("push <target>")
+    .description(
+      `Push manifest secrets to a deployment platform via its own CLI (${PUSH_TARGETS.join(", ")}) — values travel over stdin, never argv`,
+    )
+    .option("-k, --keys <keys>", "Comma-separated keys (default: .q-ring.json manifest)")
+    .option("--project-path <path>", "Explicit project path")
+    .option("-e, --env <env>", "Environment context for superposition collapse")
+    .option("--repo <owner/name>", "GitHub repository (github target)")
+    .option(
+      "--vercel-env <envs>",
+      "Comma-separated Vercel environments (default: production)",
+    )
+    .option("--dry-run", "Show what would be pushed without pushing")
+    .option("--json", "Output as JSON")
+    .action((targetArg: string, cmd) => {
+      if (!PUSH_TARGETS.includes(targetArg as PushTarget)) {
+        console.error(
+          c.red(`${SYMBOLS.cross} Unknown target "${targetArg}" — expected one of: ${PUSH_TARGETS.join(", ")}`),
+        );
+        process.exit(1);
+      }
+
+      try {
+        const result = pushSecrets({
+          target: targetArg as PushTarget,
+          keys: cmd.keys?.split(",").map((k: string) => k.trim()),
+          projectPath: cmd.projectPath ?? process.cwd(),
+          env: cmd.env,
+          repo: cmd.repo,
+          vercelEnvs: cmd.vercelEnv?.split(",").map((e: string) => e.trim()),
+          dryRun: cmd.dryRun === true,
+          source: "cli",
+        });
+
+        if (wantsJsonOutput(program, cmd)) {
+          console.log(JSON.stringify(result, null, 2));
+          process.exit(result.failed.length > 0 ? 1 : 0);
+        }
+
+        const prefix = cmd.dryRun ? c.dim("[dry-run] ") : "";
+        console.log(`\n${SYMBOLS.link} ${prefix}${c.bold(`qring push ${targetArg}`)}`);
+        for (const key of result.pushed) {
+          console.log(`  ${c.green(SYMBOLS.check)} ${key}`);
+        }
+        for (const key of result.missing) {
+          console.log(`  ${c.yellow("?")} ${key} ${c.dim("(not in keyring — skipped)")}`);
+        }
+        for (const { key, error } of result.failed) {
+          console.log(`  ${c.red(SYMBOLS.cross)} ${key} ${c.dim(`— ${error}`)}`);
+        }
+        console.log(
+          c.dim(
+            `  ${result.pushed.length} pushed${cmd.dryRun ? " (dry run)" : ""}, ${result.missing.length} missing, ${result.failed.length} failed`,
+          ),
+        );
+        process.exit(result.failed.length > 0 ? 1 : 0);
+      } catch (err) {
+        console.error(
+          c.red(
+            `${SYMBOLS.cross} Push failed: ${err instanceof Error ? err.message : String(err)}`,
           ),
         );
         process.exit(1);
