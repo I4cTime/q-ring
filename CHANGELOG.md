@@ -4,6 +4,62 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+This is the "bridges" release: q-ring now reaches outward — into your .env
+files, your editors, and your deployment platforms — without ever letting a
+secret value leave the ring unencrypted or unaudited. All new commands are
+CLI-only; the MCP tool count is unchanged (deliberately — 44 tools is already
+tool-selection saturation).
+
+### Added
+- **`qring://` secret references.** A committable pointer that goes in a .env
+  file instead of the value: `qring://project/KEY`, `qring://global/KEY`,
+  `qring:///KEY` (auto scope: project → global), `?env=` to pin an
+  environment. The key lives in the path, never the host — URL hosts are
+  case-insensitive and WHATWG parsers lowercase them, which would silently
+  corrupt env-var keys; the key-in-host mistake is rejected with a corrective
+  error, and malformed refs fail loudly instead of leaking a literal
+  `qring://…` string into a child process.
+- **`qring run -- <cmd>`** — least-privilege sibling of `exec`. Injects only
+  what the project declares (the `.q-ring.json` secrets manifest plus
+  `qring://` refs found in .env files) rather than the whole scope. Missing
+  required keys fail fast before spawn; output goes through the same
+  redaction transform as `exec`; `--dry-run` shows the injection plan.
+- **`qring setup <cursor|kiro|claude>`** — merges the q-ring MCP server entry
+  into the editor's MCP config non-destructively (other servers preserved; a
+  diverging q-ring entry requires `--force`). The kiro entry ships the same
+  read-only autoApprove list as the bundled Power; `setup claude --global`
+  points at `claude mcp add` instead of touching harness-managed state.
+- **`qring push <github|vercel|cloudflare>`** — pushes manifest secrets to
+  GitHub Actions / Vercel envs / Cloudflare Workers through each platform's
+  own authenticated CLI (`gh` / `vercel` / `wrangler`). q-ring never holds
+  platform tokens; values travel over the child's stdin, never argv (argv is
+  world-readable via /proc). Each pushed key lands in the audit chain as a
+  new `push` action.
+- **AI-stack liveness providers**: anthropic, openrouter, google-ai (Gemini),
+  groq, huggingface, plus explicit-only elevenlabs and vercel (no safe public
+  key prefix). Keys are only ever sent in headers, never URLs.
+- **Encrypted file backend** (`QRING_BACKEND=file`) for hosts with no OS
+  keyring (headless Linux, containers, CI): AES-256-GCM store at
+  `~/.config/q-ring/file-backend.enc` (0600), keyed by PBKDF2(210k) from
+  `QRING_FILE_PASSPHRASE`. Explicit-only — a missing OS keyring never falls
+  back to it silently — and fail-closed without the passphrase, consistent
+  with the v0.14 no-machine-derivable-keys rule. Secrets, the audit anchor,
+  and the agent-memory key all route through it.
+- **Approval notifications.** An MCP read blocked on `requiresApproval` now
+  raises a best-effort desktop notification (Linux `notify-send`, macOS
+  `osascript`) naming the key and the exact `qring approve` command.
+  Throttled per key (5 min) so agent retry loops can't spam; disable with
+  `QRING_NOTIFY=off`.
+
+### Fixed
+- **`withFileLock` swallowed exceptions from its critical section.** An error
+  thrown inside the locked callback was caught by the lock-acquisition retry
+  loop and resurfaced ~8s later as a bogus "could not acquire lock" timeout
+  instead of propagating (affected throwing JIT/audit callbacks).
+- **Anthropic/OpenRouter keys no longer misdetect as OpenAI.** Provider
+  auto-detection registered OpenAI's bare `sk-` prefix first, shadowing
+  `sk-ant-` and `sk-or-`.
+
 ## [0.14.1] — 2026-08-03
 
 ### Added
