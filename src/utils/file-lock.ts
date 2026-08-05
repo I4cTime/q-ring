@@ -55,17 +55,14 @@ export function withFileLock<T>(
   const staleMs = opts.staleMs ?? 30_000;
 
   while (Date.now() < deadline) {
+    // Acquisition and the critical section are separate try blocks: if they
+    // shared one, an exception thrown by fn() would be caught by the retry
+    // logic below and resurface 8s later as a bogus "could not acquire lock"
+    // timeout instead of propagating.
+    let acquired = false;
     try {
       writeFileSync(lockPath, `${process.pid}\n`, { flag: "wx", mode: 0o600 });
-      try {
-        return fn();
-      } finally {
-        try {
-          unlinkSync(lockPath);
-        } catch {
-          /* ignore */
-        }
-      }
+      acquired = true;
     } catch {
       try {
         const holderPid = parseInt(readFileSync(lockPath, "utf8").trim(), 10);
@@ -81,6 +78,18 @@ export function withFileLock<T>(
         // Lock vanished between our failed create and this inspection — retry.
       }
       sleepSync(15);
+    }
+
+    if (acquired) {
+      try {
+        return fn();
+      } finally {
+        try {
+          unlinkSync(lockPath);
+        } catch {
+          /* ignore */
+        }
+      }
     }
   }
   throw new Error(`Could not acquire lock "${name}" (timeout)`);

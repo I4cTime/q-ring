@@ -23,7 +23,7 @@ import {
   randomBytes,
   pbkdf2Sync,
 } from "node:crypto";
-import { Entry } from "@napi-rs/keyring";
+import { Entry } from "./backend.js";
 
 const MEMORY_FILE = "agent-memory.enc";
 const KEYRING_SERVICE = "qring-memory-key";
