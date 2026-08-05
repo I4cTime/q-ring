@@ -69,7 +69,10 @@ describe("file backend Entry", () => {
     expect(raw.startsWith("qfile1:")).toBe(true);
     expect(raw).not.toContain("super-secret-plaintext");
     expect(raw).not.toContain("KEY");
-    expect(statSync(storeFile).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") {
+      // Windows has no POSIX mode bits (reports 0o666 regardless).
+      expect(statSync(storeFile).mode & 0o777).toBe(0o600);
+    }
   });
 
   it("fails closed without a passphrase", () => {
