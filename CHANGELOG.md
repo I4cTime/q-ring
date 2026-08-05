@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-08-05
+
 This is the "bridges" release: q-ring now reaches outward — into your .env
 files, your editors, and your deployment platforms — without ever letting a
 secret value leave the ring unencrypted or unaudited. All new commands are
