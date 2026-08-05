@@ -68,7 +68,7 @@ const COMMAND_GROUPS: Array<{
   {
     name: "Bridges",
     symbol: SYMBOLS.link,
-    commands: ["run", "setup"],
+    commands: ["run", "setup", "push"],
   },
   {
     name: "Audit & Health",
