@@ -153,11 +153,20 @@ export class RedactionTransform extends Transform {
   }
 }
 
-export async function execCommand(opts: ExecOptions): Promise<ExecResult> {
-  const profile = getProfile(opts.profile);
-  const fullCommand = [opts.command, ...opts.args].join(" ");
+/**
+ * Enforce the exec policy and profile allow/deny lists for a command.
+ * Shared by `qring exec` (scope-wide injection) and `qring run` (declared-only
+ * injection). Throws on denial.
+ */
+export function enforceExecPolicy(
+  profile: ExecProfile,
+  command: string,
+  args: string[],
+  projectPath?: string,
+): void {
+  const fullCommand = [command, ...args].join(" ");
 
-  const policyDecision = checkExecPolicy(fullCommand, opts.projectPath);
+  const policyDecision = checkExecPolicy(fullCommand, projectPath);
   if (!policyDecision.allowed) {
     throw new Error(`Policy Denied: ${policyDecision.reason}`);
   }
@@ -174,9 +183,14 @@ export async function execCommand(opts: ExecOptions): Promise<ExecResult> {
   if (profile.allowCommands) {
     const allowed = profile.allowCommands.some((a) => fullCommand.startsWith(a));
     if (!allowed) {
-      throw new Error(`Exec profile "${profile.name}" does not allow command "${opts.command}"`);
+      throw new Error(`Exec profile "${profile.name}" does not allow command "${command}"`);
     }
   }
+}
+
+export async function execCommand(opts: ExecOptions): Promise<ExecResult> {
+  const profile = getProfile(opts.profile);
+  enforceExecPolicy(profile, opts.command, opts.args, opts.projectPath);
 
   const envMap: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
@@ -231,6 +245,37 @@ export async function execCommand(opts: ExecOptions): Promise<ExecResult> {
     }
   }
 
+  return spawnRedacted({
+    profile,
+    command: opts.command,
+    args: opts.args,
+    envMap,
+    secretsToRedact: [...secretsToRedact],
+    captureOutput: opts.captureOutput,
+    projectPath: opts.projectPath,
+  });
+}
+
+export interface SpawnRedactedOptions {
+  profile: ExecProfile;
+  command: string;
+  args: string[];
+  /** Complete child environment (caller composes inheritance + injection). */
+  envMap: Record<string, string>;
+  /** Values to redact from the child's stdout/stderr. */
+  secretsToRedact: string[];
+  captureOutput?: boolean;
+  /** Used only to resolve the policy-configured max runtime. */
+  projectPath?: string;
+}
+
+/**
+ * Spawn a child process with a fully-composed environment, enforcing the
+ * profile's network restriction and runtime limit, and redacting known
+ * secret values from its output.
+ */
+export function spawnRedacted(opts: SpawnRedactedOptions): Promise<ExecResult> {
+  const { profile, secretsToRedact, envMap } = opts;
   const maxRuntime = profile.maxRuntimeSeconds ?? getExecMaxRuntime(opts.projectPath);
 
   return new Promise((resolve, reject) => {
