@@ -11,6 +11,7 @@
 [![NPM Downloads](https://img.shields.io/npm/dm/@i4ctime/q-ring?style=flat-square&color=0ea5e9&label=downloads)](https://www.npmjs.com/package/@i4ctime/q-ring)
 [![Docs](https://img.shields.io/badge/docs-website-0ea5e9?style=flat-square)](https://qring.i4c.studio/docs)
 [![MCP Tools](https://img.shields.io/badge/MCP_tools-44-0ea5e9?style=flat-square)](https://glama.ai/mcp/servers/I4cTime/q-ring)
+[![smithery badge](https://smithery.ai/badge/i4ctime/q-ring)](https://smithery.ai/servers/i4ctime/q-ring)
 [![License](https://img.shields.io/npm/l/@i4ctime/q-ring?style=flat-square&color=0ea5e9)](https://github.com/I4cTime/q-ring/blob/main/LICENSE)
 [![Discord](https://img.shields.io/badge/discord-join%20the%20studio-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/5uEApw5uEz)
 [![YouTube](https://img.shields.io/badge/youtube-%40qring__dev-FF0000?style=flat-square&logo=youtube&logoColor=white)](https://www.youtube.com/@qring_dev)
