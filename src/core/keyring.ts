@@ -1,5 +1,5 @@
 import { withFileLock } from "../utils/file-lock.js";
-import { Entry, findCredentials } from "@napi-rs/keyring";
+import { Entry, findCredentials } from "./backend.js";
 import {
   resolveScope,
   serviceForScope,
