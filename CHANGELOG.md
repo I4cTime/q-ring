@@ -51,6 +51,14 @@ tool-selection saturation).
   Throttled per key (5 min) so agent retry loops can't spam; disable with
   `QRING_NOTIFY=off`.
 
+### Changed
+- **Smithery publishing is now part of the release pipeline.** A `smithery`
+  job in `publish.yml` (downstream of the npm/MCP publish, never blocking it)
+  waits for npm to serve the release, builds the cross-platform MCPB bundle,
+  attaches it to the GitHub release, publishes it to `i4ctime/q-ring`, and
+  re-applies the listing metadata that bundle publishes reset. New
+  `pnpm run build:mcpb` script for the manual path.
+
 ### Fixed
 - **`withFileLock` swallowed exceptions from its critical section.** An error
   thrown inside the locked callback was caught by the lock-acquisition retry

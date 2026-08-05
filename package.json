@@ -30,6 +30,7 @@
     "plugin:sync:claude": "node scripts/plugin-sync-claude.mjs",
     "plugin:gen-skills": "node scripts/plugin-generate-skills.mjs",
     "check:parity": "node scripts/check-plugin-parity.mjs && node scripts/plugin-generate-skills.mjs --check",
+    "build:mcpb": "node scripts/build-mcpb.mjs",
     "docs:publish-log": "node scripts/append-changelog-to-publish-log.mjs",
     "release:prepare": "node scripts/prepare-release.mjs",
     "prepublishOnly": "pnpm run build && pnpm run sync-versions"
