@@ -50,6 +50,11 @@ tool-selection saturation).
   `osascript`) naming the key and the exact `qring approve` command.
   Throttled per key (5 min) so agent retry loops can't spam; disable with
   `QRING_NOTIFY=off`.
+- **Public threat model** (`docs/threat-model.md`): assets, trust boundaries,
+  attackers considered, per-surface mitigations, where plaintext can appear,
+  an honest answer to the agent-exfiltration question, explicit non-goals, and
+  hardening recommendations for production keys. Linked from the README
+  Security section and SECURITY.md.
 
 ### Changed
 - **Smithery publishing is now part of the release pipeline.** A `smithery`

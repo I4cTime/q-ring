@@ -1065,6 +1065,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide (dev environment, conv
 ## 🔒 Security
 
 - **Local-first.** Core storage is your OS keychain — there is no q-ring cloud and no account. The MCP surface, audit log, and agent memory live on your machine (audit and memory files are written owner-only, `0600`).
+- **Written-down threat model.** What q-ring protects, what it doesn't, and where the residual risk lives — including an honest answer to the agent-exfiltration question — in [docs/threat-model.md](docs/threat-model.md).
 - **Hardened by adversarial review.** v0.14.0 shipped the results of an internal adversarial audit — policy-bypass, approval-scoping, and exec-profile findings all fixed, each with regression tests. Details are in the [CHANGELOG](CHANGELOG.md) `Security` sections (house style since 0.12.0: fix first, then disclose there).
 - **Reporting a vulnerability.** Use [GitHub private vulnerability reporting](https://github.com/I4cTime/q-ring/security/advisories/new) — see [SECURITY.md](SECURITY.md) for the supported-versions table and response commitments (48-hour acknowledgement, 7-day assessment).
 
