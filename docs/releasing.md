@@ -31,6 +31,7 @@ git push --tags
 1. **GitHub Release** — created idempotently, with the release notes extracted from that version's CHANGELOG section. Tagging without a matching CHANGELOG section fails the run on purpose.
 2. **Publish** (`publish.yml`, dispatched on the tag ref) — npm publish with provenance (idempotent: skips if the version is already on npm), then MCP Registry publish via a pinned `mcp-publisher`.
 3. **Homebrew** (`update-homebrew.yml`, dispatched on the tag ref) — waits up to 5 minutes for the version to appear on npm, regenerates the tap formula with the new tarball sha, and pushes to `I4cTime/homebrew-tap` (skips if unchanged).
+4. **Smithery** (`publish.yml`, `smithery` job, `needs: publish`) — waits for npm to serve the new version, builds the cross-platform MCPB bundle (`pnpm run build:mcpb` / `scripts/build-mcpb.mjs`, which vendors the *published* npm package), attaches `qring-<version>.mcpb` to the GitHub release, publishes it to `i4ctime/q-ring` with the pinned `smithery` CLI (`SMITHERY_API_KEY` repo secret), and best-effort re-applies the listing metadata + icon (bundle publishes have reset them before). Downstream of the npm/MCP publish on purpose — a Smithery failure never blocks the critical path.
 
 Why **dispatch** instead of events or `workflow_call` (both were tried and failed on the first v0.13.0 attempt):
 
@@ -44,4 +45,5 @@ Also learned the hard way: `release.yml` must not share `publish.yml`'s concurre
 
 - **npm/MCP publish failed:** fix the cause, then re-run from the Actions tab with `workflow_dispatch` on `publish.yml`, passing the tag as `ref`. The npm step skips if the version already published.
 - **Homebrew failed:** re-run the `update-homebrew.yml` job — it re-derives everything from the tag and npm.
+- **Smithery failed:** re-run the `smithery` job (or the whole `publish.yml` dispatch — the npm step skips when already published). Manual fallback: `pnpm run build:mcpb && smithery mcp publish dist-mcpb/qring-<ver>.mcpb -n i4ctime/q-ring`.
 - **Wrong notes:** edit the GitHub Release body in the UI; nothing downstream depends on it.
