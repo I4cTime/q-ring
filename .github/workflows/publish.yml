@@ -94,3 +94,82 @@ jobs:
 
       - name: Publish to MCP Registry
         run: ./mcp-publisher publish
+
+  smithery:
+    # Bundle + publish the MCPB to Smithery AFTER npm serves the release —
+    # scripts/build-mcpb.mjs vendors the PUBLISHED npm package, not the
+    # working tree. Deliberately downstream of the critical path: a Smithery
+    # outage fails this job but never blocks the npm/MCP Registry publish.
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # attach the .mcpb to the GitHub release
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      # Same tolerance pattern as update-homebrew.yml: the registry can lag
+      # the publish step by a minute or two.
+      - name: Wait for npm to serve the new version
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          VER=$(node -p "require('./package.json').version")
+          echo "VER=$VER" >> "$GITHUB_ENV"
+          for i in $(seq 1 30); do
+            if npm view "$NAME@$VER" version >/dev/null 2>&1; then
+              echo "npm has $NAME@$VER"
+              exit 0
+            fi
+            echo "waiting for $NAME@$VER on npm ($i/30)..."
+            sleep 10
+          done
+          echo "::error::npm never served $NAME@$VER — cannot bundle"
+          exit 1
+
+      - name: Build MCPB bundle
+        run: node scripts/build-mcpb.mjs "$VER"
+
+      - name: Attach bundle to GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v$VER" >/dev/null 2>&1; then
+            gh release upload "v$VER" "dist-mcpb/qring-$VER.mcpb" --clobber
+          else
+            echo "::warning::no GitHub release v$VER — skipping asset upload (manual dispatch on a non-release ref?)"
+          fi
+
+      - name: Publish to Smithery
+        # The smithery CLI authenticates from SMITHERY_API_KEY (the same
+        # value `smithery auth whoami --full` prints). Pinned, not latest,
+        # like mcp-publisher above.
+        env:
+          SMITHERY_API_KEY: ${{ secrets.SMITHERY_API_KEY }}
+        run: npx -y smithery@1.2.0 mcp publish "dist-mcpb/qring-$VER.mcpb" -n i4ctime/q-ring
+
+      - name: Re-apply listing metadata
+        # Bundle publishes ignore manifest metadata and have reset the
+        # listing before (2026-08-04): re-PATCH the description/links and
+        # re-PUT the icon after every publish. Best-effort — the listing
+        # API is undocumented and may drift.
+        continue-on-error: true
+        env:
+          SMITHERY_API_KEY: ${{ secrets.SMITHERY_API_KEY }}
+        run: |
+          curl -fsS -X PATCH "https://api.smithery.ai/servers/i4ctime%2Fq-ring" \
+            -H "Authorization: Bearer $SMITHERY_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "description": "OS keychain secrets for AI coding agents, over MCP.",
+              "homepage": "https://qring.i4c.studio",
+              "repositoryUrl": "https://github.com/I4cTime/q-ring",
+              "license": "AGPL-3.0-only"
+            }'
+          curl -fsS -X PUT "https://api.smithery.ai/servers/i4ctime%2Fq-ring/icon" \
+            -H "Authorization: Bearer $SMITHERY_API_KEY" \
+            -F "icon=@assets/icon-512.png"

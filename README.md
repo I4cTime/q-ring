@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://unpkg.com/@i4ctime/q-ring@latest/assets/social-card-optimized.jpg" alt="q-ring — never paste an API key into .env again" width="100%" />
+  <img src="https://raw.githubusercontent.com/I4cTime/q-ring/main/assets/social-card-optimized.jpg" alt="q-ring — never paste an API key into .env again" width="100%" />
 </div>
 
 # q-ring
@@ -12,6 +12,9 @@
 [![Docs](https://img.shields.io/badge/docs-website-0ea5e9?style=flat-square)](https://qring.i4c.studio/docs)
 [![MCP Tools](https://img.shields.io/badge/MCP_tools-44-0ea5e9?style=flat-square)](https://glama.ai/mcp/servers/I4cTime/q-ring)
 [![Smithery](https://img.shields.io/badge/smithery-i4ctime%2Fq--ring-0ea5e9?style=flat-square)](https://smithery.ai/servers/i4ctime/q-ring)
+[![Cursor Directory](https://img.shields.io/badge/cursor_directory-q--ring-0ea5e9?style=flat-square)](https://cursor.directory/plugins/q-ring)
+[![PulseMCP](https://img.shields.io/badge/pulsemcp-q--ring-0ea5e9?style=flat-square)](https://www.pulsemcp.com/servers/i4ctime-q-ring)
+[![mcpservers.org](https://img.shields.io/badge/mcpservers.org-q--ring-0ea5e9?style=flat-square)](https://mcpservers.org/servers/i4ctime/q-ring)
 [![License](https://img.shields.io/npm/l/@i4ctime/q-ring?style=flat-square&color=0ea5e9)](https://github.com/I4cTime/q-ring/blob/main/LICENSE)
 [![Discord](https://img.shields.io/badge/discord-join%20the%20studio-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/5uEApw5uEz)
 [![YouTube](https://img.shields.io/badge/youtube-%40qring__dev-FF0000?style=flat-square&logo=youtube&logoColor=white)](https://www.youtube.com/@qring_dev)
@@ -298,6 +301,60 @@ qring env:generate --output .env
 qring env:generate --env staging --output .env.staging
 ```
 
+### Secret References & Least-Privilege Run
+
+A `qring://` reference is a committable pointer to a secret — it goes in your `.env` file instead of the value. `qring run` resolves references and manifest keys at spawn time, injecting **only what the project declares** (unlike `exec`, which injects the whole scope). Output is auto-redacted.
+
+```bash
+# .env — safe to commit: these are references, not values
+DATABASE_URL=qring://project/DATABASE_URL
+OPENAI_API_KEY=qring://global/OPENAI_API_KEY
+STRIPE_KEY=qring:///STRIPE_KEY            # auto scope: project, then global
+SESSION_TTL=3600                          # plain values pass through
+
+# Run with declared secrets injected (manifest + .env refs)
+qring run -- pnpm dev
+
+# Preview what would be injected, without running
+qring run --dry-run -- pnpm dev
+
+# Pin an environment, use a specific env file, or skip the manifest
+qring run --env prod --env-file .env.prod --no-manifest -- ./deploy.sh
+```
+
+The key lives in the **path**, never the host (`qring://project/KEY`, not `qring://KEY`) — URL hosts are case-insensitive, and env-var keys are not. Malformed references fail loudly instead of leaking a literal `qring://…` string into the child. A reference pinned to an environment: `qring://project/DATABASE_URL?env=prod`.
+
+### Editor Setup
+
+Wire the q-ring MCP server into an editor's MCP config with one command. Merges non-destructively — other servers are preserved, and an existing q-ring entry is only replaced with `--force`.
+
+```bash
+qring setup cursor          # .cursor/mcp.json (project) or --global for ~/.cursor
+qring setup kiro            # .kiro/settings/mcp.json, with read-only autoApprove list
+qring setup claude          # .mcp.json (project scope)
+
+# Preview without writing
+qring setup cursor --dry-run
+```
+
+### Push to Deployment Platforms
+
+Push manifest secrets to GitHub Actions, Vercel, or Cloudflare Workers through each platform's **own authenticated CLI** (`gh` / `vercel` / `wrangler`) — q-ring never holds platform tokens, and values travel over stdin, never argv. Every push is recorded in the audit chain.
+
+```bash
+# Push the .q-ring.json manifest keys to GitHub Actions secrets
+qring push github --repo you/your-app
+
+# Push to Vercel environments
+qring push vercel --vercel-env production,preview
+
+# Push to Cloudflare Workers secrets
+qring push cloudflare
+
+# Explicit keys, preview first
+qring push github --keys DATABASE_URL,API_KEY --dry-run
+```
+
 ### Secret Liveness Validation
 
 Test if a secret is actually valid with its target service. q-ring auto-detects the provider from key prefixes (`sk-` → OpenAI, `ghp_` → GitHub, etc.) or accepts an explicit provider name.
@@ -319,7 +376,7 @@ qring validate --all --manifest
 qring validate --list-providers
 ```
 
-**Built-in providers:** OpenAI, Stripe, GitHub, AWS (format check), Generic HTTP.
+**Built-in providers:** OpenAI, Anthropic, OpenRouter, Google AI (Gemini), Groq, Hugging Face, ElevenLabs*, Vercel*, Stripe, GitHub, AWS (format check), Generic HTTP. Keys are only ever sent in headers, never URLs. (*no safe public prefix — select explicitly with `--provider` or the manifest `provider` field.)
 
 Output:
 
@@ -440,6 +497,8 @@ qring approvals
 # Revoke an approval
 qring approve PROD_DB_URL --revoke
 ```
+
+When an agent is blocked on an approval-protected key, q-ring raises a desktop notification (Linux `notify-send`, macOS `osascript`) naming the key and the exact `qring approve` command — throttled per key, disabled with `QRING_NOTIFY=off`.
 
 ### Just-In-Time (JIT) Provisioning
 
@@ -601,6 +660,18 @@ qring audit:export --format json --since 2026-03-01
 # Export as CSV
 qring audit:export --format csv --output audit-report.csv
 ```
+
+### Encrypted File Backend (Headless / CI)
+
+Hosts with no OS keyring at all (headless Linux, containers, CI) can opt into an encrypted file store. Everything — secrets, the audit anchor, the agent-memory key — routes through it.
+
+```bash
+export QRING_BACKEND=file
+export QRING_FILE_PASSPHRASE="a strong passphrase"   # required — no passphrase, no access
+qring set CI_TOKEN
+```
+
+The store is AES-256-GCM at `~/.config/q-ring/file-backend.enc` (mode `0600`, path override via `QRING_FILE_BACKEND_PATH`), keyed by PBKDF2 from the passphrase. It is **explicit-only**: a missing OS keyring never falls back to it silently, and without the passphrase every operation fails closed — q-ring never encrypts under a machine-derivable key.
 
 ### Team & Org Scopes
 
@@ -997,6 +1068,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide (dev environment, conv
 ## 🔒 Security
 
 - **Local-first.** Core storage is your OS keychain — there is no q-ring cloud and no account. The MCP surface, audit log, and agent memory live on your machine (audit and memory files are written owner-only, `0600`).
+- **Written-down threat model.** What q-ring protects, what it doesn't, and where the residual risk lives — including an honest answer to the agent-exfiltration question — in [docs/threat-model.md](docs/threat-model.md).
 - **Hardened by adversarial review.** v0.14.0 shipped the results of an internal adversarial audit — policy-bypass, approval-scoping, and exec-profile findings all fixed, each with regression tests. Details are in the [CHANGELOG](CHANGELOG.md) `Security` sections (house style since 0.12.0: fix first, then disclose there).
 - **Reporting a vulnerability.** Use [GitHub private vulnerability reporting](https://github.com/I4cTime/q-ring/security/advisories/new) — see [SECURITY.md](SECURITY.md) for the supported-versions table and response commitments (48-hour acknowledgement, 7-day assessment).
 

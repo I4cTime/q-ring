@@ -6,14 +6,14 @@
   },
   "metadata": {
     "description": "Quantum keyring for AI coding tools — secrets, superposition, entanglement, MCP.",
-    "version": "0.14.0"
+    "version": "0.15.0"
   },
   "plugins": [
     {
       "name": "qring",
       "source": "./claude-code-plugin",
       "description": "Quantum keyring for AI agents — manage secrets, scan for leaks, rotate keys, and enforce policy directly from Claude Code.",
-      "version": "0.14.0",
+      "version": "0.15.0",
       "author": {
         "name": "I4cTime"
       },

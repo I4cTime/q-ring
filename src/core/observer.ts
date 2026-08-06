@@ -25,7 +25,7 @@ import {
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { createHash, createHmac, randomBytes } from "node:crypto";
-import { Entry } from "@napi-rs/keyring";
+import { Entry } from "./backend.js";
 import { withFileLock } from "../utils/file-lock.js";
 
 // The audit chain's tamper-evidence root is a keyed anchor — the HMAC of the
@@ -97,7 +97,8 @@ export type AuditAction =
   | "approve"
   | "revoke"
   | "policy_deny"
-  | "rotate";
+  | "rotate"
+  | "push";
 
 export interface AuditEvent {
   timestamp: string;

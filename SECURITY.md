@@ -4,8 +4,8 @@
 
 | Version | Supported |
 |---------|-----------|
-| 0.14.x   | Yes       |
-| < 0.14   | No        |
+| 0.15.x   | Yes       |
+| < 0.15   | No        |
 
 ## Reporting a Vulnerability
 
@@ -61,6 +61,11 @@ The following areas are in scope for security reports:
 - Vulnerabilities in upstream dependencies (report those to the respective project).
 - Issues requiring physical access to an already-unlocked machine.
 - Social engineering attacks.
+
+The full picture of what q-ring defends against — trust boundaries,
+attackers considered, and known residual risks — is documented in
+[docs/threat-model.md](docs/threat-model.md). Anything listed there as a
+mitigation is in scope if you can bypass it.
 
 ## Recognition
 

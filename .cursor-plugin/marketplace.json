@@ -2,7 +2,7 @@
   "name": "i4ctime-plugins",
   "owner": {
     "name": "I4cTime",
-    "email": "publiclaststewart@gmail.com"
+    "email": "i4c.studio.dev@gmail.com"
   },
   "metadata": {
     "description": "Cursor plugins by I4cTime — quantum-secured secret management for AI agents"
@@ -12,7 +12,7 @@
       "name": "qring",
       "source": "cursor-plugin",
       "description": "Quantum keyring for AI agents — manage secrets, scan for leaks, rotate keys, and enforce policy directly from Cursor.",
-      "version": "0.14.0",
+      "version": "0.15.0",
       "keywords": [
         "secrets",
         "keyring",

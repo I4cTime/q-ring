@@ -68,6 +68,105 @@ export class ProviderRegistry {
 
 // ─── Built-in Providers ───
 
+/**
+ * Factory for the common liveness shape: one authenticated GET against a
+ * cheap endpoint, with the standard 200/401/403/429 interpretation.
+ */
+function livenessProvider(cfg: {
+  name: string;
+  description: string;
+  prefixes?: string[];
+  url: string;
+  headers: (value: string) => Record<string, string>;
+}): Provider {
+  return {
+    name: cfg.name,
+    description: cfg.description,
+    prefixes: cfg.prefixes,
+    async validate(value: string): Promise<ValidationResult> {
+      const start = Date.now();
+      try {
+        const { statusCode } = await makeRequest(cfg.url, {
+          "User-Agent": "q-ring-validator/1.0",
+          ...cfg.headers(value),
+        });
+        const latencyMs = Date.now() - start;
+
+        if (statusCode === 200)
+          return { valid: true, status: "valid", message: "API key is valid", latencyMs, provider: cfg.name };
+        if (statusCode === 401 || statusCode === 403)
+          return { valid: false, status: "invalid", message: `Invalid or revoked API key (${statusCode})`, latencyMs, provider: cfg.name };
+        if (statusCode === 429)
+          return { valid: true, status: "error", message: "Rate limited — key may be valid", latencyMs, provider: cfg.name };
+        return { valid: false, status: "error", message: `Unexpected status ${statusCode}`, latencyMs, provider: cfg.name };
+      } catch (err) {
+        return { valid: false, status: "error", message: `${err instanceof Error ? err.message : "Network error"}`, latencyMs: Date.now() - start, provider: cfg.name };
+      }
+    },
+  };
+}
+
+// AI-stack providers. Keys are only ever sent in headers (never the URL —
+// URLs land in server logs), against the cheapest read-only endpoint each
+// platform has.
+
+const anthropicProvider = livenessProvider({
+  name: "anthropic",
+  description: "Anthropic API key validation",
+  prefixes: ["sk-ant-"],
+  url: "https://api.anthropic.com/v1/models?limit=1",
+  headers: (value) => ({ "x-api-key": value, "anthropic-version": "2023-06-01" }),
+});
+
+const openrouterProvider = livenessProvider({
+  name: "openrouter",
+  description: "OpenRouter API key validation",
+  prefixes: ["sk-or-"],
+  url: "https://openrouter.ai/api/v1/key",
+  headers: (value) => ({ Authorization: `Bearer ${value}` }),
+});
+
+const googleAiProvider = livenessProvider({
+  name: "google-ai",
+  description: "Google AI (Gemini) API key validation",
+  prefixes: ["AIza"],
+  url: "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1",
+  headers: (value) => ({ "x-goog-api-key": value }),
+});
+
+const groqProvider = livenessProvider({
+  name: "groq",
+  description: "Groq API key validation",
+  prefixes: ["gsk_"],
+  url: "https://api.groq.com/openai/v1/models",
+  headers: (value) => ({ Authorization: `Bearer ${value}` }),
+});
+
+const huggingfaceProvider = livenessProvider({
+  name: "huggingface",
+  description: "Hugging Face token validation",
+  prefixes: ["hf_"],
+  url: "https://huggingface.co/api/whoami-v2",
+  headers: (value) => ({ Authorization: `Bearer ${value}` }),
+});
+
+// No prefix: ElevenLabs "sk_..." would shadow Stripe's sk_live_/sk_test_,
+// so it is explicit-only (set `provider: "elevenlabs"` on the secret/manifest).
+const elevenlabsProvider = livenessProvider({
+  name: "elevenlabs",
+  description: "ElevenLabs API key validation (explicit-only — set provider on the secret)",
+  url: "https://api.elevenlabs.io/v1/user",
+  headers: (value) => ({ "xi-api-key": value }),
+});
+
+// No prefix: Vercel tokens have no stable public prefix — explicit-only.
+const vercelProvider = livenessProvider({
+  name: "vercel",
+  description: "Vercel token validation (explicit-only — set provider on the secret)",
+  url: "https://api.vercel.com/v2/user",
+  headers: (value) => ({ Authorization: `Bearer ${value}` }),
+});
+
 const openaiProvider: Provider = {
   name: "openai",
   description: "OpenAI API key validation",
@@ -207,7 +306,17 @@ const httpProvider: Provider = {
 };
 
 export const registry = new ProviderRegistry();
+// Prefix detection iterates in registration order: anthropic (sk-ant-) and
+// openrouter (sk-or-) MUST come before openai, whose bare "sk-" would
+// otherwise shadow them.
+registry.register(anthropicProvider);
+registry.register(openrouterProvider);
 registry.register(openaiProvider);
+registry.register(googleAiProvider);
+registry.register(groqProvider);
+registry.register(huggingfaceProvider);
+registry.register(elevenlabsProvider);
+registry.register(vercelProvider);
 registry.register(stripeProvider);
 registry.register(githubProvider);
 registry.register(awsProvider);

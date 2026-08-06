@@ -51,3 +51,4 @@ docs/publishing-log.md
 
 # Local-only GTM / campaign drafts (see marketing/README.md)
 local/
+dist-mcpb/
