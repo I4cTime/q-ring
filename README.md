@@ -500,6 +500,41 @@ qring approve PROD_DB_URL --revoke
 
 When an agent is blocked on an approval-protected key, q-ring raises a desktop notification (Linux `notify-send`, macOS `osascript`) naming the key and the exact `qring approve` command — throttled per key, disabled with `QRING_NOTIFY=off`.
 
+### Canary Honeytokens
+
+Plant fake credentials that look and read exactly like real ones. Anything that touches one — a compromised MCP server, an over-curious agent, exfiltrated tooling sweeping the ring — gets the fake value back with no tell, while q-ring fires a desktop alert and writes a `canary` event into the tamper-evident audit chain.
+
+```bash
+# Plant a canary shaped like a real AWS access key
+qring canary plant AWS_SECRET_ACCESS_KEY --format aws
+
+# Other shapes: github, openai, anthropic, stripe, generic
+qring canary plant GHP_BACKUP_TOKEN --format github
+
+# See what's been tripped
+qring canary list
+qring audit --action canary
+```
+
+Values are CSPRNG noise in the provider's real token shape (an `aws` canary matches `AKIA[A-Z0-9]{16}`) — plausible enough to be taken, never valid. Alerts are throttled to one per key per 30 seconds; the audit trail records every read.
+
+### MCP Airlock
+
+Run a third-party MCP server behind q-ring. The airlock sits between your agent host and the wrapped server, spawns it with a **stripped environment** (no inherited API keys — opt back in with `--inherit-env`), and records every tool call that crosses it as a `wrap` event in the audit chain, grouped per session and labeled with the calling client's identity. Tool arguments are never logged — they may contain secrets.
+
+```json
+{
+  "mcpServers": {
+    "some-server": {
+      "command": "qring",
+      "args": ["mcp", "wrap", "--", "npx", "-y", "some-mcp-server"]
+    }
+  }
+}
+```
+
+Tools-only proxy today: `tools/list` and `tools/call` pass through verbatim, so the wrapped server behaves identically — it just can't read your environment, and everything it's asked to do is on the record.
+
 ### Just-In-Time (JIT) Provisioning
 
 Instead of storing static credentials, configure `q-ring` to dynamically generate short-lived tokens on the fly when requested (e.g. AWS STS, generic HTTP endpoints).
@@ -648,7 +683,7 @@ qring exec -- echo "hello"
 
 ### Tamper-Evident Audit
 
-Every audit event includes a SHA-256 hash of the previous event, creating a tamper-evident chain. Since v0.14 the chain is also anchored with a keyed HMAC stored in the OS keyring, so `qring audit:verify` detects truncation and whole-file rewrites — not just in-place edits. Verify integrity and export logs in multiple formats.
+Every audit event includes a SHA-256 hash of the previous event, creating a tamper-evident chain. Since v0.14 the chain is also anchored with a keyed HMAC stored in the OS keyring, so `qring audit:verify` detects truncation and whole-file rewrites — not just in-place edits. Verify integrity and export logs in multiple formats. Events from MCP sessions are additionally stamped with the connecting client's self-reported identity (`clientInfo` name@version) — an audit label for "which agent did this", never an authorization boundary, since clients choose what to report.
 
 ```bash
 # Verify the entire audit chain

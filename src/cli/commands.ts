@@ -11,6 +11,8 @@ import { registerHookCommands } from "./commands/hooks.js";
 import { registerAgentCommands } from "./commands/agent.js";
 import { registerSecurityCommands } from "./commands/security.js";
 import { registerBridgeCommands } from "./commands/bridges.js";
+import { registerCanaryCommands } from "./commands/canary.js";
+import { registerMcpCommands } from "./commands/mcp.js";
 import { registerDoctorCommand } from "./commands/doctor.js";
 import { registerCompletionCommand } from "./commands/completion.js";
 
@@ -93,7 +95,7 @@ const COMMAND_GROUPS: Array<{
   {
     name: "Security & Governance",
     symbol: SYMBOLS.lock,
-    commands: ["approve", "approvals", "policy"],
+    commands: ["approve", "approvals", "policy", "canary", "mcp"],
   },
 ];
 
@@ -241,6 +243,8 @@ export function createProgram(): Command {
   registerAgentCommands(program);
   registerSecurityCommands(program);
   registerBridgeCommands(program);
+  registerCanaryCommands(program);
+  registerMcpCommands(program);
   registerDoctorCommand(program);
   registerCompletionCommand(program);
 

@@ -4,6 +4,39 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+This is the "moat" release: q-ring stops being only a vault and starts being a
+tripwire. Fake credentials that alarm on read, an airlock to put between your
+agent and any third-party MCP server, and per-agent attribution in the audit
+chain. All new commands are CLI-only; the MCP tool count is still 44.
+
+### Added
+- **Canary honeytokens** (`qring canary plant <key>`, `qring canary list`).
+  Plants a fake credential that stores and reads like a real secret — the
+  reader gets the fake value back with no tell — while every read fires a
+  desktop alert and lands in the tamper-evident audit chain as a new `canary`
+  action. Values are CSPRNG noise in realistic provider shapes (`aws` matches
+  `AKIA[A-Z0-9]{16}`; also `github`, `openai`, `anthropic`, `stripe`,
+  `generic`), planted via `--format`, or `--value` for a bring-your-own token.
+  Planting refuses to overwrite a real secret without `--force`; alerts are
+  throttled per key (30s) but audit events never are; silent internal reads
+  (dashboard polling) don't trip.
+- **MCP airlock** (`qring mcp wrap -- <server command>`). Runs a third-party
+  MCP server as a child and re-exposes it over stdio with q-ring in the
+  middle: the wrapped server is spawned with the SDK's minimal safe
+  environment instead of the parent env (opt out with `--inherit-env`), and
+  every tool call crossing the airlock is a `wrap` audit event carrying a
+  per-session correlation id — tool *arguments* are deliberately never
+  logged, since they may contain secrets. Tools-only proxy: `tools/list` and
+  `tools/call` forward verbatim; downstream failures surface as `isError`
+  results, and the session ends cleanly when either side hangs up.
+- **Per-agent identity in the audit chain.** MCP sessions stamp subsequent
+  audit events with the client's `clientInfo` (`name@version`) captured at
+  the initialize handshake; `qring audit` output, queries, and CSV exports
+  carry the new `agent` field. The label is client-supplied and trivially
+  spoofable, so it is attribution metadata only — it never feeds policy,
+  approvals, or any authorization decision. Labels are sanitized (printable
+  ASCII, 128 chars) before they touch the log.
+
 ## [0.15.0] — 2026-08-05
 
 This is the "bridges" release: q-ring now reaches outward — into your .env

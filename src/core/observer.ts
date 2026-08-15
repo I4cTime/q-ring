@@ -98,7 +98,9 @@ export type AuditAction =
   | "revoke"
   | "policy_deny"
   | "rotate"
-  | "push";
+  | "push"
+  | "canary"
+  | "wrap";
 
 export interface AuditEvent {
   timestamp: string;
@@ -113,6 +115,31 @@ export interface AuditEvent {
   prevHash?: string;
   /** Correlation ID to group related events across a single operation */
   correlationId?: string;
+  /**
+   * Client-supplied agent label (MCP clientInfo name@version). Audit metadata
+   * ONLY — it is trivially spoofable and must never gate authorization.
+   */
+  agent?: string;
+}
+
+let auditAgentLabel: string | null = null;
+
+/**
+ * Set the agent label stamped on subsequent audit events from this process.
+ * The label comes from the MCP initialize handshake (clientInfo) and is
+ * untrusted input: printable ASCII only, capped at 128 chars.
+ */
+export function setAuditAgentLabel(label: string | null): void {
+  if (label === null) {
+    auditAgentLabel = null;
+    return;
+  }
+  const cleaned = label.replace(/[^\x20-\x7e]/g, "").trim().slice(0, 128);
+  auditAgentLabel = cleaned.length > 0 ? cleaned : null;
+}
+
+export function getAuditAgentLabel(): string | null {
+  return auditAgentLabel;
 }
 
 function getAuditDir(): string {
@@ -180,6 +207,9 @@ export function logAudit(
           pid: process.pid,
           prevHash,
         };
+        if (full.agent === undefined && auditAgentLabel) {
+          full.agent = auditAgentLabel;
+        }
         const line = JSON.stringify(full);
         const path = getAuditPath();
         appendFileSync(path, line + "\n", { mode: 0o600 });
@@ -208,6 +238,7 @@ export interface AuditQuery {
   limit?: number;
   source?: AuditEvent["source"];
   correlationId?: string;
+  agent?: string;
 }
 
 /** Cap bytes read from audit log to avoid loading multi-GB files into memory. */
@@ -246,6 +277,7 @@ export function queryAudit(query: AuditQuery = {}): AuditEvent[] {
     if (query.action) events = events.filter((e) => e.action === query.action);
     if (query.source) events = events.filter((e) => e.source === query.source);
     if (query.correlationId) events = events.filter((e) => e.correlationId === query.correlationId);
+    if (query.agent) events = events.filter((e) => e.agent === query.agent);
     if (query.since) {
       const since = new Date(query.since).getTime();
       events = events.filter((e) => new Date(e.timestamp).getTime() >= since);
@@ -395,10 +427,10 @@ export function exportAudit(opts: ExportOptions = {}): string {
   }
 
   if (opts.format === "csv") {
-    const header = "timestamp,action,key,scope,env,source,pid,correlationId,detail";
+    const header = "timestamp,action,key,scope,env,source,agent,pid,correlationId,detail";
     const rows = events.map(
       (e) =>
-        `${e.timestamp},${e.action},${e.key ?? ""},${e.scope ?? ""},${e.env ?? ""},${e.source},${e.pid},${e.correlationId ?? ""},${(e.detail ?? "").replace(/,/g, ";")}`,
+        `${e.timestamp},${e.action},${e.key ?? ""},${e.scope ?? ""},${e.env ?? ""},${e.source},${(e.agent ?? "").replace(/,/g, ";")},${e.pid},${e.correlationId ?? ""},${(e.detail ?? "").replace(/,/g, ";")}`,
     );
     return [header, ...rows].join("\n");
   }

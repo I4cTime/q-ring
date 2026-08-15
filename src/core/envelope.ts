@@ -50,6 +50,10 @@ export interface SecretMetadata {
   jitProvider?: string;
   /** Expiration timestamp for the cached JIT credential */
   jitExpiresAt?: string;
+  /** Honeytoken: the value is fake and any read fires a loud alert */
+  canary?: boolean;
+  /** Format the canary value imitates (e.g. "aws", "github", "openai") */
+  canaryFormat?: string;
 }
 
 export interface QuantumEnvelope {
@@ -88,6 +92,8 @@ const SecretMetadataSchema = z.object({
   requiresApproval: z.boolean().optional(),
   jitProvider: z.string().optional(),
   jitExpiresAt: z.string().optional(),
+  canary: z.boolean().optional(),
+  canaryFormat: z.string().optional(),
 });
 
 /** Runtime validation for persisted envelopes (forward-compatible unknown meta fields stripped). */
@@ -112,6 +118,8 @@ export function createEnvelope(
     provider?: string;
     requiresApproval?: boolean;
     jitProvider?: string;
+    canary?: boolean;
+    canaryFormat?: string;
   },
 ): QuantumEnvelope {
   const now = new Date().toISOString();
@@ -140,6 +148,8 @@ export function createEnvelope(
       provider: opts?.provider,
       requiresApproval: opts?.requiresApproval,
       jitProvider: opts?.jitProvider,
+      canary: opts?.canary,
+      canaryFormat: opts?.canaryFormat,
     },
   };
 }
