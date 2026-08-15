@@ -27,6 +27,7 @@ import { findEntangled, entangle as entangleLink, disentangle as disentangleLink
 import { fireHooks } from "./hooks.js";
 import { hasApproval } from "./approval.js";
 import { notifyApprovalRequested } from "./notify.js";
+import { recordCanaryTrip } from "./canary-alert.js";
 import { registry as jitRegistry } from "./provision.js";
 import { checkKeyReadPolicy, checkSecretLifecyclePolicy, getPolicyRoot } from "./policy.js";
 
@@ -80,6 +81,10 @@ export interface SetSecretOptions extends KeyringOptions {
   requiresApproval?: boolean;
   /** Just-In-Time (JIT) provisioning provider name (e.g. "aws-sts") */
   jitProvider?: string;
+  /** Honeytoken: any read fires a loud canary alert */
+  canary?: boolean;
+  /** Provider token shape the canary value imitates */
+  canaryFormat?: string;
 }
 
 function readEnvelope(service: string, key: string): QuantumEnvelope | null {
@@ -255,6 +260,12 @@ export function getSecret(
       const latest = readEnvelope(service, key) ?? envelope;
       writeEnvelope(service, key, recordAccess(latest));
       logAudit({ action: "read", key, scope, env, source });
+      // Honeytoken trip: still return the (fake) value so the reader has no
+      // tell — the alarm is the side effect, not a denial. Silent reads
+      // (dashboard polling) deliberately don't trip.
+      if (envelope.meta.canary) {
+        recordCanaryTrip({ key, scope, env, source });
+      }
     }
 
     return value;
@@ -312,6 +323,8 @@ export function setSecret(
   const prov = opts.provider ?? existing?.meta.provider;
   const reqApp = opts.requiresApproval ?? existing?.meta.requiresApproval;
   const jitProv = opts.jitProvider ?? existing?.meta.jitProvider;
+  const canaryFlag = opts.canary ?? existing?.meta.canary;
+  const canaryFmt = opts.canaryFormat ?? existing?.meta.canaryFormat;
 
   const mergedTags = opts.tags ?? existing?.meta.tags;
   const ttlForPolicy = opts.ttlSeconds ?? existing?.meta.ttlSeconds;
@@ -342,6 +355,8 @@ export function setSecret(
       provider: prov,
       requiresApproval: reqApp,
       jitProvider: jitProv,
+      canary: canaryFlag,
+      canaryFormat: canaryFmt,
     });
   } else {
     envelope = createEnvelope(value, {
@@ -355,6 +370,8 @@ export function setSecret(
       provider: prov,
       requiresApproval: reqApp,
       jitProvider: jitProv,
+      canary: canaryFlag,
+      canaryFormat: canaryFmt,
     });
   }
 

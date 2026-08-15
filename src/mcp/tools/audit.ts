@@ -38,6 +38,8 @@ export function registerAuditTools(server: McpServer): void {
           "tunnel",
           "teleport",
           "collapse",
+          "canary",
+          "wrap",
         ])
         .optional()
         .describe(

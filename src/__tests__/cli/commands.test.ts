@@ -20,7 +20,7 @@ describe("createProgram", () => {
       "wizard", "analyze", "env", "generate", "entangle", "disentangle",
       "tunnel", "teleport", "audit", "audit:verify", "audit:export",
       "health", "hook", "env:generate", "status", "agent",
-      "rotate", "ci:validate", "policy",
+      "rotate", "ci:validate", "policy", "canary", "mcp",
     ];
 
     for (const name of expected) {
@@ -46,6 +46,23 @@ describe("createProgram", () => {
     const subNames = tpCmd!.commands.map((c) => c.name());
     expect(subNames).toContain("pack");
     expect(subNames).toContain("unpack");
+  });
+
+  it("registers canary subcommands", () => {
+    const program = createProgram();
+    const canaryCmd = program.commands.find((c) => c.name() === "canary");
+    expect(canaryCmd).toBeDefined();
+    const subNames = canaryCmd!.commands.map((c) => c.name());
+    expect(subNames).toContain("plant");
+    expect(subNames).toContain("list");
+  });
+
+  it("registers mcp subcommands", () => {
+    const program = createProgram();
+    const mcpCmd = program.commands.find((c) => c.name() === "mcp");
+    expect(mcpCmd).toBeDefined();
+    const subNames = mcpCmd!.commands.map((c) => c.name());
+    expect(subNames).toContain("wrap");
   });
 
   it("registers hook subcommands", () => {
