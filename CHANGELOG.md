@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-08-17
+
 This is the "moat" release: q-ring stops being only a vault and starts being a
 tripwire. Fake credentials that alarm on read, an airlock to put between your
 agent and any third-party MCP server, and per-agent attribution in the audit
