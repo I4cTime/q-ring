@@ -951,6 +951,22 @@ Add to `~/.claude/claude_desktop_config.json`:
 }
 ```
 
+### VS Code Configuration
+
+VS Code speaks MCP natively — add to `.vscode/mcp.json` (note the `servers` key, not `mcpServers`):
+
+```json
+{
+  "servers": {
+    "q-ring": {
+      "command": "qring-mcp"
+    }
+  }
+}
+```
+
+`qring setup` does not write this file yet — VS Code is config-only (no first-party plugin bundle).
+
 ## Editor Plugins
 
 The q-ring repo ships three first-party editor packs — each one adds rules/steering, agents, commands, skills, hooks, and the MCP connector to its host editor.
