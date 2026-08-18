@@ -1,20 +1,63 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.I4cTime/q-ring",
+  "title": "q-ring",
   "description": "Quantum-inspired keyring for AI coding agents with superposition, entanglement, and tunneling.",
+  "websiteUrl": "https://qring.i4c.studio",
+  "icons": [
+    {
+      "src": "https://qring.i4c.studio/assets/icon-192.png",
+      "mimeType": "image/png",
+      "sizes": [
+        "192x192"
+      ]
+    },
+    {
+      "src": "https://qring.i4c.studio/assets/icon-512.png",
+      "mimeType": "image/png",
+      "sizes": [
+        "512x512"
+      ]
+    }
+  ],
   "repository": {
     "url": "https://github.com/I4cTime/q-ring",
     "source": "github"
   },
-  "version": "0.16.0",
+  "version": "0.16.1",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@i4ctime/q-ring",
-      "version": "0.16.0",
+      "version": "0.16.1",
+      "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
-      }
+      },
+      "environmentVariables": [
+        {
+          "name": "QRING_BACKEND",
+          "description": "Secret storage backend. Defaults to the OS keychain; set to \"file\" for headless hosts with no Secret Service (CI, containers).",
+          "isRequired": false,
+          "default": "keyring",
+          "choices": [
+            "keyring",
+            "file"
+          ]
+        },
+        {
+          "name": "QRING_FILE_PASSPHRASE",
+          "description": "Passphrase for the encrypted file backend (AES-256-GCM). Required only when QRING_BACKEND=file — without it the file backend fails closed.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "QRING_FILE_BACKEND_PATH",
+          "description": "Custom path for the encrypted file store (default: ~/.config/q-ring/file-backend.enc).",
+          "isRequired": false,
+          "format": "filepath"
+        }
+      ]
     }
   ]
 }

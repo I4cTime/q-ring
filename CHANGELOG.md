@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.16.1] — 2026-08-18
+
+### Changed
+- **Richer MCP Registry listing** — `server.json` now carries the optional
+  metadata the registry renders: `title`, `websiteUrl` (qring.i4c.studio),
+  brand icons (192/512 PNG), an `npx` runtime hint, and the three
+  install-relevant environment variables (`QRING_BACKEND`,
+  `QRING_FILE_PASSPHRASE`, `QRING_FILE_BACKEND_PATH`) so MCP clients and
+  directories like PulseMCP can render a proper config form instead of a
+  bare package name. No runtime changes.
+
 ## [0.16.0] — 2026-08-17
 
 This is the "moat" release: q-ring stops being only a vault and starts being a
