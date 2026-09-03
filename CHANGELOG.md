@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.16.2] — 2026-09-03
+
 Hardening pass over the v0.16 surface, driven by an internal full-repo
 review (five parallel audits: security, MCP protocol, code quality, tests,
 docs). Fix-then-disclose, house style.
