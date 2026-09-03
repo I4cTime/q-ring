@@ -20,6 +20,7 @@ export function registerAuditCommands(program: Command): void {
       "-a, --action <action>",
       "Filter by action (read, write, delete, etc.)",
     )
+    .option("--agent <label>", "Filter by agent label (clientInfo name@version)")
     .option("-n, --limit <n>", "Number of events to show", parseInt, 20)
     .option("--anomalies", "Detect access anomalies")
     .option("--json", "Output as JSON")
@@ -45,6 +46,7 @@ export function registerAuditCommands(program: Command): void {
       const events = queryAudit({
         key: cmd.key,
         action: cmd.action,
+        agent: cmd.agent,
         limit: cmd.limit,
       });
 
@@ -75,6 +77,7 @@ export function registerAuditCommands(program: Command): void {
           actionColor(event.action.padEnd(8)),
           event.key ? c.bold(event.key) : "",
           event.scope ? c.dim(`[${event.scope}]`) : "",
+          event.agent ? c.cyan(`⟨${event.agent}⟩`) : "",
           event.detail ? c.dim(event.detail) : "",
         ];
 

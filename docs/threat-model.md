@@ -53,6 +53,36 @@ telemetry).
   profiles constrain which commands run; redaction filters known values
   from captured output. Neither is a sandbox (see below).
 
+### v0.16 additions to the boundary picture
+
+- **A wrapped MCP server (`qring mcp wrap`) is an untrusted child.** The
+  airlock spawns it with a stripped environment and audits every tool
+  call crossing it (arguments excluded — they may contain secrets), but
+  it is **not a sandbox**: the wrapped process still runs unconfined as
+  your user and can read the filesystem, the network, and the OS
+  keychain directly, like any local process (attacker 2). What the
+  airlock buys you is the removal of the laziest exfil path
+  (`process.env`) and a tamper-evident record of everything the agent
+  asked the wrapped server to do. Tool descriptions and results pass
+  through unmodified — a poisoned description reaches the host exactly
+  as it would without the airlock.
+- **Canary honeytokens are an asset whose value is secrecy of
+  *identity*, not of value.** The stored value is worthless noise; what
+  must not leak is *which keys are canaries*. Accordingly: canaries
+  carry no identifying description by default, `meta.canary` is never
+  projected through MCP tool responses, canary trip events are filtered
+  out of MCP-facing `audit_log`/`export_audit` (an agent must not learn
+  which tripwires fired), bulk `export` and `delete` trip them like
+  reads, and disarming is CLI-only. Reviewing trips is an
+  operator-terminal activity: `qring canary list`,
+  `qring audit --action canary`.
+- **The per-agent audit label (`clientInfo` name@version) is
+  client-supplied and trivially spoofable.** It is sanitized (printable
+  ASCII, capped) and used exclusively as attribution metadata in the
+  audit chain; it never feeds policy, approvals, or any authorization
+  decision, and a hostile client lying about its identity gains nothing
+  beyond mislabeling its own audit trail.
+
 ## Attackers considered
 
 1. **A prompt-injected or otherwise misbehaving MCP agent** trying to

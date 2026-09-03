@@ -30,9 +30,11 @@ You have access to these q-ring MCP tools:
    - **Unusual-hour access** — reads outside normal working hours
    - **New source** — access from a previously unseen source
    - **Tampering** — audit entries with invalid hashes
-4. **Scan for leaks.** Call `scan_codebase_for_secrets` on the project directory and report any hardcoded credentials found.
-5. **Check governance.** If a `.q-ring.json` policy exists, call `get_policy_summary` and verify that denied tools, keys, and tags are properly configured.
-6. **Generate a report.** Summarize findings with counts and severity levels:
+4. **Review airlock activity.** Call `audit_log` with action `wrap` to review MCP airlock sessions (`qring mcp wrap`): confirm session start/end pairs look sane and that tool-call volume against wrapped servers matches expectations. Canary honeytoken trips are deliberately not visible over MCP (an agent must not learn which tripwires fired) — remind the operator to review them CLI-side with `qring canary list` and `qring audit --action canary`.
+
+5. **Scan for leaks.** Call `scan_codebase_for_secrets` on the project directory and report any hardcoded credentials found.
+6. **Check governance.** If a `.q-ring.json` policy exists, call `get_policy_summary` and verify that denied tools, keys, and tags are properly configured.
+7. **Generate a report.** Summarize findings with counts and severity levels:
    - **Critical:** tampered audit chain, hardcoded secrets, expired credentials
    - **Warning:** stale secrets, anomalous access patterns
    - **Info:** healthy secret counts, policy status

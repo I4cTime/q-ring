@@ -518,6 +518,8 @@ qring audit --action canary
 
 Values are CSPRNG noise in the provider's real token shape (an `aws` canary matches `AKIA[A-Z0-9]{16}`) — plausible enough to be taken, never valid. Alerts are throttled to one per key per 30 seconds; the audit trail records every read.
 
+Canaries are built to stay covert: they carry no identifying description (add an innocuous cover story with `--description` if you like), their flag never appears in MCP tool responses, and trip records are visible only from the operator's terminal — never to agents via MCP audit tools. Bulk `export` and `delete` trip them just like reads, so sweeping the ring or removing the tripwire both ring the bell. Done with one? `qring canary disarm <key>` turns it back into an ordinary secret (`qring set` over a canary warns you first — the flag deliberately survives overwrites so an agent can't launder it away).
+
 ### MCP Airlock
 
 Run a third-party MCP server behind q-ring. The airlock sits between your agent host and the wrapped server, spawns it with a **stripped environment** (no inherited API keys — opt back in with `--inherit-env`), and records every tool call that crosses it as a `wrap` event in the audit chain, grouped per session and labeled with the calling client's identity. Tool arguments are never logged — they may contain secrets.
@@ -533,7 +535,9 @@ Run a third-party MCP server behind q-ring. The airlock sits between your agent 
 }
 ```
 
-Tools-only proxy today: `tools/list` and `tools/call` pass through verbatim, so the wrapped server behaves identically — it just can't read your environment, and everything it's asked to do is on the record.
+Tools-only proxy today: `tools/list` and `tools/call` pass through verbatim (pagination, progress notifications, cancellation, and `tools/list_changed` included; long-running tools are governed by the host's own timeout, with a generous airlock ceiling configurable via `QRING_WRAP_TIMEOUT_MS`). A wrapped server's *resources and prompts* are not proxied yet — a resources-heavy server will look tools-only behind the airlock.
+
+Be clear about what the airlock is: env stripping plus a tamper-evident record of every tool call. It is **not a sandbox** — the wrapped process still runs as your user with normal filesystem, network, and OS-keychain access, and tool descriptions/results pass through uninspected. See `docs/threat-model.md` for the honest boundary picture.
 
 ### Just-In-Time (JIT) Provisioning
 
@@ -683,7 +687,7 @@ qring exec -- echo "hello"
 
 ### Tamper-Evident Audit
 
-Every audit event includes a SHA-256 hash of the previous event, creating a tamper-evident chain. Since v0.14 the chain is also anchored with a keyed HMAC stored in the OS keyring, so `qring audit:verify` detects truncation and whole-file rewrites — not just in-place edits. Verify integrity and export logs in multiple formats. Events from MCP sessions are additionally stamped with the connecting client's self-reported identity (`clientInfo` name@version) — an audit label for "which agent did this", never an authorization boundary, since clients choose what to report.
+Every audit event includes a SHA-256 hash of the previous event, creating a tamper-evident chain. Since v0.14 the chain is also anchored with a keyed HMAC stored in the OS keyring, so `qring audit:verify` detects truncation and whole-file rewrites — not just in-place edits. Verify integrity and export logs in multiple formats. Events from MCP sessions are additionally stamped with the connecting client's self-reported identity (`clientInfo` name@version) — shown in `qring audit` output and filterable with `qring audit --agent <label>`. It's an audit label for "which agent did this", never an authorization boundary, since clients choose what to report.
 
 ```bash
 # Verify the entire audit chain

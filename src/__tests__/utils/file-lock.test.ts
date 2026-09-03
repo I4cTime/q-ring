@@ -31,12 +31,20 @@ const lockFile = (name: string) =>
   join(lockDir(), `${Buffer.from(name, "utf8").toString("base64url")}.lock`);
 
 describe("withFileLock stale recovery (B1)", () => {
+  // The global test setup points QRING_LOCK_DIR elsewhere; pin it to the
+  // mocked home so the planted lock files below are the ones withFileLock
+  // actually contends on.
+  let savedLockDir: string | undefined;
   beforeEach(() => {
+    savedLockDir = process.env.QRING_LOCK_DIR;
+    process.env.QRING_LOCK_DIR = join(homedir(), ".config", "q-ring");
     rmSync(lockDir(), { recursive: true, force: true });
     mkdirSync(lockDir(), { recursive: true });
   });
   afterEach(() => {
     rmSync(lockDir(), { recursive: true, force: true });
+    if (savedLockDir === undefined) delete process.env.QRING_LOCK_DIR;
+    else process.env.QRING_LOCK_DIR = savedLockDir;
   });
 
   it("runs fn and releases the lock in the happy path", () => {

@@ -15,11 +15,18 @@ vi.mock("../../core/notify.js", () => ({
 
 import {
   plantCanary,
+  disarmCanary,
   listCanaries,
   CANARY_FORMATS,
 } from "../../core/canary.js";
 import { resetCanaryAlertThrottle } from "../../core/canary-alert.js";
-import { setSecret, getSecret, getEnvelope } from "../../core/keyring.js";
+import {
+  setSecret,
+  getSecret,
+  getEnvelope,
+  deleteSecret,
+  exportSecrets,
+} from "../../core/keyring.js";
 import { queryAudit } from "../../core/observer.js";
 import { notifyUser, notificationsEnabled } from "../../core/notify.js";
 import { resetFakeKeyring } from "../helpers/fake-keyring.js";
@@ -62,6 +69,44 @@ describe("plantCanary", () => {
     const custom = plantCanary("CUSTOM", { value: "totally-real-key-123" });
     expect(custom.value).toBe("totally-real-key-123");
     expect(() => plantCanary("X", { format: "nope" })).toThrow(/Unknown canary format/);
+  });
+
+  it("leaves no description tell for inspect_secret to leak", () => {
+    plantCanary("STEALTHY", { format: "aws" });
+    const env = getEnvelope("STEALTHY", { scope: "global" });
+    expect(env?.envelope.meta.description).toBeUndefined();
+
+    plantCanary("COVERED", { format: "aws", description: "prod db key" });
+    expect(
+      getEnvelope("COVERED", { scope: "global" })?.envelope.meta.description,
+    ).toBe("prod db key");
+  });
+
+  it("refuses to overwrite a real secret unless forced (core-level guard)", () => {
+    setSecret("REAL_KEY", "real-value", { scope: "global", source: "cli" });
+    expect(() => plantCanary("REAL_KEY")).toThrow(/already holds a real secret/);
+    expect(getSecret("REAL_KEY", { scope: "global", silent: true })).toBe("real-value");
+
+    const forced = plantCanary("REAL_KEY", { force: true });
+    expect(getEnvelope("REAL_KEY", { scope: "global" })?.envelope.meta.canary).toBe(true);
+    expect(forced.value).not.toBe("real-value");
+
+    // Replanting over an existing canary never needs force.
+    expect(() => plantCanary("REAL_KEY", { format: "github" })).not.toThrow();
+  });
+
+  it("a real secret in another scope does not block the plant", () => {
+    setSecret("SCOPED", "project-value", {
+      scope: "project",
+      projectPath: "/tmp/qring-canary-scope-test",
+      source: "cli",
+    });
+    expect(() =>
+      plantCanary("SCOPED", {
+        scope: "global",
+        projectPath: "/tmp/qring-canary-scope-test",
+      }),
+    ).not.toThrow();
   });
 
   it("canary values dodge the placeholder heuristic in scan", () => {
@@ -117,6 +162,52 @@ describe("canary trip", () => {
     setSecret("REAL", "value", { scope: "global", source: "cli" });
     getSecret("REAL", { scope: "global", source: "cli" });
     expect(queryAudit({ action: "canary", key: "REAL" }).length).toBe(0);
+  });
+
+  it("bulk export trips every included canary and names exported keys", () => {
+    setSecret("NORMAL", "v", { scope: "global", source: "cli" });
+    plantCanary("SWEPT", { format: "aws" });
+
+    exportSecrets({ scope: "global", source: "mcp" });
+
+    const trips = queryAudit({ action: "canary", key: "SWEPT" });
+    expect(trips.length).toBe(1);
+    expect(trips[0].source).toBe("mcp");
+
+    const exportEvents = queryAudit({ action: "export" });
+    expect(exportEvents[0].detail).toContain("SWEPT");
+    expect(exportEvents[0].detail).toContain("NORMAL");
+  });
+
+  it("deleting a canary is a trip, not a routine delete", () => {
+    plantCanary("TRIPWIRE", { format: "github" });
+    deleteSecret("TRIPWIRE", { scope: "global", source: "mcp" });
+
+    const trips = queryAudit({ action: "canary", key: "TRIPWIRE" });
+    expect(trips.length).toBe(1);
+    expect(trips[0].detail).toContain("deleted");
+    expect(vi.mocked(notifyUser)).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("disarmCanary", () => {
+  it("clears the flag so reads stop alarming", () => {
+    plantCanary("DISARM_ME", { format: "generic" });
+    expect(disarmCanary("DISARM_ME", { scope: "global" })).toBe(true);
+
+    const env = getEnvelope("DISARM_ME", { scope: "global" });
+    expect(env?.envelope.meta.canary).toBeUndefined();
+    expect(env?.envelope.meta.canaryFormat).toBeUndefined();
+
+    getSecret("DISARM_ME", { scope: "global", source: "cli" });
+    expect(queryAudit({ action: "canary", key: "DISARM_ME" }).length).toBe(0);
+    expect(listCanaries({ scope: "global" }).map((c) => c.key)).not.toContain("DISARM_ME");
+  });
+
+  it("returns false for a non-canary and throws for a missing key", () => {
+    setSecret("PLAIN", "v", { scope: "global", source: "cli" });
+    expect(disarmCanary("PLAIN", { scope: "global" })).toBe(false);
+    expect(() => disarmCanary("NO_SUCH_KEY", { scope: "global" })).toThrow(/not found/);
   });
 });
 

@@ -13,7 +13,13 @@
  */
 
 import { generateSecret } from "./noise.js";
-import { setSecret, listSecrets, type KeyringOptions } from "./keyring.js";
+import {
+  setSecret,
+  listSecrets,
+  getEnvelope,
+  disarmCanary as clearCanaryFlag,
+  type KeyringOptions,
+} from "./keyring.js";
 import type { Scope } from "./scope.js";
 
 export interface CanaryFormat {
@@ -79,11 +85,23 @@ export interface PlantOptions extends KeyringOptions {
   format?: string;
   /** Use this exact value instead of generating one */
   value?: string;
+  /**
+   * Optional cover description. Deliberately NOT auto-filled: a description
+   * like "Canary honeytoken" is readable via inspect_secret and would let an
+   * attacker enumerate the tripwires without touching them. No description
+   * (or an operator-chosen innocuous one) leaves no tell.
+   */
+  description?: string;
+  /** Allow replacing an existing NON-canary secret at this key */
+  force?: boolean;
 }
 
 /**
- * Plant a canary honeytoken under `key`. Overwrites any existing secret at
- * that key (setSecret semantics) — the CLI confirms before doing that.
+ * Plant a canary honeytoken under `key`. Refuses to overwrite an existing
+ * real (non-canary) secret in the target scope unless `force` is set — the
+ * guard lives here, not in the CLI, so no programmatic caller can clobber a
+ * real credential by accident. Replanting over an existing canary is always
+ * allowed.
  */
 export function plantCanary(key: string, opts: PlantOptions = {}): PlantResult {
   const formatName = opts.format ?? DEFAULT_CANARY_FORMAT;
@@ -96,14 +114,21 @@ export function plantCanary(key: string, opts: PlantOptions = {}): PlantResult {
 
   const value = opts.value ?? format.generate();
   const scope = opts.scope ?? "global";
+
+  // Check the exact scope this plant will write to (not the whole resolution
+  // chain — a project-scope real secret must not block a global plant).
+  const existing = getEnvelope(key, { ...opts, scope });
+  if (existing && !existing.envelope.meta.canary && !opts.force) {
+    throw new Error(
+      `"${key}" already holds a real secret in ${scope} scope. Use --force to replace it with a canary.`,
+    );
+  }
   setSecret(key, value, {
     ...opts,
     scope,
     canary: true,
     canaryFormat: formatName,
-    description: opts.value
-      ? "Canary honeytoken (custom value)"
-      : `Canary honeytoken (${format.description})`,
+    description: opts.description,
   });
 
   return { key, value, format: formatName, scope };
@@ -117,6 +142,19 @@ export interface CanaryStatus {
   /** Reads recorded on the envelope — every one of these was an alert */
   tripCount: number;
   lastTrippedAt?: string;
+}
+
+/**
+ * Disarm a canary: clears the flag so reads stop alarming. The stored value
+ * stays fake until overwritten. Returns false if the key exists but is not
+ * a canary; throws if the key doesn't exist at all.
+ */
+export function disarmCanary(key: string, opts: KeyringOptions = {}): boolean {
+  const found = getEnvelope(key, opts);
+  if (!found) {
+    throw new Error(`"${key}" not found in any applicable scope`);
+  }
+  return clearCanaryFlag(key, { ...opts, scope: found.scope });
 }
 
 /** List all planted canaries across resolvable scopes, with trip stats. */

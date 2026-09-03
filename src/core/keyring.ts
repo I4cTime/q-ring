@@ -458,8 +458,14 @@ export function deleteSecret(
   for (const { service, scope } of scopes) {
     const entry = new Entry(service, key);
     try {
+      // Deleting a canary is how an attacker removes the tripwire before a
+      // sweep — treat it as a trip, not a routine delete (S8, v0.16.2).
+      const existing = readEnvelope(service, key);
       if (entry.deleteCredential()) {
         deleted = true;
+        if (existing?.meta.canary) {
+          recordCanaryTrip({ key, scope, source, detail: "canary deleted" });
+        }
         logAudit({ action: "delete", key, scope, source });
         fireHooks({
           action: "delete",
@@ -475,6 +481,33 @@ export function deleteSecret(
   }
 
   return deleted;
+}
+
+/**
+ * Clear the canary flag on a key, turning it back into an ordinary secret.
+ * CLI-only by design (agents must never disarm a tripwire); the stored value
+ * remains the fake until the operator overwrites it.
+ */
+export function disarmCanary(key: string, opts: KeyringOptions = {}): boolean {
+  const scopes = resolveScope(opts);
+  for (const { service, scope } of scopes) {
+    const envelope = readEnvelope(service, key);
+    if (!envelope) continue;
+    if (!envelope.meta.canary) return false;
+    delete envelope.meta.canary;
+    delete envelope.meta.canaryFormat;
+    envelope.meta.updatedAt = new Date().toISOString();
+    writeEnvelope(service, key, envelope);
+    logAudit({
+      action: "write",
+      key,
+      scope,
+      source: opts.source ?? "cli",
+      detail: "canary disarmed",
+    });
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -629,6 +662,11 @@ export function exportSecrets(
       const value = collapseValue(entry.envelope, env);
       if (value !== null) {
         rawValues.set(entry.key, value);
+        // A bulk export IS the ring sweep canaries exist to catch — reading
+        // around getSecret must not read around the tripwire (S2, v0.16.2).
+        if (entry.envelope.meta.canary) {
+          recordCanaryTrip({ key: entry.key, scope: entry.scope, env, source });
+        }
       }
     }
   }
@@ -644,7 +682,18 @@ export function exportSecrets(
     }
   }
 
-  logAudit({ action: "export", source, detail: `format=${format}` });
+  // Name what left the ring: an export that lists no keys is an audit trail
+  // an exfiltrator would design (S2, v0.16.2).
+  const exportedKeys = [...merged.keys()];
+  const keyList =
+    exportedKeys.length > 20
+      ? `${exportedKeys.slice(0, 20).join(",")} +${exportedKeys.length - 20} more`
+      : exportedKeys.join(",");
+  logAudit({
+    action: "export",
+    source,
+    detail: `format=${format} keys=${keyList}`,
+  });
 
   if (format === "json") {
     const obj: Record<string, string> = {};

@@ -38,12 +38,22 @@ export function registerAuditTools(server: McpServer): void {
           "tunnel",
           "teleport",
           "collapse",
-          "canary",
+          "approve",
+          "revoke",
+          "policy_deny",
+          "rotate",
+          "push",
           "wrap",
         ])
         .optional()
         .describe(
           "Limit to a single action verb (e.g. 'read' to see only reads). Omit for all actions.",
+        ),
+      agent: z
+        .string()
+        .optional()
+        .describe(
+          "Limit to events stamped with this agent label (clientInfo name@version). Omit for all agents.",
         ),
       limit: z
         .number()
@@ -57,11 +67,16 @@ export function registerAuditTools(server: McpServer): void {
       const toolBlock = enforceToolPolicy("audit_log");
       if (toolBlock) return toolBlock;
 
+      // Canary trip events are operator-facing counter-intelligence: exposing
+      // them over MCP would let an agent enumerate which tripwires fired.
+      // CLI `qring audit` remains the surface for reviewing trips.
       const events = queryAudit({
         key: params.key,
         action: params.action,
-        limit: params.limit,
-      });
+        agent: params.agent,
+      })
+        .filter((e) => e.action !== "canary")
+        .slice(0, params.limit);
 
       if (events.length === 0) return text("No audit events found");
 
@@ -70,6 +85,7 @@ export function registerAuditTools(server: McpServer): void {
         if (e.key) parts.push(e.key);
         if (e.scope) parts.push(`[${e.scope}]`);
         if (e.env) parts.push(`env:${e.env}`);
+        if (e.agent) parts.push(`agent:${e.agent}`);
         if (e.detail) parts.push(e.detail);
         return parts.join(" | ");
       });
@@ -223,6 +239,8 @@ export function registerAuditTools(server: McpServer): void {
         since: params.since,
         until: params.until,
         format: params.format,
+        // Same rationale as audit_log: trip records stay operator-facing.
+        excludeActions: ["canary"],
       });
       return text(output);
     },
