@@ -4,6 +4,77 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+Hardening pass over the v0.16 surface, driven by an internal full-repo
+review (five parallel audits: security, MCP protocol, code quality, tests,
+docs). Fix-then-disclose, house style.
+
+### Security
+- **Canaries no longer self-identify.** Planted honeytokens carried a
+  "Canary honeytoken (…)" description readable via `inspect_secret`,
+  letting an agent enumerate every tripwire without touching one — and
+  with no audit trail. Canaries now carry no description by default
+  (`--description` adds an operator-chosen cover story).
+- **Bulk export now trips canaries.** `export_secrets` / `qring export`
+  read values around `getSecret`, harvesting every canary silently — the
+  exact ring-sweep scenario canaries exist to catch. Exports now fire the
+  trip per included canary, and the `export` audit event names the
+  exported keys instead of just the format.
+- **Canary trip records are operator-only.** MCP `audit_log` and
+  `export_audit` no longer expose `canary` events (an agent could query
+  which tripwires had fired — honeytoken counter-intelligence); review
+  trips with `qring canary list` / `qring audit --action canary`.
+  Deleting a canary via MCP now also fires a trip-level alert instead of
+  a routine `delete` line.
+- **Audit render hardening.** Control characters are stripped from
+  `key`/`detail`/`scope`/`env` at write time (a wrapped server's tool
+  names and error messages flow into audit details — ANSI escapes could
+  rewrite the operator's terminal on `qring audit`); CSV export now uses
+  RFC 4180 quoting with a spreadsheet formula-injection guard; Linux
+  desktop notifications escape Pango markup.
+- **Dependency floors**: fast-uri ≥3.1.6 (GHSA host-confusion) and
+  qs ≥6.16.0 (DoS) via root overrides — our own previous qs pin (6.15.2)
+  was inside the vulnerable range.
+
+### Fixed
+- **Airlock protocol fidelity** (`qring mcp wrap`): long-running tools no
+  longer die at the SDK's 60s default — the host's own timeout governs,
+  with a configurable airlock ceiling (`QRING_WRAP_TIMEOUT_MS`, default
+  10 min, reset on progress); progress notifications are relayed under
+  the host's own token; downstream JSON-RPC errors pass through as
+  protocol errors instead of being rewritten into `isError` results;
+  `tools/list_changed` is relayed and the downstream's `instructions`
+  survive the proxy; a single malformed stdin line no longer tears down
+  the session; and shutdown awaits the SDK's staged child termination
+  (stdin-EOF → SIGTERM → SIGKILL) — plus SIGTERM/SIGINT handling — so
+  wrapped servers that ignore stdin EOF are no longer orphaned. Wrapping
+  a server with no tools capability now fails at startup with a clear
+  message.
+- **Per-agent identity is now visible**: the `agent` label appears in
+  `qring audit` output and the MCP `audit_log` line format, and is
+  filterable via `qring audit --agent <label>` / the tool's `agent`
+  param (0.16.0 shipped the field but no surface rendered it). The MCP
+  `audit_log` action filter also gained the previously missing
+  `approve`/`revoke`/`policy_deny`/`rotate`/`push` verbs.
+- **Test-suite isolation**: the file-lock directory now honors
+  `QRING_LOCK_DIR`/`QRING_AUDIT_DIR`, so test runs (and any isolated
+  environment) no longer contend on the real lock dir with live MCP
+  servers — the root cause of a rare full-suite flake (held lock → 5s
+  audit stalls) — and a global vitest setup keeps test audit events out
+  of the developer's real `~/.config/q-ring/audit.jsonl`. Dropped audit
+  writes now leave a stderr trace under `QRING_DEBUG`.
+
+### Added
+- **`qring canary disarm <key>`** — clears the canary flag so reads stop
+  alarming (the flag deliberately survives ordinary overwrites so an
+  agent can't launder a tripwire away; `qring set` over a canary now
+  warns and points here). `canary plant` gained `--json` and
+  `--description`; the plant-over-real-secret guard moved into the core
+  (`force`), scope-exact, so programmatic callers get it too.
+- Threat model updated with the v0.16 boundary picture (wrapped servers
+  are untrusted children, **the airlock is not a sandbox**, canary
+  identity secrecy, agent-label spoofability), and the bundled
+  security-auditor plugin persona now reviews airlock sessions.
+
 ## [0.16.1] — 2026-08-18
 
 ### Changed

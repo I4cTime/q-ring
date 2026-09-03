@@ -42,7 +42,12 @@ export function notifyUser(title: string, body: string): boolean {
 
     if (process.platform === "linux") {
       command = "notify-send";
-      args = ["--app-name=q-ring", "--urgency=critical", title, body];
+      // Many notification daemons render the body as Pango markup — a key
+      // or agent label containing <span …> would restyle or truncate the
+      // alert. Escape the markup-significant characters.
+      const pango = (s: string) =>
+        s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      args = ["--app-name=q-ring", "--urgency=critical", pango(title), pango(body)];
     } else if (process.platform === "darwin") {
       command = "osascript";
       // Args are passed as argv (no shell); quotes in the payload are

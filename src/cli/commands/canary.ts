@@ -4,11 +4,11 @@ import { buildOpts } from "../options.js";
 import { emitJson } from "../helpers.js";
 import {
   plantCanary,
+  disarmCanary,
   listCanaries,
   CANARY_FORMATS,
   DEFAULT_CANARY_FORMAT,
 } from "../../core/canary.js";
-import { getEnvelope } from "../../core/keyring.js";
 
 export function registerCanaryCommands(program: Command): void {
   const canary = program
@@ -24,27 +24,23 @@ export function registerCanaryCommands(program: Command): void {
       DEFAULT_CANARY_FORMAT,
     )
     .option("--value <value>", "Plant this exact value instead of generating one")
+    .option("--description <text>", "Cover description (none by default — no tell)")
     .option("--force", "Overwrite an existing non-canary secret at this key")
+    .option("--json", "Output the plant result as JSON")
     .option("-g, --global", "Global scope (default)")
     .option("-p, --project", "Project scope")
     .option("--team <id>", "Team scope")
     .option("--org <id>", "Org scope")
     .option("--project-path <path>", "Project path (defaults to cwd)")
     .action((key: string, cmd) => {
-      const opts = buildOpts(cmd);
-
-      // Planting overwrites — never silently clobber a real secret.
-      const existing = getEnvelope(key, opts);
-      if (existing && !existing.envelope.meta.canary && !cmd.force) {
-        console.error(
-          c.red(
-            `${SYMBOLS.cross} "${key}" already holds a real secret in ${existing.scope} scope. Use --force to replace it with a canary.`,
-          ),
-        );
-        process.exit(1);
-      }
-
-      const result = plantCanary(key, { ...opts, format: cmd.format, value: cmd.value });
+      const result = plantCanary(key, {
+        ...buildOpts(cmd),
+        format: cmd.format,
+        value: cmd.value,
+        description: cmd.description,
+        force: cmd.force === true,
+      });
+      if (emitJson(program, cmd, result)) return;
 
       console.log(
         `${SYMBOLS.sparkle} ${c.yellow("canary planted")} ${c.bold(result.key)} ${c.dim(`(${result.format}, ${result.scope} scope)`)}`,
@@ -58,6 +54,25 @@ export function registerCanaryCommands(program: Command): void {
       console.log(
         c.dim("  Watch trips with: qring canary list · qring audit --action canary"),
       );
+    });
+
+  canary
+    .command("disarm <key>")
+    .description("Clear the canary flag so reads stop alarming (value stays fake)")
+    .option("-g, --global", "Global scope")
+    .option("-p, --project", "Project scope")
+    .option("--team <id>", "Team scope")
+    .option("--org <id>", "Org scope")
+    .option("--project-path <path>", "Project path (defaults to cwd)")
+    .action((key: string, cmd) => {
+      if (disarmCanary(key, buildOpts(cmd))) {
+        console.log(
+          `${SYMBOLS.check} ${c.green("disarmed")} ${c.bold(key)} ${c.dim("— now an ordinary secret; the stored value is still fake until you overwrite it")}`,
+        );
+      } else {
+        console.error(c.red(`${SYMBOLS.cross} "${key}" is not a canary`));
+        process.exit(1);
+      }
     });
 
   canary

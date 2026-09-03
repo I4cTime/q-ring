@@ -9,7 +9,7 @@
  * throttle than approval notices — a burst of reads is itself the signal.
  */
 
-import { logAudit, getAuditAgentLabel } from "./observer.js";
+import { logAudit, getAuditAgentLabel, type AuditEvent } from "./observer.js";
 import { notificationsEnabled, notifyUser } from "./notify.js";
 
 const TRIP_THROTTLE_MS = 30 * 1000;
@@ -25,7 +25,9 @@ export interface CanaryTrip {
   key: string;
   scope: string;
   env?: string;
-  source: "cli" | "mcp" | "agent" | "api" | "hook" | "ci";
+  source: AuditEvent["source"];
+  /** What tripped it, when it wasn't a plain read (e.g. "canary deleted") */
+  detail?: string;
 }
 
 /**
@@ -40,7 +42,7 @@ export function recordCanaryTrip(trip: CanaryTrip): void {
     scope: trip.scope,
     env: trip.env,
     source: trip.source,
-    detail: `CANARY TRIPPED: honeytoken read via ${trip.source}`,
+    detail: `CANARY TRIPPED: ${trip.detail ?? `honeytoken read via ${trip.source}`}`,
   });
 
   if (!notificationsEnabled()) return;

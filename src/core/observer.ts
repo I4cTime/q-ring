@@ -142,6 +142,20 @@ export function getAuditAgentLabel(): string | null {
   return auditAgentLabel;
 }
 
+/**
+ * Strip C0/DEL control characters (ANSI escape injection into `qring audit`
+ * output) and cap length. Unicode is kept — details legitimately carry it.
+ */
+function sanitizeAuditText(value: string, max: number): string {
+  const cleaned = Array.from(value)
+    .filter((ch) => {
+      const cp = ch.codePointAt(0) ?? 0;
+      return cp >= 0x20 && cp !== 0x7f;
+    })
+    .join("");
+  return cleaned.length > max ? `${cleaned.slice(0, max)}…` : cleaned;
+}
+
 function getAuditDir(): string {
   if (process.env.QRING_AUDIT_DIR) {
     if (!existsSync(process.env.QRING_AUDIT_DIR)) {
@@ -210,6 +224,14 @@ export function logAudit(
         if (full.agent === undefined && auditAgentLabel) {
           full.agent = auditAgentLabel;
         }
+        // key/detail can carry attacker-influenced text (wrapped-server tool
+        // names and error messages, MCP-chosen key names). JSONL escapes
+        // control chars at rest, but they revive on parse — strip at write so
+        // no render site can be terminal-escape-injected.
+        if (full.key !== undefined) full.key = sanitizeAuditText(full.key, 256);
+        if (full.detail !== undefined) full.detail = sanitizeAuditText(full.detail, 600);
+        if (full.scope !== undefined) full.scope = sanitizeAuditText(full.scope, 128);
+        if (full.env !== undefined) full.env = sanitizeAuditText(full.env, 128);
         const line = JSON.stringify(full);
         const path = getAuditPath();
         appendFileSync(path, line + "\n", { mode: 0o600 });
@@ -226,8 +248,14 @@ export function logAudit(
       },
       { timeoutMs: 5000 },
     );
-  } catch {
-    // audit logging (incl. a lock timeout) must never crash the app
+  } catch (err) {
+    // audit logging (incl. a lock timeout) must never crash the app — but a
+    // silently dropped event is undebuggable, so leave a trace on request.
+    if (process.env.QRING_DEBUG) {
+      console.error(
+        `q-ring: audit event dropped (${event.action}${event.key ? ` ${event.key}` : ""}): ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 }
 
@@ -390,6 +418,8 @@ export interface ExportOptions {
   since?: string;
   until?: string;
   format?: "jsonl" | "json" | "csv";
+  /** Drop events with these actions before rendering (e.g. MCP-facing exports hide canary trips) */
+  excludeActions?: AuditAction[];
 }
 
 /**
@@ -421,16 +451,37 @@ export function exportAudit(opts: ExportOptions = {}): string {
     const until = new Date(opts.until).getTime();
     events = events.filter((e) => new Date(e.timestamp).getTime() <= until);
   }
+  if (opts.excludeActions?.length) {
+    const excluded = new Set(opts.excludeActions);
+    events = events.filter((e) => !excluded.has(e.action));
+  }
 
   if (opts.format === "json") {
     return JSON.stringify(events, null, 2);
   }
 
   if (opts.format === "csv") {
+    // RFC 4180 quoting plus a formula-injection guard: a field an agent can
+    // influence must not become =cmd|… when the CSV lands in a spreadsheet.
+    const csvField = (v: string | number | undefined): string => {
+      let s = v === undefined ? "" : String(v);
+      if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+      return `"${s.replace(/"/g, '""')}"`;
+    };
     const header = "timestamp,action,key,scope,env,source,agent,pid,correlationId,detail";
-    const rows = events.map(
-      (e) =>
-        `${e.timestamp},${e.action},${e.key ?? ""},${e.scope ?? ""},${e.env ?? ""},${e.source},${(e.agent ?? "").replace(/,/g, ";")},${e.pid},${e.correlationId ?? ""},${(e.detail ?? "").replace(/,/g, ";")}`,
+    const rows = events.map((e) =>
+      [
+        csvField(e.timestamp),
+        csvField(e.action),
+        csvField(e.key),
+        csvField(e.scope),
+        csvField(e.env),
+        csvField(e.source),
+        csvField(e.agent),
+        csvField(e.pid),
+        csvField(e.correlationId),
+        csvField(e.detail),
+      ].join(","),
     );
     return [header, ...rows].join("\n");
   }

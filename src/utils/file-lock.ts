@@ -47,7 +47,16 @@ export function withFileLock<T>(
   fn: () => T,
   opts: FileLockOptions = {},
 ): T {
-  const lockDir = join(homedir(), ".config", "q-ring", opts.dir ?? "locks");
+  // QRING_LOCK_DIR (explicit) or QRING_AUDIT_DIR (redirected state should
+  // bring its locks with it) keep isolated environments — most importantly
+  // test runs — from contending on the real lock with live MCP servers,
+  // where a held lock turns into 5s-per-event audit stalls.
+  const baseDir =
+    process.env.QRING_LOCK_DIR ??
+    (process.env.QRING_AUDIT_DIR
+      ? join(process.env.QRING_AUDIT_DIR, ".locks")
+      : join(homedir(), ".config", "q-ring"));
+  const lockDir = join(baseDir, opts.dir ?? "locks");
   mkdirSync(lockDir, { recursive: true, mode: 0o700 });
   const safe = Buffer.from(name, "utf8").toString("base64url");
   const lockPath = join(lockDir, `${safe}.lock`);

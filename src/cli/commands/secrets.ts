@@ -83,8 +83,20 @@ export function registerSecretsCommands(program: Command): void {
         jitProvider: cmd.jitProvider,
       };
 
+      // A canary flag survives overwrites by design (an agent must not be
+      // able to launder a tripwire away) — warn the operator so a real
+      // credential doesn't quietly inherit the alarm.
+      const priorEnvelope = getEnvelope(key, opts);
+      if (priorEnvelope?.envelope.meta.canary) {
+        console.error(
+          c.yellow(
+            `${SYMBOLS.warning} "${key}" is a canary honeytoken — the alarm stays armed on the new value. Disarm first with: qring canary disarm ${key}`,
+          ),
+        );
+      }
+
       if (cmd.env) {
-        const existing = getEnvelope(key, opts);
+        const existing = priorEnvelope;
         const states = existing?.envelope?.states ?? {};
         states[cmd.env] = value;
 
