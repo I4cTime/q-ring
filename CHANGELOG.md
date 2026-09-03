@@ -75,6 +75,14 @@ docs). Fix-then-disclose, house style.
   identity secrecy, agent-label spoofability), and the bundled
   security-auditor plugin persona now reviews airlock sessions.
 
+### Changed
+- Dependency refresh, absorbing the open Dependabot queue:
+  @modelcontextprotocol/sdk 1.30.0, TypeScript 6.0.3 (tsconfig now lists
+  `types: ["node"]` explicitly — TS6 no longer auto-includes @types),
+  eslint 10.9 / typescript-eslint 8.69 / vitest 4.1.11 / esbuild 0.28.2 /
+  prettier 3.9.6 / preact 10.29.8 / @types/node 26.4, and
+  actions/setup-node v7 across workflows.
+
 ## [0.16.1] — 2026-08-18
 
 ### Changed
