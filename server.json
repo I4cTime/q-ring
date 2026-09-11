@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.I4cTime/q-ring",
   "title": "q-ring",
-  "description": "Quantum-inspired keyring for AI coding agents with superposition, entanglement, and tunneling.",
+  "description": "OS keychain secrets for AI coding agents, over MCP.",
   "websiteUrl": "https://qring.i4c.studio",
   "icons": [
     {
