@@ -564,6 +564,44 @@ function SecretsSection({ snap, query, setQuery, sort, setSort, searchRef }) {
   <//></section>`;
 }
 
+/* --- Agent sessions --- */
+function SessionsCard({ snap, delay }) {
+  const list = snap.sessions || [];
+  const [open, setOpen] = useState({});
+  const toggle = (id) => setOpen((o) => ({ ...o, [id]: !o[id] }));
+  const span = (s) => {
+    const secs = Math.max(0, Math.round((new Date(s.endedAt) - new Date(s.startedAt)) / 1000));
+    return fmtDuration(secs);
+  };
+  return html`<${Card} delay=${delay} wide=${true}>
+    <${CardTitle} icon=${icons.audit} title="Agent Sessions (24h)" aside=${list.length + " session" + (list.length === 1 ? "" : "s")} />
+    ${!list.length
+      ? html`<${Empty} cta=${"$ qring audit:sessions"}>No agent activity in the last 24h. Sessions appear once an MCP client or airlock touches the ring.<//>`
+      : html`<div class="sessions-list">${list.slice(0, 12).map((s) => html`<div class="session ${open[s.id] ? "open" : ""}" key=${s.id}>
+          <button type="button" class="session-row" onClick=${() => toggle(s.id)} title=${"session " + s.id}>
+            <span class="session-caret">${open[s.id] ? "▾" : "▸"}</span>
+            <span class="session-agent">${s.wrapLabel ? "airlock" : s.agent}</span>
+            <span class="hook-type ${s.source === "mcp" ? "http" : s.source === "agent" ? "shell" : "signal"}">${s.source}</span>
+            ${s.wrapLabel ? html`<span class="session-wrap" title=${s.wrapLabel}>${s.wrapLabel}</span>` : null}
+            <span class="session-meta">${fmtRelative(s.endedAt)} · ${span(s)} · ${s.eventCount} events</span>
+            <span class="session-denials ${s.denials ? "bad" : ""}">${s.denials ? s.denials + " denied" : "0 denied"}</span>
+            ${s.countsByAction && s.countsByAction.canary ? html`<span class="session-denials bad">${s.countsByAction.canary} canary</span>` : null}
+          </button>
+          ${open[s.id]
+            ? html`<div class="session-detail">
+                <div class="session-keys">${s.keys.length ? "keys: " + s.keys.join(", ") : "no keys touched"}</div>
+                <div class="audit-feed">${(s.recent || []).map((e, i) => html`<div class="audit-row" key=${i}>
+                  <span class="audit-ts" title=${e.timestamp}>${fmtTime(e.timestamp)}</span>
+                  <span class="audit-action ${e.action}">${e.action}</span>
+                  <span></span>
+                  <span><span class="audit-key">${e.key || "—"}</span> <span class="audit-detail">${e.detail || ""}</span></span>
+                </div>`)}</div>
+              </div>`
+            : null}
+        </div>`)}</div>`}
+  <//>`;
+}
+
 /* --- Audit log --- */
 function AuditCard({ snap, delay, filter, setFilter }) {
   const events = snap.audit || [];
@@ -697,6 +735,9 @@ function App() {
       <${ApprovalsCard} snap=${snap} delay=${0} />
       <${HooksCard} snap=${snap} delay=${60} />
       <${MemoryCard} snap=${snap} delay=${120} />
+    </section>
+    <section class="grid">
+      <${SessionsCard} snap=${snap} delay=${0} />
     </section>
     <section class="grid">
       <${AnomaliesCard} snap=${snap} delay=${0} />

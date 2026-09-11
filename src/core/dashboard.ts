@@ -11,12 +11,20 @@ import { listSecrets } from "./keyring.js";
 import { checkDecay, type DecayStatus, type QuantumEnvelope } from "./envelope.js";
 import { listEntanglements, type EntanglementPair } from "./entanglement.js";
 import { tunnelList } from "./tunnel.js";
-import { queryAudit, detectAnomalies, verifyAuditChain, type AuditEvent, type AccessAnomaly, type AuditAction } from "./observer.js";
+import {
+  queryAudit,
+  detectAnomalies,
+  verifyAuditChain,
+  type AuditEvent,
+  type AccessAnomaly,
+  type AuditAction,
+} from "./observer.js";
 import { collapseEnvironment, readProjectConfig, type CollapseResult } from "./collapse.js";
 import { listHooks, type HookEntry, type HookType } from "./hooks.js";
 import { listApprovals } from "./approval.js";
 import { listMemory } from "./memory.js";
 import { getPolicySummary } from "./policy.js";
+import { buildSessions, type AgentSession } from "./sessions.js";
 import { getDashboardHtml } from "./dashboard-html.js";
 import { PACKAGE_VERSION } from "../version.js";
 
@@ -130,6 +138,17 @@ export interface ScopeBreakdown {
   org: number;
 }
 
+/**
+ * One agent session for the dashboard: the summary plus a short tail of
+ * recent event lines. Key NAMES only — the dashboard never renders values.
+ */
+export interface AgentSessionSnapshot extends Omit<AgentSession, "events"> {
+  /** Last few events, most recent first */
+  recent: Pick<AuditEvent, "timestamp" | "action" | "key" | "detail">[];
+}
+
+const SESSION_RECENT_EVENTS = 10;
+
 export interface DashboardSnapshot {
   /** Snapshot generation timestamp (ISO) */
   timestamp: string;
@@ -155,6 +174,8 @@ export interface DashboardSnapshot {
   auditMetrics: AuditMetrics;
   /** Detected access anomalies */
   anomalies: AccessAnomaly[];
+  /** Agent sessions in the audit window (per-agent timelines, canary trips included — operator surface) */
+  sessions: AgentSessionSnapshot[];
   /** Auto-detected environment & detection source */
   environment: CollapseResult | null;
   /** `.q-ring.json` manifest analysis (declared vs missing) */
@@ -185,13 +206,15 @@ function toSecretSnapshot(entry: {
   decay?: DecayStatus;
 }): SecretSnapshot {
   const envelope = entry.envelope;
-  const decay = envelope ? checkDecay(envelope) : {
-    isExpired: false,
-    isStale: false,
-    lifetimePercent: 0,
-    secondsRemaining: null,
-    timeRemaining: null,
-  };
+  const decay = envelope
+    ? checkDecay(envelope)
+    : {
+        isExpired: false,
+        isStale: false,
+        lifetimePercent: 0,
+        secondsRemaining: null,
+        timeRemaining: null,
+      };
 
   return {
     key: entry.key,
@@ -224,10 +247,7 @@ function summariseHookMatch(match: HookEntry["match"]): string {
   return parts.length ? parts.join(" · ") : "any change";
 }
 
-function buildManifest(
-  projectPath: string,
-  secrets: SecretSnapshot[],
-): ManifestSnapshot | null {
+function buildManifest(projectPath: string, secrets: SecretSnapshot[]): ManifestSnapshot | null {
   const config = readProjectConfig(projectPath);
   if (!config?.secrets) return null;
   const declared = Object.keys(config.secrets);
@@ -343,6 +363,18 @@ export function collectSnapshot(): DashboardSnapshot {
 
   const recent = auditWindow.slice(0, 80);
 
+  const sessions = buildSessions(auditWindow, SESSION_RECENT_EVENTS).map<AgentSessionSnapshot>(
+    ({ events, ...summary }) => ({
+      ...summary,
+      recent: events.map((e) => ({
+        timestamp: e.timestamp,
+        action: e.action,
+        ...(e.key ? { key: e.key } : {}),
+        ...(e.detail ? { detail: e.detail } : {}),
+      })),
+    }),
+  );
+
   const approvals = listApprovals().map<ApprovalSnapshot>((a) => ({
     id: a.id,
     key: a.key,
@@ -351,9 +383,7 @@ export function collectSnapshot(): DashboardSnapshot {
     grantedBy: a.grantedBy,
     grantedAt: a.grantedAt,
     expiresAt: a.expiresAt,
-    secondsRemaining: Math.floor(
-      (new Date(a.expiresAt).getTime() - Date.now()) / 1000,
-    ),
+    secondsRemaining: Math.floor((new Date(a.expiresAt).getTime() - Date.now()) / 1000),
     valid: a.valid && !a.tampered,
     tampered: a.tampered,
   }));
@@ -380,6 +410,7 @@ export function collectSnapshot(): DashboardSnapshot {
     audit: recent,
     auditMetrics: buildAuditMetrics(auditWindow),
     anomalies: detectAnomalies(),
+    sessions,
     environment: collapseEnvironment({ projectPath }),
     manifest: buildManifest(projectPath, secrets),
     policy: buildPolicySnapshot(projectPath),
@@ -423,9 +454,13 @@ function timingSafeStringEqual(a: string, b: string): boolean {
   return timingSafeEqual(ab, bb);
 }
 
-export function startDashboardServer(
-  options: DashboardServerOptions = {},
-): { port: number; token: string; url: string; close: () => void; server: Server } {
+export function startDashboardServer(options: DashboardServerOptions = {}): {
+  port: number;
+  token: string;
+  url: string;
+  close: () => void;
+  server: Server;
+} {
   const port = options.port ?? 9876;
   const clients = new Set<ServerResponse>();
   let intervalHandle: ReturnType<typeof setInterval> | null = null;
@@ -448,11 +483,27 @@ export function startDashboardServer(
         const ok = res.write(data);
         if (!ok) {
           clients.delete(res);
-          try { res.end(); } catch { try { res.destroy(); } catch { /* noop */ } }
+          try {
+            res.end();
+          } catch {
+            try {
+              res.destroy();
+            } catch {
+              /* noop */
+            }
+          }
         }
       } catch {
         clients.delete(res);
-        try { res.end(); } catch { try { res.destroy(); } catch { /* noop */ } }
+        try {
+          res.end();
+        } catch {
+          try {
+            res.destroy();
+          } catch {
+            /* noop */
+          }
+        }
       }
     }
   }
@@ -521,7 +572,11 @@ export function startDashboardServer(
     close: () => {
       if (intervalHandle) clearInterval(intervalHandle);
       for (const res of clients) {
-        try { res.end(); } catch { /* noop */ }
+        try {
+          res.end();
+        } catch {
+          /* noop */
+        }
       }
       clients.clear();
       server.close();

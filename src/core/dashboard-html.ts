@@ -259,6 +259,21 @@ body{min-height:100vh;overflow-x:hidden;position:relative}
 .hook-summary{flex:1;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hook-id{color:var(--text-dim);font-size:.72rem}
 
+/* Agent sessions */
+.sessions-list{display:flex;flex-direction:column;gap:6px;max-height:420px;overflow-y:auto}
+.session{background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:var(--radius-sm)}
+.session.open{border-color:rgba(14,165,233,.35)}
+.session-row{display:flex;align-items:center;gap:8px;width:100%;padding:6px 10px;background:none;border:0;color:inherit;font:inherit;font-family:var(--font-mono);font-size:.8rem;text-align:left;cursor:pointer}
+.session-row:hover{background:rgba(255,255,255,.03)}
+.session-caret{color:var(--text-dim);width:10px}
+.session-agent{color:var(--accent-bright);font-weight:600}
+.session-wrap{color:var(--text-secondary);max-width:28ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.session-meta{flex:1;color:var(--text-dim);font-size:.74rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.session-denials{font-size:.7rem;padding:1px 6px;border-radius:99px;background:rgba(34,197,94,.1);color:var(--green)}
+.session-denials.bad{background:rgba(255,94,91,.12);color:var(--danger)}
+.session-detail{padding:4px 10px 8px 28px;border-top:1px solid var(--border)}
+.session-keys{color:var(--text-secondary);font-family:var(--font-mono);font-size:.74rem;padding:4px 0 6px}
+
 /* Secrets table */
 .secrets-toolbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center}
 .search{flex:1;min-width:180px;display:flex;align-items:center;gap:6px;background:rgba(255,255,255,.04);border:1px solid var(--border);border-radius:var(--radius-sm);padding:5px 10px;transition:border-color .2s}
