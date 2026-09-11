@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { toolAnnotations } from "../tool-annotations.js";
 import { getSecret, getEnvelope } from "../../core/keyring.js";
 import { checkDecay } from "../../core/envelope.js";
 import { collapseEnvironment, readProjectConfig } from "../../core/collapse.js";
@@ -18,6 +19,7 @@ export function registerProjectTools(server: McpServer): void {
     {
       projectPath,
     },
+    toolAnnotations("check_project"),
     async (params) => {
       const toolBlock = enforceToolPolicy("check_project", params.projectPath);
       if (toolBlock) return toolBlock;
@@ -100,6 +102,7 @@ export function registerProjectTools(server: McpServer): void {
       projectPath,
       env,
     },
+    toolAnnotations("env_generate"),
     async (params) => {
       const toolBlock = enforceToolPolicy("env_generate", params.projectPath);
       if (toolBlock) return toolBlock;
@@ -136,10 +139,7 @@ export function registerProjectTools(server: McpServer): void {
           else if (decay.isStale) warnings.push(`STALE: ${key}`);
         }
 
-        const escaped = value
-          .replace(/\\/g, "\\\\")
-          .replace(/"/g, '\\"')
-          .replace(/\n/g, "\\n");
+        const escaped = value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
         lines.push(`${key}="${escaped}"`);
       }
 
@@ -163,11 +163,9 @@ export function registerProjectTools(server: McpServer): void {
     {
       projectPath,
     },
+    toolAnnotations("detect_environment"),
     async (params) => {
-      const toolBlock = enforceToolPolicy(
-        "detect_environment",
-        params.projectPath,
-      );
+      const toolBlock = enforceToolPolicy("detect_environment", params.projectPath);
       if (toolBlock) return toolBlock;
 
       const result = collapseEnvironment({
@@ -175,9 +173,7 @@ export function registerProjectTools(server: McpServer): void {
       });
 
       if (!result) {
-        return text(
-          "No environment detected. Set QRING_ENV, NODE_ENV, or create .q-ring.json",
-        );
+        return text("No environment detected. Set QRING_ENV, NODE_ENV, or create .q-ring.json");
       }
 
       return text(JSON.stringify(result, null, 2));
@@ -197,11 +193,9 @@ export function registerProjectTools(server: McpServer): void {
       teamId,
       orgId,
     },
+    toolAnnotations("get_project_context"),
     async (params) => {
-      const toolBlock = enforceToolPolicy(
-        "get_project_context",
-        params.projectPath,
-      );
+      const toolBlock = enforceToolPolicy("get_project_context", params.projectPath);
       if (toolBlock) return toolBlock;
 
       const context = getProjectContext(opts(params));

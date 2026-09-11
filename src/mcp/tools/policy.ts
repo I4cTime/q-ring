@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { toolAnnotations } from "../tool-annotations.js";
 import { z } from "zod";
 import {
   checkToolPolicy,
@@ -27,15 +28,11 @@ export function registerPolicyTools(server: McpServer): void {
       toolName: z
         .string()
         .optional()
-        .describe(
-          "Tool id to evaluate, e.g. 'rotate_secret'. Required when `action` is 'tool'.",
-        ),
+        .describe("Tool id to evaluate, e.g. 'rotate_secret'. Required when `action` is 'tool'."),
       key: z
         .string()
         .optional()
-        .describe(
-          "Secret key name to evaluate. Required when `action` is 'key_read'.",
-        ),
+        .describe("Secret key name to evaluate. Required when `action` is 'key_read'."),
       command: z
         .string()
         .optional()
@@ -44,6 +41,7 @@ export function registerPolicyTools(server: McpServer): void {
         ),
       projectPath,
     },
+    toolAnnotations("check_policy"),
     async (params) => {
       if (params.action === "tool" && params.toolName) {
         const d = checkToolPolicy(params.toolName, params.projectPath);
@@ -57,10 +55,7 @@ export function registerPolicyTools(server: McpServer): void {
         const d = checkExecPolicy(params.command, params.projectPath);
         return text(JSON.stringify(d, null, 2));
       }
-      return text(
-        "Missing required parameter for the selected action type",
-        true,
-      );
+      return text("Missing required parameter for the selected action type", true);
     },
   );
 
@@ -74,11 +69,9 @@ export function registerPolicyTools(server: McpServer): void {
     {
       projectPath,
     },
+    toolAnnotations("get_policy_summary"),
     async (params) => {
-      const toolBlock = enforceToolPolicy(
-        "get_policy_summary",
-        params.projectPath,
-      );
+      const toolBlock = enforceToolPolicy("get_policy_summary", params.projectPath);
       if (toolBlock) return toolBlock;
       const summary = getPolicySummary(params.projectPath);
       return text(JSON.stringify(summary, null, 2));

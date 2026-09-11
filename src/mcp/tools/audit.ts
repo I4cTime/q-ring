@@ -1,12 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { toolAnnotations } from "../tool-annotations.js";
 import { z } from "zod";
 import { listSecrets } from "../../core/keyring.js";
-import {
-  queryAudit,
-  detectAnomalies,
-  verifyAuditChain,
-  exportAudit,
-} from "../../core/observer.js";
+import { queryAudit, detectAnomalies, verifyAuditChain, exportAudit } from "../../core/observer.js";
 import { text, opts, enforceToolPolicy, commonSchemas } from "./_shared.js";
 
 const { teamId, orgId, scope, projectPath } = commonSchemas;
@@ -23,9 +19,7 @@ export function registerAuditTools(server: McpServer): void {
       key: z
         .string()
         .optional()
-        .describe(
-          "Limit to events touching this exact key. Omit for the full log.",
-        ),
+        .describe("Limit to events touching this exact key. Omit for the full log."),
       action: z
         .enum([
           "read",
@@ -63,6 +57,7 @@ export function registerAuditTools(server: McpServer): void {
           "Maximum events to return, newest first. Defaults to 20. Increase for deeper investigations.",
         ),
     },
+    toolAnnotations("audit_log"),
     async (params) => {
       const toolBlock = enforceToolPolicy("audit_log");
       if (toolBlock) return toolBlock;
@@ -109,6 +104,7 @@ export function registerAuditTools(server: McpServer): void {
           "If provided, narrow the scan to this exact key. Omit to scan across every key in the audit log.",
         ),
     },
+    toolAnnotations("detect_anomalies"),
     async (params) => {
       const toolBlock = enforceToolPolicy("detect_anomalies");
       if (toolBlock) return toolBlock;
@@ -134,6 +130,7 @@ export function registerAuditTools(server: McpServer): void {
       teamId,
       orgId,
     },
+    toolAnnotations("health_check"),
     async (params) => {
       const toolBlock = enforceToolPolicy("health_check", params.projectPath);
       if (toolBlock) return toolBlock;
@@ -175,11 +172,7 @@ export function registerAuditTools(server: McpServer): void {
         summary.push("", "Issues:", ...issues);
       }
       if (anomalies.length > 0) {
-        summary.push(
-          "",
-          "Anomalies:",
-          ...anomalies.map((a) => `[${a.type}] ${a.description}`),
-        );
+        summary.push("", "Anomalies:", ...anomalies.map((a) => `[${a.type}] ${a.description}`));
       }
 
       return text(summary.join("\n"));
@@ -194,6 +187,7 @@ export function registerAuditTools(server: McpServer): void {
       "Read-only. Returns JSON `{ ok, valid, brokenAt? }` where `valid` is `true` for an intact chain and `brokenAt` (when present) names the first event whose hash did not match.",
     ].join(" "),
     {},
+    toolAnnotations("verify_audit_chain"),
     async () => {
       const toolBlock = enforceToolPolicy("verify_audit_chain");
       if (toolBlock) return toolBlock;
@@ -231,6 +225,7 @@ export function registerAuditTools(server: McpServer): void {
           "Output format. 'jsonl' (default) is most stream-friendly; 'json' is a single array; 'csv' is spreadsheet-friendly.",
         ),
     },
+    toolAnnotations("export_audit"),
     async (params) => {
       const toolBlock = enforceToolPolicy("export_audit");
       if (toolBlock) return toolBlock;

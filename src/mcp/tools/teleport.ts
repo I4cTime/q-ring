@@ -1,10 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { toolAnnotations } from "../tool-annotations.js";
 import { z } from "zod";
-import {
-  getSecret,
-  setSecret,
-  listSecrets,
-} from "../../core/keyring.js";
+import { getSecret, setSecret, listSecrets } from "../../core/keyring.js";
 import { teleportPack, teleportUnpack } from "../../core/teleport.js";
 import { text, opts, enforceToolPolicy, commonSchemas } from "./_shared.js";
 
@@ -35,6 +32,7 @@ export function registerTeleportTools(server: McpServer): void {
       teamId,
       orgId,
     },
+    toolAnnotations("teleport_pack"),
     async (params) => {
       const toolBlock = enforceToolPolicy("teleport_pack", params.projectPath);
       if (toolBlock) return toolBlock;
@@ -88,6 +86,7 @@ export function registerTeleportTools(server: McpServer): void {
           "If true, decrypt and report what would be written but do not mutate the keyring. Useful for verifying bundle contents before commit.",
         ),
     },
+    toolAnnotations("teleport_unpack"),
     async (params) => {
       const toolBlock = enforceToolPolicy("teleport_unpack", params.projectPath);
       if (toolBlock) return toolBlock;
@@ -99,9 +98,7 @@ export function registerTeleportTools(server: McpServer): void {
           const preview = payload.secrets
             .map((s) => `${s.key} [${s.scope ?? "global"}]`)
             .join("\n");
-          return text(
-            `Would import ${payload.secrets.length} secrets:\n${preview}`,
-          );
+          return text(`Would import ${payload.secrets.length} secrets:\n${preview}`);
         }
 
         const o = opts(params);
@@ -109,9 +106,7 @@ export function registerTeleportTools(server: McpServer): void {
           setSecret(s.key, s.value, o);
         }
 
-        return text(
-          `Imported ${payload.secrets.length} secret(s) from teleport bundle`,
-        );
+        return text(`Imported ${payload.secrets.length} secret(s) from teleport bundle`);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         return text(JSON.stringify({ ok: false, error: { message: msg } }), true);

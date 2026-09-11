@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { toolAnnotations } from "../tool-annotations.js";
 import { z } from "zod";
 import {
   registerHook,
@@ -32,9 +33,7 @@ export function registerHookTools(server: McpServer): void {
       keyPattern: z
         .string()
         .optional()
-        .describe(
-          "Trigger on any key matching this glob pattern. Examples: 'DB_*', 'STRIPE_*'.",
-        ),
+        .describe("Trigger on any key matching this glob pattern. Examples: 'DB_*', 'STRIPE_*'."),
       tag: z
         .string()
         .optional()
@@ -51,9 +50,7 @@ export function registerHookTools(server: McpServer): void {
         .array(z.enum(["write", "delete", "rotate"]))
         .optional()
         .default(["write", "delete", "rotate"])
-        .describe(
-          "Which lifecycle actions trigger this hook. Defaults to all three.",
-        ),
+        .describe("Which lifecycle actions trigger this hook. Defaults to all three."),
       command: z
         .string()
         .optional()
@@ -86,15 +83,13 @@ export function registerHookTools(server: McpServer): void {
           "Free-text human-readable description, surfaced by `list_hooks` and the dashboard.",
         ),
     },
+    toolAnnotations("register_hook"),
     async (params) => {
       const toolBlock = enforceToolPolicy("register_hook");
       if (toolBlock) return toolBlock;
 
       if (!params.key && !params.keyPattern && !params.tag) {
-        return text(
-          "At least one match criterion required: key, keyPattern, or tag",
-          true,
-        );
+        return text("At least one match criterion required: key, keyPattern, or tag", true);
       }
 
       const entry = registerHook({
@@ -127,6 +122,7 @@ export function registerHookTools(server: McpServer): void {
       "Read-only. Returns pretty-printed JSON array of hook entries, or 'No hooks registered' when the registry is empty.",
     ].join(" "),
     {},
+    toolAnnotations("list_hooks"),
     async () => {
       const toolBlock = enforceToolPolicy("list_hooks");
       if (toolBlock) return toolBlock;
@@ -151,6 +147,7 @@ export function registerHookTools(server: McpServer): void {
           "Hook id returned by `register_hook` or visible in `list_hooks` (opaque string).",
         ),
     },
+    toolAnnotations("remove_hook"),
     async (params) => {
       const toolBlock = enforceToolPolicy("remove_hook");
       if (toolBlock) return toolBlock;

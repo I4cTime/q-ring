@@ -4,7 +4,33 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **MCP tool annotations.** All 44 tools now advertise the MCP behavior
+  hints (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
+  `openWorldHint`) from a single table in `src/mcp/tool-annotations.ts`, so
+  hosts can auto-approve the 27 read-only tools and confirm the destructive
+  or open-world ones (`delete_secret`, `rotate_secret`, `exec_with_secrets`,
+  …). A test lists tools over a real MCP session and checks every tool has
+  every hint, that the table and the registry match, and that anything whose
+  description says "read-only" is annotated that way. Directories that score
+  annotations (Smithery, Glama) pick them up on the next publish.
+
 ### Fixed
+- **Claude Code plugin always-on rules.** A plugin install never loaded the
+  plugin-root `CLAUDE.md` (`claude plugin validate` warned it is ignored), so
+  `/plugin install qring@q-ring` shipped the commands, agents, and skills but
+  none of the secret-hygiene rules. They now ship as a generated
+  `secret-hygiene-rules` skill built from the Cursor rules, and `CLAUDE.md`
+  moved to `claude-code-plugin/memory/` for the project-copy install path.
+  The validator passes clean.
+- **README MCP config paths.** Kiro reads `.kiro/settings/mcp.json`, not
+  `.kiro/mcp.json`; Claude Code reads a project `.mcp.json` (or
+  `claude mcp add`), not Claude Desktop's `claude_desktop_config.json`.
+- **Keychain-first descriptions everywhere.** `server.json` (MCP Registry),
+  `package.json` (npm), and the Cursor and Claude plugin manifests now lead
+  with "OS keychain secrets for AI coding agents, over MCP" like the README
+  and the Smithery listing — directories that ingest those strings had shelved
+  q-ring next to quantum-computing servers.
 - **Smithery listing now shows q-ring's tools.** Bundle publishes went
   through the `smithery` CLI, which can only forward manifest metadata —
   and the MCPB manifest cannot express tool schemas (smithery-ai/cli#787)

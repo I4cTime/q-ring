@@ -1,11 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { toolAnnotations } from "../tool-annotations.js";
 import { z } from "zod";
-import {
-  getSecret,
-  setSecret,
-  getEnvelope,
-  listSecrets,
-} from "../../core/keyring.js";
+import { getSecret, setSecret, getEnvelope, listSecrets } from "../../core/keyring.js";
 import type { Scope } from "../../core/scope.js";
 import {
   validateSecret,
@@ -42,6 +38,7 @@ export function registerValidationTools(server: McpServer): void {
       teamId,
       orgId,
     },
+    toolAnnotations("validate_secret"),
     async (params) => {
       const toolBlock = enforceToolPolicy("validate_secret", params.projectPath);
       if (toolBlock) return toolBlock;
@@ -65,6 +62,7 @@ export function registerValidationTools(server: McpServer): void {
       "Read-only. Returns JSON array of `{ name, description, prefixes }` objects. `prefixes` are the literal key-value prefixes (e.g. 'sk-' for OpenAI) used for auto-detection.",
     ].join(" "),
     {},
+    toolAnnotations("list_providers"),
     async () => {
       const toolBlock = enforceToolPolicy("list_providers");
       if (toolBlock) return toolBlock;
@@ -86,9 +84,7 @@ export function registerValidationTools(server: McpServer): void {
       "Mutates the keyring with the newly-issued value if rotation succeeds (one 'write' audit event), and makes outbound network requests against the provider's rotation API. Returns JSON `{ rotated, newValue?, message?, ... }`. If `rotated` is false, the existing value is left untouched.",
     ].join(" "),
     {
-      key: z
-        .string()
-        .describe("Exact key to rotate. Must already exist in the keyring."),
+      key: z.string().describe("Exact key to rotate. Must already exist in the keyring."),
       provider: z
         .string()
         .optional()
@@ -100,6 +96,7 @@ export function registerValidationTools(server: McpServer): void {
       teamId,
       orgId,
     },
+    toolAnnotations("rotate_secret"),
     async (params) => {
       const toolBlock = enforceToolPolicy("rotate_secret", params.projectPath);
       if (toolBlock) return toolBlock;
@@ -132,11 +129,9 @@ export function registerValidationTools(server: McpServer): void {
       teamId,
       orgId,
     },
+    toolAnnotations("ci_validate_secrets"),
     async (params) => {
-      const toolBlock = enforceToolPolicy(
-        "ci_validate_secrets",
-        params.projectPath,
-      );
+      const toolBlock = enforceToolPolicy("ci_validate_secrets", params.projectPath);
       if (toolBlock) return toolBlock;
 
       const entries = listSecrets(opts(params));

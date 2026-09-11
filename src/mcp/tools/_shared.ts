@@ -39,10 +39,7 @@ export function opts(params: {
 export function enforceToolPolicy(toolName: string, projectPath?: string) {
   const decision = checkToolPolicy(toolName, projectPath);
   if (!decision.allowed) {
-    return text(
-      `Policy Denied: ${decision.reason} (source: ${decision.policySource})`,
-      true,
-    );
+    return text(`Policy Denied: ${decision.reason} (source: ${decision.policySource})`, true);
   }
   return null;
 }

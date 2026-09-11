@@ -1,11 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { toolAnnotations } from "../tool-annotations.js";
 import { z } from "zod";
-import {
-  tunnelCreate,
-  tunnelRead,
-  tunnelDestroy,
-  tunnelList,
-} from "../../core/tunnel.js";
+import { tunnelCreate, tunnelRead, tunnelDestroy, tunnelList } from "../../core/tunnel.js";
 import { text, enforceToolPolicy } from "./_shared.js";
 
 export function registerTunnelTools(server: McpServer): void {
@@ -19,9 +15,7 @@ export function registerTunnelTools(server: McpServer): void {
     {
       value: z
         .string()
-        .describe(
-          "The plaintext value to tunnel. Held only in process memory; never logged.",
-        ),
+        .describe("The plaintext value to tunnel. Held only in process memory; never logged."),
       ttlSeconds: z
         .number()
         .optional()
@@ -35,6 +29,7 @@ export function registerTunnelTools(server: McpServer): void {
           "Self-destruct after this many successful `tunnel_read` calls. Use 1 for true one-shot delivery.",
         ),
     },
+    toolAnnotations("tunnel_create"),
     async (params) => {
       const toolBlock = enforceToolPolicy("tunnel_create");
       if (toolBlock) return toolBlock;
@@ -55,12 +50,9 @@ export function registerTunnelTools(server: McpServer): void {
       "Increments the read counter and may auto-destroy the tunnel if `maxReads` was set. Returns JSON `{ ok, data: { id, value } }` on success, or an error 'Tunnel \"...\" not found or expired' if the tunnel has been destroyed, hit its TTL, or never existed.",
     ].join(" "),
     {
-      id: z
-        .string()
-        .describe(
-          "The opaque tunnel ID returned by `tunnel_create`. Case-sensitive.",
-        ),
+      id: z.string().describe("The opaque tunnel ID returned by `tunnel_create`. Case-sensitive."),
     },
+    toolAnnotations("tunnel_read"),
     async (params) => {
       const toolBlock = enforceToolPolicy("tunnel_read");
       if (toolBlock) return toolBlock;
@@ -69,9 +61,7 @@ export function registerTunnelTools(server: McpServer): void {
       if (value === null) {
         return text(`Tunnel "${params.id}" not found or expired`, true);
       }
-      return text(
-        JSON.stringify({ ok: true, data: { id: params.id, value } }, null, 2),
-      );
+      return text(JSON.stringify({ ok: true, data: { id: params.id, value } }, null, 2));
     },
   );
 
@@ -83,6 +73,7 @@ export function registerTunnelTools(server: McpServer): void {
       "Read-only. Returns one line per tunnel formatted as `id | reads:N | max:N | expires:Ns`, or the literal text 'No active tunnels' when the list is empty.",
     ].join(" "),
     {},
+    toolAnnotations("tunnel_list"),
     async () => {
       const toolBlock = enforceToolPolicy("tunnel_list");
       if (toolBlock) return toolBlock;
@@ -95,10 +86,7 @@ export function registerTunnelTools(server: McpServer): void {
         parts.push(`reads:${t.accessCount}`);
         if (t.maxReads) parts.push(`max:${t.maxReads}`);
         if (t.expiresAt) {
-          const rem = Math.max(
-            0,
-            Math.floor((t.expiresAt - Date.now()) / 1000),
-          );
+          const rem = Math.max(0, Math.floor((t.expiresAt - Date.now()) / 1000));
           parts.push(`expires:${rem}s`);
         }
         return parts.join(" | ");
@@ -118,6 +106,7 @@ export function registerTunnelTools(server: McpServer): void {
     {
       id: z.string().describe("The opaque tunnel ID to destroy."),
     },
+    toolAnnotations("tunnel_destroy"),
     async (params) => {
       const toolBlock = enforceToolPolicy("tunnel_destroy");
       if (toolBlock) return toolBlock;

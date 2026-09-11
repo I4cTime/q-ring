@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { toolAnnotations } from "../tool-annotations.js";
 import { z } from "zod";
 import { listSecrets } from "../../core/keyring.js";
 import { runHealthScan } from "../../core/agent.js";
@@ -55,6 +56,7 @@ export function registerToolingTools(server: McpServer): void {
       teamId,
       orgId,
     },
+    toolAnnotations("exec_with_secrets"),
     async (params) => {
       const toolBlock = enforceToolPolicy("exec_with_secrets", params.projectPath);
       if (toolBlock) return toolBlock;
@@ -84,10 +86,7 @@ export function registerToolingTools(server: McpServer): void {
 
         return text(output.join("\n\n"));
       } catch (err) {
-        return text(
-          `Execution failed: ${err instanceof Error ? err.message : String(err)}`,
-          true,
-        );
+        return text(`Execution failed: ${err instanceof Error ? err.message : String(err)}`, true);
       }
     },
   );
@@ -106,6 +105,7 @@ export function registerToolingTools(server: McpServer): void {
           "Directory to scan, absolute or relative to the server cwd. The scan recurses into subdirectories.",
         ),
     },
+    toolAnnotations("scan_codebase_for_secrets"),
     async (params) => {
       const toolBlock = enforceToolPolicy("scan_codebase_for_secrets");
       if (toolBlock) return toolBlock;
@@ -117,10 +117,7 @@ export function registerToolingTools(server: McpServer): void {
         }
         return text(JSON.stringify(results, null, 2));
       } catch (err) {
-        return text(
-          `Scan failed: ${err instanceof Error ? err.message : String(err)}`,
-          true,
-        );
+        return text(`Scan failed: ${err instanceof Error ? err.message : String(err)}`, true);
       }
     },
   );
@@ -135,9 +132,7 @@ export function registerToolingTools(server: McpServer): void {
     {
       files: z
         .array(z.string())
-        .describe(
-          "Absolute or relative paths to lint. Non-existent paths surface as scan errors.",
-        ),
+        .describe("Absolute or relative paths to lint. Non-existent paths surface as scan errors."),
       fix: z
         .boolean()
         .optional()
@@ -150,6 +145,7 @@ export function registerToolingTools(server: McpServer): void {
       teamId,
       orgId,
     },
+    toolAnnotations("lint_files"),
     async (params) => {
       const toolBlock = enforceToolPolicy("lint_files", params.projectPath);
       if (toolBlock) return toolBlock;
@@ -165,10 +161,7 @@ export function registerToolingTools(server: McpServer): void {
         }
         return text(JSON.stringify(results, null, 2));
       } catch (err) {
-        return text(
-          `Lint failed: ${err instanceof Error ? err.message : String(err)}`,
-          true,
-        );
+        return text(`Lint failed: ${err instanceof Error ? err.message : String(err)}`, true);
       }
     },
   );
@@ -186,6 +179,7 @@ export function registerToolingTools(server: McpServer): void {
       teamId,
       orgId,
     },
+    toolAnnotations("analyze_secrets"),
     async (params) => {
       const toolBlock = enforceToolPolicy("analyze_secrets", params.projectPath);
       if (toolBlock) return toolBlock;
@@ -204,14 +198,11 @@ export function registerToolingTools(server: McpServer): void {
       const analysis = {
         total: entries.length,
         expired: entries.filter((e) => e.decay?.isExpired).length,
-        stale: entries.filter((e) => e.decay?.isStale && !e.decay?.isExpired)
-          .length,
+        stale: entries.filter((e) => e.decay?.isStale && !e.decay?.isExpired).length,
         neverAccessed: entries
           .filter((e) => (e.envelope?.meta.accessCount ?? 0) === 0)
           .map((e) => e.key),
-        noRotationFormat: entries
-          .filter((e) => !e.envelope?.meta.rotationFormat)
-          .map((e) => e.key),
+        noRotationFormat: entries.filter((e) => !e.envelope?.meta.rotationFormat).map((e) => e.key),
         mostAccessed: [...accessMap.entries()]
           .sort((a, b) => b[1] - a[1])
           .slice(0, 10)
@@ -242,14 +233,13 @@ export function registerToolingTools(server: McpServer): void {
           "TCP port to listen on (default 9876). Pick another port if 9876 is already in use; the call fails if binding errors.",
         ),
     },
+    toolAnnotations("status_dashboard"),
     async (params) => {
       const toolBlock = enforceToolPolicy("status_dashboard");
       if (toolBlock) return toolBlock;
 
       if (dashboardInstance) {
-        return text(
-          `Dashboard already running at ${dashboardInstance.url}`,
-        );
+        return text(`Dashboard already running at ${dashboardInstance.url}`);
       }
 
       const { startDashboardServer } = await import("../../core/dashboard.js");
@@ -283,6 +273,7 @@ export function registerToolingTools(server: McpServer): void {
           "List of absolute project roots to scan. Defaults to `[server.cwd]` when omitted.",
         ),
     },
+    toolAnnotations("agent_scan"),
     async (params) => {
       const toolBlock = enforceToolPolicy("agent_scan");
       if (toolBlock) return toolBlock;

@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { toolAnnotations } from "../tool-annotations.js";
 import { z } from "zod";
 import { filterSecretsByKeyGlob } from "../../services/list-secrets-filter.js";
 import {
@@ -14,11 +15,7 @@ import {
 } from "../../core/keyring.js";
 import { checkDecay } from "../../core/envelope.js";
 import type { Scope } from "../../core/scope.js";
-import {
-  generateSecret,
-  estimateEntropy,
-  type NoiseFormat,
-} from "../../core/noise.js";
+import { generateSecret, estimateEntropy, type NoiseFormat } from "../../core/noise.js";
 import { importDotenv } from "../../core/import.js";
 import { checkKeyReadPolicy } from "../../core/policy.js";
 import { text, opts, enforceToolPolicy, commonSchemas } from "./_shared.js";
@@ -45,25 +42,20 @@ export function registerSecretTools(server: McpServer): void {
       teamId,
       orgId,
     },
+    toolAnnotations("get_secret"),
     async (params) => {
       const toolBlock = enforceToolPolicy("get_secret", params.projectPath);
       if (toolBlock) return toolBlock;
 
       try {
-        const keyBlock = checkKeyReadPolicy(
-          params.key,
-          undefined,
-          params.projectPath,
-        );
+        const keyBlock = checkKeyReadPolicy(params.key, undefined, params.projectPath);
         if (!keyBlock.allowed) {
           return text(`Policy Denied: ${keyBlock.reason}`, true);
         }
 
         const value = getSecret(params.key, opts(params));
         if (value === null) return text(`Secret "${params.key}" not found`, true);
-        return text(
-          JSON.stringify({ ok: true, data: { key: params.key, value } }, null, 2),
-        );
+        return text(JSON.stringify({ ok: true, data: { key: params.key, value } }, null, 2));
       } catch (err) {
         return text(err instanceof Error ? err.message : String(err), true);
       }
@@ -107,6 +99,7 @@ export function registerSecretTools(server: McpServer): void {
       teamId,
       orgId,
     },
+    toolAnnotations("list_secrets"),
     async (params) => {
       const toolBlock = enforceToolPolicy("list_secrets", params.projectPath);
       if (toolBlock) return toolBlock;
@@ -114,17 +107,13 @@ export function registerSecretTools(server: McpServer): void {
       let entries = listSecrets(opts(params));
 
       if (params.tag) {
-        entries = entries.filter((e) =>
-          e.envelope?.meta.tags?.includes(params.tag!),
-        );
+        entries = entries.filter((e) => e.envelope?.meta.tags?.includes(params.tag!));
       }
       if (params.expired) {
         entries = entries.filter((e) => e.decay?.isExpired);
       }
       if (params.stale) {
-        entries = entries.filter(
-          (e) => e.decay?.isStale && !e.decay?.isExpired,
-        );
+        entries = entries.filter((e) => e.decay?.isStale && !e.decay?.isExpired);
       }
       if (params.filter) {
         entries = filterSecretsByKeyGlob(entries, params.filter);
@@ -132,9 +121,7 @@ export function registerSecretTools(server: McpServer): void {
       const rows = entries.map((e) => ({
         scope: e.scope,
         key: e.key,
-        stateKeys: e.envelope?.states
-          ? Object.keys(e.envelope.states)
-          : undefined,
+        stateKeys: e.envelope?.states ? Object.keys(e.envelope.states) : undefined,
         expired: !!e.decay?.isExpired,
         stale: !!e.decay?.isStale && !e.decay?.isExpired,
         lifetimePercent: e.decay?.lifetimePercent,
@@ -157,9 +144,7 @@ export function registerSecretTools(server: McpServer): void {
     {
       key: z
         .string()
-        .describe(
-          "Secret key name (UPPER_SNAKE_CASE recommended). Example: 'STRIPE_SECRET_KEY'.",
-        ),
+        .describe("Secret key name (UPPER_SNAKE_CASE recommended). Example: 'STRIPE_SECRET_KEY'."),
       value: z
         .string()
         .describe(
@@ -188,19 +173,9 @@ export function registerSecretTools(server: McpServer): void {
       tags: z
         .array(z.string())
         .optional()
-        .describe(
-          "Tag list for filtering and hook matching. Example: ['production', 'payments'].",
-        ),
+        .describe("Tag list for filtering and hook matching. Example: ['production', 'payments']."),
       rotationFormat: z
-        .enum([
-          "hex",
-          "base64",
-          "alphanumeric",
-          "uuid",
-          "api-key",
-          "token",
-          "password",
-        ])
+        .enum(["hex", "base64", "alphanumeric", "uuid", "api-key", "token", "password"])
         .optional()
         .describe(
           "Format used by `agent_scan --autoRotate` and `rotate_secret` when this secret expires. Pick the format that matches the upstream service's accepted shape.",
@@ -214,6 +189,7 @@ export function registerSecretTools(server: McpServer): void {
       teamId,
       orgId,
     },
+    toolAnnotations("set_secret"),
     async (params) => {
       const toolBlock = enforceToolPolicy("set_secret", params.projectPath);
       if (toolBlock) return toolBlock;
@@ -240,9 +216,7 @@ export function registerSecretTools(server: McpServer): void {
           rotationPrefix: params.rotationPrefix,
         });
 
-        return text(
-          `[${params.scope ?? "global"}] ${params.key} set for env:${params.env}`,
-        );
+        return text(`[${params.scope ?? "global"}] ${params.key} set for env:${params.env}`);
       }
 
       setSecret(params.key, params.value, {
@@ -266,14 +240,13 @@ export function registerSecretTools(server: McpServer): void {
       "Destructive and not undoable from q-ring (no built-in trash). Writes a 'delete' event to the audit log and fires matching hooks. Returns 'Deleted \"KEY\"' on success or a not-found error if the key did not exist in the requested scope. Subject to tool policy.",
     ].join(" "),
     {
-      key: z
-        .string()
-        .describe("Exact secret key name to delete. Example: 'OLD_API_KEY'."),
+      key: z.string().describe("Exact secret key name to delete. Example: 'OLD_API_KEY'."),
       scope,
       projectPath,
       teamId,
       orgId,
     },
+    toolAnnotations("delete_secret"),
     async (params) => {
       const toolBlock = enforceToolPolicy("delete_secret", params.projectPath);
       if (toolBlock) return toolBlock;
@@ -294,14 +267,13 @@ export function registerSecretTools(server: McpServer): void {
       "Read-only; does not record a 'read' in the audit log. Decay-aware: returns 'false' for expired secrets even though the value is still in the store. Returns the literal text 'true' or 'false'.",
     ].join(" "),
     {
-      key: z
-        .string()
-        .describe("Exact secret key name. Example: 'GITHUB_TOKEN'."),
+      key: z.string().describe("Exact secret key name. Example: 'GITHUB_TOKEN'."),
       scope,
       projectPath,
       teamId,
       orgId,
     },
+    toolAnnotations("has_secret"),
     async (params) => {
       const toolBlock = enforceToolPolicy("has_secret", params.projectPath);
       if (toolBlock) return toolBlock;
@@ -343,6 +315,7 @@ export function registerSecretTools(server: McpServer): void {
       teamId,
       orgId,
     },
+    toolAnnotations("export_secrets"),
     async (params) => {
       const toolBlock = enforceToolPolicy("export_secrets", params.projectPath);
       if (toolBlock) return toolBlock;
@@ -389,6 +362,7 @@ export function registerSecretTools(server: McpServer): void {
           "If true, parse and report what would happen but do not write to the keyring. Useful for previewing imports before committing.",
         ),
     },
+    toolAnnotations("import_dotenv"),
     async (params) => {
       const toolBlock = enforceToolPolicy("import_dotenv", params.projectPath);
       if (toolBlock) return toolBlock;
@@ -426,14 +400,13 @@ export function registerSecretTools(server: McpServer): void {
       "Read-only; does not write a 'read' event since the value is not exposed. Returns pretty-printed JSON with fields: key, scope, type ('superposition'|'collapsed'), created, updated, accessCount, lastAccessed, environments, defaultEnv, decay { expired, stale, lifetimePercent, timeRemaining }, entangled, description, tags. Errors with not-found if the key is absent.",
     ].join(" "),
     {
-      key: z
-        .string()
-        .describe("Exact secret key name to inspect. Example: 'OPENAI_API_KEY'."),
+      key: z.string().describe("Exact secret key name to inspect. Example: 'OPENAI_API_KEY'."),
       scope,
       projectPath,
       teamId,
       orgId,
     },
+    toolAnnotations("inspect_secret"),
     async (params) => {
       const toolBlock = enforceToolPolicy("inspect_secret", params.projectPath);
       if (toolBlock) return toolBlock;
@@ -472,8 +445,7 @@ export function registerSecretTools(server: McpServer): void {
         info.entangled = envelope.meta.entangled;
       }
 
-      if (envelope.meta.description)
-        info.description = envelope.meta.description;
+      if (envelope.meta.description) info.description = envelope.meta.description;
       if (envelope.meta.tags?.length) info.tags = envelope.meta.tags;
 
       return text(JSON.stringify(info, null, 2));
@@ -489,15 +461,7 @@ export function registerSecretTools(server: McpServer): void {
     ].join(" "),
     {
       format: z
-        .enum([
-          "hex",
-          "base64",
-          "alphanumeric",
-          "uuid",
-          "api-key",
-          "token",
-          "password",
-        ])
+        .enum(["hex", "base64", "alphanumeric", "uuid", "api-key", "token", "password"])
         .optional()
         .default("api-key")
         .describe(
@@ -526,6 +490,7 @@ export function registerSecretTools(server: McpServer): void {
       teamId,
       orgId,
     },
+    toolAnnotations("generate_secret"),
     async (params) => {
       const toolBlock = enforceToolPolicy("generate_secret", params.projectPath);
       if (toolBlock) return toolBlock;
@@ -559,12 +524,8 @@ export function registerSecretTools(server: McpServer): void {
       "Mutates only the metadata of both envelopes — the values themselves are not changed by this call. Idempotent: re-running on an already-entangled pair is a no-op. Subject to tool policy. Returns a short confirmation: 'Entangled: SOURCE <-> TARGET'.",
     ].join(" "),
     {
-      sourceKey: z
-        .string()
-        .describe("First secret key in the pair. Example: 'STRIPE_SECRET_KEY'."),
-      targetKey: z
-        .string()
-        .describe("Second secret key to keep in lockstep with the source."),
+      sourceKey: z.string().describe("First secret key in the pair. Example: 'STRIPE_SECRET_KEY'."),
+      targetKey: z.string().describe("Second secret key to keep in lockstep with the source."),
       sourceScope: scope.default("global"),
       targetScope: scope.default("global"),
       sourceProjectPath: z
@@ -580,11 +541,9 @@ export function registerSecretTools(server: McpServer): void {
           "Project root for targetKey when targetScope='project'. Defaults to the server cwd.",
         ),
     },
+    toolAnnotations("entangle_secrets"),
     async (params) => {
-      const toolBlock = enforceToolPolicy(
-        "entangle_secrets",
-        params.sourceProjectPath,
-      );
+      const toolBlock = enforceToolPolicy("entangle_secrets", params.sourceProjectPath);
       if (toolBlock) return toolBlock;
 
       // Entangling links two keys so a write to one propagates to the other —
@@ -594,10 +553,7 @@ export function registerSecretTools(server: McpServer): void {
       for (const key of [params.sourceKey, params.targetKey]) {
         const decision = checkKeyReadPolicy(key, undefined, params.sourceProjectPath);
         if (!decision.allowed) {
-          return text(
-            `Policy Denied: ${decision.reason} (source: ${decision.policySource})`,
-            true,
-          );
+          return text(`Policy Denied: ${decision.reason} (source: ${decision.policySource})`, true);
         }
       }
 
@@ -641,11 +597,9 @@ export function registerSecretTools(server: McpServer): void {
         .optional()
         .describe("Project root for targetKey when targetScope='project'."),
     },
+    toolAnnotations("disentangle_secrets"),
     async (params) => {
-      const toolBlock = enforceToolPolicy(
-        "disentangle_secrets",
-        params.sourceProjectPath,
-      );
+      const toolBlock = enforceToolPolicy("disentangle_secrets", params.sourceProjectPath);
       if (toolBlock) return toolBlock;
 
       disentangleSecrets(

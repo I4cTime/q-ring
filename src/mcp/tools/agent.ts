@@ -1,4 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { toolAnnotations } from "../tool-annotations.js";
 import { z } from "zod";
 import { remember, recall, listMemory, forget } from "../../core/memory.js";
 import { text, enforceToolPolicy } from "./_shared.js";
@@ -23,6 +24,7 @@ export function registerAgentTools(server: McpServer): void {
           "Plain-string value to store. JSON-stringify structured data on the caller side if needed.",
         ),
     },
+    toolAnnotations("agent_remember"),
     async (params) => {
       const toolBlock = enforceToolPolicy("agent_remember");
       if (toolBlock) return toolBlock;
@@ -43,10 +45,9 @@ export function registerAgentTools(server: McpServer): void {
       key: z
         .string()
         .optional()
-        .describe(
-          "Memory key to read. Omit to list every stored key (without values).",
-        ),
+        .describe("Memory key to read. Omit to list every stored key (without values)."),
     },
+    toolAnnotations("agent_recall"),
     async (params) => {
       const toolBlock = enforceToolPolicy("agent_recall");
       if (toolBlock) return toolBlock;
@@ -57,11 +58,8 @@ export function registerAgentTools(server: McpServer): void {
         return text(JSON.stringify(entries, null, 2));
       }
       const value = recall(params.key);
-      if (value === null)
-        return text(`No memory found for "${params.key}"`, true);
-      return text(
-        JSON.stringify({ ok: true, data: { key: params.key, value } }, null, 2),
-      );
+      if (value === null) return text(`No memory found for "${params.key}"`, true);
+      return text(JSON.stringify({ ok: true, data: { key: params.key, value } }, null, 2));
     },
   );
 
@@ -75,6 +73,7 @@ export function registerAgentTools(server: McpServer): void {
     {
       key: z.string().describe("Memory key to delete."),
     },
+    toolAnnotations("agent_forget"),
     async (params) => {
       const toolBlock = enforceToolPolicy("agent_forget");
       if (toolBlock) return toolBlock;
