@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.17.5] — 2026-09-11
+
 The "watchtower" release — see everything. Finishes the v0.16 airlock and
 canary MVPs and turns the per-agent audit label into a session view.
 

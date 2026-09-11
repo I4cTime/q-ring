@@ -12,7 +12,7 @@
       "name": "qring",
       "source": "cursor-plugin",
       "description": "OS keychain secrets for AI coding agents, over MCP — manage secrets, scan for leaks, rotate keys, and enforce policy directly from Cursor.",
-      "version": "0.17.0",
+      "version": "0.17.5",
       "keywords": [
         "secrets",
         "keyring",

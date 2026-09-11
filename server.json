@@ -24,12 +24,12 @@
     "url": "https://github.com/I4cTime/q-ring",
     "source": "github"
   },
-  "version": "0.17.0",
+  "version": "0.17.5",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@i4ctime/q-ring",
-      "version": "0.17.0",
+      "version": "0.17.5",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
