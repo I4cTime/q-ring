@@ -355,6 +355,8 @@ qring push cloudflare
 qring push github --keys DATABASE_URL,API_KEY --dry-run
 ```
 
+Canaries can ride along: `qring canary plant KEY --format aws --push github` plants a honeytoken locally and seeds it into the platform without reading it back (see Canary Honeytokens).
+
 ### Secret Liveness Validation
 
 Test if a secret is actually valid with its target service. q-ring auto-detects the provider from key prefixes (`sk-` → OpenAI, `ghp_` → GitHub, etc.) or accepts an explicit provider name.
@@ -508,21 +510,43 @@ Plant fake credentials that look and read exactly like real ones. Anything that 
 # Plant a canary shaped like a real AWS access key
 qring canary plant AWS_SECRET_ACCESS_KEY --format aws
 
-# Other shapes: github, openai, anthropic, stripe, generic
-qring canary plant GHP_BACKUP_TOKEN --format github
+# Other shapes: aws-secret, github, github-pat, openai, openai-project,
+# anthropic, stripe, gitlab, slack, google, npm, generic
+qring canary plant GHP_BACKUP_TOKEN --format github-pat
 
 # See what's been tripped
 qring canary list
 qring audit --action canary
 ```
 
-Values are CSPRNG noise in the provider's real token shape (an `aws` canary matches `AKIA[A-Z0-9]{16}`) — plausible enough to be taken, never valid. Alerts are throttled to one per key per 30 seconds; the audit trail records every read.
+Values are CSPRNG noise in the provider's real token shape (an `aws` canary matches `AKIA[A-Z0-9]{16}`, an `anthropic` one the real `sk-ant-api03-…AA` layout) — plausible enough to be taken, never valid. Alerts are throttled to one per key per 30 seconds; the audit trail records every read.
+
+**Get paged.** Desktop notifications only help when you are at the machine. Register webhook channels and every trip reaches them too:
+
+```bash
+qring canary alert add --discord https://discord.com/api/webhooks/…
+qring canary alert add --slack   https://hooks.slack.com/services/…
+qring canary alert add --ntfy    https://ntfy.sh/my-canaries
+qring canary alert add --url     https://example.com/canary   # generic JSON POST
+qring canary alert list
+qring canary alert test          # send a clearly-labelled drill
+```
+
+Channels live in `~/.config/q-ring/canary-alerts.json` (mode `0600`). Sends are fire-and-forget, SSRF-guarded like hooks, throttled with the desktop alert, and never include the fake value — only the key, scope, source, and the agent label that reached for it.
+
+**Seed a tripwire into CI.** Plant a canary and push it to a deployment platform in one step, so a leaked GitHub Actions / Vercel / Cloudflare environment carries a decoy:
+
+```bash
+qring canary plant AWS_SECRET_ACCESS_KEY --format aws-secret --push github --repo you/your-app
+```
+
+Honest caveat: q-ring only sees reads that go through q-ring. A leaked value used directly on the platform side is not observable here — pair it with the provider's own alerting if you need that.
 
 Canaries are built to stay covert: they carry no identifying description (add an innocuous cover story with `--description` if you like), their flag never appears in MCP tool responses, and trip records are visible only from the operator's terminal — never to agents via MCP audit tools. Bulk `export` and `delete` trip them just like reads, so sweeping the ring or removing the tripwire both ring the bell. Done with one? `qring canary disarm <key>` turns it back into an ordinary secret (`qring set` over a canary warns you first — the flag deliberately survives overwrites so an agent can't launder it away).
 
 ### MCP Airlock
 
-Run a third-party MCP server behind q-ring. The airlock sits between your agent host and the wrapped server, spawns it with a **stripped environment** (no inherited API keys — opt back in with `--inherit-env`), and records every tool call that crosses it as a `wrap` event in the audit chain, grouped per session and labeled with the calling client's identity. Tool arguments are never logged — they may contain secrets.
+Run a third-party MCP server behind q-ring. The airlock sits between your agent host and the wrapped server, spawns it with a **stripped environment** (no inherited API keys — opt back in with `--inherit-env`), records every tool call, resource read, and prompt fetch that crosses it as a `wrap` event in the audit chain (grouped per session and labeled with the calling client's identity), **scrubs known secret values out of every result** before it reaches the transcript, and enforces the project's `policy.wrap` rules. Tool and prompt arguments are never logged — they may contain secrets.
 
 ```json
 {
@@ -535,9 +559,42 @@ Run a third-party MCP server behind q-ring. The airlock sits between your agent 
 }
 ```
 
-Tools-only proxy today: `tools/list` and `tools/call` pass through verbatim (pagination, progress notifications, cancellation, and `tools/list_changed` included; long-running tools are governed by the host's own timeout, with a generous airlock ceiling configurable via `QRING_WRAP_TIMEOUT_MS`). A wrapped server's *resources and prompts* are not proxied yet — a resources-heavy server will look tools-only behind the airlock.
+Tools, resources, and prompts all pass through verbatim (pagination, progress notifications, cancellation, subscriptions, and the `list_changed` / `updated` notifications included); the airlock advertises exactly the capabilities the wrapped server has. Long-running tools are governed by the host's own timeout, with a generous airlock ceiling configurable via `QRING_WRAP_TIMEOUT_MS`.
 
-Be clear about what the airlock is: env stripping plus a tamper-evident record of every tool call. It is **not a sandbox** — the wrapped process still runs as your user with normal filesystem, network, and OS-keychain access, and tool descriptions/results pass through uninspected. See `docs/threat-model.md` for the honest boundary picture.
+```bash
+# Wrap a remote Streamable HTTP server; the Bearer token comes from q-ring (audited read)
+qring mcp wrap --url https://mcp.example.com/mcp --auth-secret EXAMPLE_MCP_TOKEN
+
+# Keep results verbatim (default: known secret values are replaced with [QRING:REDACTED])
+qring mcp wrap --no-redact -- npx -y some-mcp-server
+```
+
+**Wrap policy.** Govern the wrapped server from `.q-ring.json` — the same file, the same fail-closed engine:
+
+```json
+{
+  "policy": {
+    "wrap": {
+      "allowTools": ["github_*", "search"],
+      "denyTools": ["github_delete_*"],
+      "approveTools": ["github_merge_pr"],
+      "rateLimit": { "maxCalls": 60, "perSeconds": 60 },
+      "toolRateLimits": { "search": { "maxCalls": 5, "perSeconds": 10 } },
+      "redactResults": true
+    }
+  }
+}
+```
+
+Denied tools are hidden from `tools/list` and refused on call with a `policy_deny` audit event; `approveTools` are refused until you grant them:
+
+```bash
+qring mcp approve github_merge_pr --for 900 --reason "release 1.4"
+qring mcp approvals
+qring mcp approve github_merge_pr --revoke
+```
+
+Be clear about what the airlock is: env stripping, a tamper-evident record of every crossing, policy at the tool boundary, and best-effort redaction of secret *values* the ring knows about. It is **not a sandbox** — the wrapped process still runs as your user with normal filesystem, network, and OS-keychain access, and tool descriptions pass through uninspected. See `docs/threat-model.md` for the honest boundary picture.
 
 ### Just-In-Time (JIT) Provisioning
 
@@ -632,7 +689,7 @@ qring wizard myservice --hook-exec "pm2 restart app"
 
 ### Governance Policy
 
-Define project-level governance rules in `.q-ring.json` to control which MCP tools can be used, which keys are accessible, and which commands can be executed. Policy is enforced at both the MCP server and keyring level.
+Define project-level governance rules in `.q-ring.json` to control which MCP tools can be used, which keys are accessible, which commands can be executed, and what a wrapped MCP server may do behind the airlock. Policy is enforced at the MCP server, keyring, and airlock level.
 
 Over MCP, policy is resolved from the directory the server was **launched** in — not from the `projectPath` a caller passes — so an agent can't sidestep restrictions by pointing at a directory with no policy. Launch the MCP server from your project root (where `.q-ring.json` lives). Edits to `.q-ring.json` are picked up automatically (the policy cache invalidates on file change), so you don't need to restart the server.
 
@@ -663,6 +720,11 @@ Example policy in `.q-ring.json`:
     "secrets": {
       "requireApprovalForTags": ["production"],
       "maxTtlSeconds": 86400
+    },
+    "wrap": {
+      "denyTools": ["*_delete_*"],
+      "approveTools": ["deploy_*"],
+      "rateLimit": { "maxCalls": 60, "perSeconds": 60 }
     }
   }
 }
@@ -699,6 +761,25 @@ qring audit:export --format json --since 2026-03-01
 # Export as CSV
 qring audit:export --format csv --output audit-report.csv
 ```
+
+### Agent Session Timeline
+
+Every MCP session is stamped with the client's identity (`clientInfo` name@version) and every airlock session with a correlation id. `audit:sessions` folds the flat audit feed back into one timeline per agent process, so "what did Cursor do in that session?" is one command instead of a grep.
+
+```bash
+# One block per session: agent, source, window, event + denial counts, keys touched
+qring audit:sessions
+
+# Narrow to one client, widen the window, print every event line
+qring audit:sessions --agent "Cursor@1.2.3" --since 7d --verbose
+
+# Machine-readable
+qring audit:sessions --json
+```
+
+Airlock sessions (`qring mcp wrap`) show up as `airlock: <wrapped command>` with every proxied call in order. The status dashboard (`qring status`) renders the same data as an expandable **Agent Sessions (24h)** card.
+
+Agents can look at their own history too — as MCP **resources**, not tools: `qring://sessions` lists session summaries and `qring://sessions/{id}` returns one timeline (key names and actions only, never values). Two guarantees hold on the agent side: canary trips are stripped before anything is summarised, so a honeytoken can never be discovered from a session view, and denying the `audit_log` tool in `.q-ring.json` policy hides the resources as well — one switch controls audit visibility for agents.
 
 ### Encrypted File Backend (Headless / CI)
 
@@ -780,6 +861,7 @@ What you get:
 - **Secrets table** — searchable, sortable view of every secret (key, scope, env, type, decay, tags, last read), with quick chips for `expired`, `stale`, and `protected` filters. Press `/` to focus the search box.
 - **Quantum cards** — decay timers, superposition states, entanglement pairs, and active quantum tunnels.
 - **Approvals & hooks** — live list of valid (and tampered) approval grants and every registered hook with its match summary.
+- **Agent sessions (24h)** — one expandable row per MCP client or airlock session: agent label, source, window, event and denial counts, recent events.
 - **Agent memory** — count of encrypted memory keys persisted at `~/.config/q-ring/agent-memory.enc`.
 - **Anomaly alerts** — burst reads, off-hours access, tampered audit chain, and other suspicious patterns.
 - **Audit log (24h)** — filterable feed with action chips (`read`/`write`/`delete`/`export`), source chips (`cli`/`mcp`/`hook`/`agent`), and a free-text filter.

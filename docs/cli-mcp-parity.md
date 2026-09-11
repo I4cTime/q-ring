@@ -10,6 +10,17 @@ approval gates.
 
 ## Shared behavior
 
+- **Agent sessions:** `qring audit:sessions` (CLI, operator view — canary
+  trips included) and the MCP resources `qring://sessions` /
+  `qring://sessions/{id}` (agent view — canary trips stripped, hidden when
+  policy denies `audit_log`) both build on `listAgentSessions` in
+  `src/core/sessions.ts`. Resources, not tools, by the standing rule; the
+  tool count stays at 44.
+- **Airlock policy:** `policy.wrap` (`src/core/policy.ts`) is enforced only
+  by `qring mcp wrap` — the q-ring MCP server itself is governed by
+  `policy.mcp`. `qring mcp approve` grants use the same HMAC-verified approval
+  registry as `qring approve`, under scope `wrap` and a per-project service id.
+
 - **List key filter:** `qring list --filter` and MCP `list_secrets` use the
   same glob rules (`src/services/list-secrets-filter.ts`): `*` → `.*`,
   `?` → `.`, other regex metacharacters escaped.

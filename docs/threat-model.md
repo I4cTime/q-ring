@@ -63,9 +63,16 @@ telemetry).
   keychain directly, like any local process (attacker 2). What the
   airlock buys you is the removal of the laziest exfil path
   (`process.env`) and a tamper-evident record of everything the agent
-  asked the wrapped server to do. Tool descriptions and results pass
-  through unmodified — a poisoned description reaches the host exactly
-  as it would without the airlock.
+  asked the wrapped server to do. Tool descriptions pass through
+  unmodified — a poisoned description reaches the host exactly as it
+  would without the airlock.
+- **v0.17.5 narrows that.** Results (tool output, resource contents,
+  prompt messages) are scrubbed of secret *values the ring knows about*
+  before they reach the transcript, and `policy.wrap` gates which wrapped
+  tools may run, how often, and which need an operator approval. Both are
+  boundary controls at the protocol edge, not confinement: redaction is
+  exact-match against known values (an encoded or split secret slips
+  through), and a denied tool is refused, not removed from the child.
 - **Canary honeytokens are an asset whose value is secrecy of
   *identity*, not of value.** The stored value is worthless noise; what
   must not leak is *which keys are canaries*. Accordingly: canaries

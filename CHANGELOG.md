@@ -4,6 +4,58 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+The "watchtower" release — see everything. Finishes the v0.16 airlock and
+canary MVPs and turns the per-agent audit label into a session view.
+
+### Added
+- **Wrap policy.** `.q-ring.json` gains a `policy.wrap` block for the
+  airlock: `allowTools` / `denyTools` (with `*` globs; deny wins),
+  `approveTools` (allowed only while a `qring mcp approve <tool>` grant is
+  live), `rateLimit` plus per-tool `toolRateLimits` (sliding windows), and
+  `redactResults`. Denied tools are hidden from `tools/list` and refused on
+  call with a `policy_deny` audit event; an unparseable policy fails closed,
+  like the rest of the engine. New CLI: `qring mcp approve <tool> [--for]
+  [--reason] [--revoke]` and `qring mcp approvals`, bound per project the
+  same way secret approvals are.
+- **Wrap v2.** The airlock now proxies **resources** (list, templates, read,
+  subscribe) and **prompts** (list, get), relays `list_changed` / `updated`
+  notifications, and advertises exactly the capabilities the wrapped server
+  has — a resources-only server is no longer refused. `--url` wraps a remote
+  Streamable HTTP MCP server (`--header` for extra headers, `--auth-secret
+  KEY` to send a q-ring secret as a Bearer token — an audited read). Known
+  secret values are **redacted from results** — tool output, structured
+  content, resource contents, prompt messages — before they reach the
+  transcript, closing the airlock's obvious exfil hole; `--no-redact` or
+  `wrap.redactResults: false` opts out. Resource URIs are audited; prompt
+  arguments, like tool arguments, never are.
+- **Canary v2.** Honeytokens now imitate thirteen real issuer shapes —
+  `aws`, `aws-secret`, `github`, `github-pat` (fine-grained), `openai`,
+  `openai-project`, `anthropic`, `stripe`, `gitlab`, `slack`, `google`,
+  `npm`, `generic` — each checked against the provider's real token regex.
+  Trips can page you: `qring canary alert add --discord|--slack|--ntfy|--url`
+  registers webhook channels (`list`, `remove`, `enable`, `disable`, `test`
+  manage them); every trip still lands in the audit chain first, then fans
+  out to desktop notify and webhooks under one per-key throttle, SSRF-guarded
+  and never carrying the fake value. `qring canary plant KEY --push github`
+  (or `vercel` / `cloudflare`) plants a tripwire and seeds it into a
+  deployment platform's secrets in one step, without reading it back.
+- **Agent session timeline.** v0.16's per-agent audit label is now rendered
+  as sessions: one timeline per MCP client process (pid + `clientInfo`
+  label), and one per airlock session (grouped by its correlation id, with
+  the wrapped command as the label). Each session carries its window, event
+  and denial counts, and the key names touched — never values. Three
+  surfaces: an expandable **Agent Sessions (24h)** card on the status
+  dashboard, `qring audit:sessions [--agent] [--since 24h|7d] [-v]`, and two
+  MCP **resources** (not tools, per the standing rule) — `qring://sessions`
+  lists summaries and `qring://sessions/{id}` reads one timeline. The
+  resources strip canary trips before summarising, so a honeytoken is never
+  discoverable from the agent side, and they go dark when `.q-ring.json`
+  policy denies the `audit_log` tool — one switch for audit visibility.
+
+### Changed
+- `qring mcp wrap` no longer requires a tools capability on the wrapped
+  server; it needs at least one of tools, resources, or prompts.
+
 ## [0.17.0] — 2026-09-11
 
 ### Added
