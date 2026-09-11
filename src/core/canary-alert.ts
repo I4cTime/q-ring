@@ -11,6 +11,7 @@
 
 import { logAudit, getAuditAgentLabel, type AuditEvent } from "./observer.js";
 import { notificationsEnabled, notifyUser } from "./notify.js";
+import { sendCanaryAlerts } from "./canary-webhooks.js";
 
 const TRIP_THROTTLE_MS = 30 * 1000;
 
@@ -31,8 +32,9 @@ export interface CanaryTrip {
 }
 
 /**
- * Record a canary read: audit event first (never throttled), then a
- * best-effort desktop alert throttled per key.
+ * Record a canary read: audit event first (never throttled), then the
+ * best-effort alerts — desktop notification and webhook channels — sharing
+ * one per-key throttle so a burst of reads pages once.
  */
 export function recordCanaryTrip(trip: CanaryTrip): void {
   const agent = getAuditAgentLabel();
@@ -45,15 +47,27 @@ export function recordCanaryTrip(trip: CanaryTrip): void {
     detail: `CANARY TRIPPED: ${trip.detail ?? `honeytoken read via ${trip.source}`}`,
   });
 
-  if (!notificationsEnabled()) return;
   const now = Date.now();
   const last = lastAlerted.get(trip.key);
   if (last !== undefined && now - last < TRIP_THROTTLE_MS) return;
   lastAlerted.set(trip.key, now);
 
-  const who = agent ? `${trip.source} (${agent})` : trip.source;
-  notifyUser(
-    "q-ring: CANARY TRIPPED",
-    `Honeytoken "${trip.key}" was read by ${who}. This credential is fake — but something reached for it. Investigate: qring audit --action canary`,
-  );
+  if (notificationsEnabled()) {
+    const who = agent ? `${trip.source} (${agent})` : trip.source;
+    notifyUser(
+      "q-ring: CANARY TRIPPED",
+      `Honeytoken "${trip.key}" was read by ${who}. This credential is fake — but something reached for it. Investigate: qring audit --action canary`,
+    );
+  }
+
+  // Webhooks are fire-and-forget: the trip must never wait on the network.
+  void sendCanaryAlerts({
+    key: trip.key,
+    scope: trip.scope,
+    env: trip.env,
+    source: trip.source,
+    agent,
+    detail: trip.detail ?? `honeytoken read via ${trip.source}`,
+    timestamp: new Date().toISOString(),
+  }).catch(() => {});
 }

@@ -31,6 +31,14 @@ export interface PushOptions extends KeyringOptions {
   /** Vercel environments to push to (production, preview, development). */
   vercelEnvs?: string[];
   dryRun?: boolean;
+  /**
+   * Values to push for specific keys WITHOUT reading them from the keyring.
+   * Used by `qring canary plant --push`: reading a freshly planted canary
+   * would trip it. Internal to the CLI — never reachable over MCP.
+   */
+  presetValues?: Record<string, string>;
+  /** Audit these keys as canaries (detail text only). */
+  canaryKeys?: string[];
 }
 
 export interface PushResult {
@@ -53,18 +61,14 @@ interface TargetCommand {
 const TARGETS: Record<PushTarget, TargetCommand> = {
   github: {
     binary: "gh",
-    args: (key, opts) => [
-      ["secret", "set", key, ...(opts.repo ? ["--repo", opts.repo] : [])],
-    ],
+    args: (key, opts) => [["secret", "set", key, ...(opts.repo ? ["--repo", opts.repo] : [])]],
     installHint: "install the GitHub CLI: https://cli.github.com (then `gh auth login`)",
   },
   vercel: {
     binary: "vercel",
     // One invocation per environment — `vercel env add` takes a single target.
     args: (key, opts) =>
-      (opts.vercelEnvs ?? ["production"]).map((env) => [
-        "env", "add", key, env, "--force",
-      ]),
+      (opts.vercelEnvs ?? ["production"]).map((env) => ["env", "add", key, env, "--force"]),
     installHint: "install the Vercel CLI: npm i -g vercel (then `vercel link` in the project)",
   },
   cloudflare: {
@@ -104,15 +108,19 @@ export function pushSecrets(opts: PushOptions): PushResult {
   const result: PushResult = { target: opts.target, pushed: [], failed: [], missing: [] };
 
   for (const key of keys) {
-    const value = resolveRef(
-      { key, raw: `push:${key}` },
-      {
-        projectPath: opts.projectPath,
-        env: opts.env,
-        source: opts.source ?? "cli",
-        silent: opts.silent,
-      },
-    );
+    const preset = opts.presetValues?.[key];
+    const value =
+      preset !== undefined
+        ? preset
+        : resolveRef(
+            { key, raw: `push:${key}` },
+            {
+              projectPath: opts.projectPath,
+              env: opts.env,
+              source: opts.source ?? "cli",
+              silent: opts.silent,
+            },
+          );
     if (value === null) {
       result.missing.push(key);
       continue;
@@ -132,8 +140,7 @@ export function pushSecrets(opts: PushOptions): PushResult {
         shell: false,
       });
       if (child.status !== 0) {
-        failedInvocation =
-          child.stderr?.trim() || child.error?.message || `exit ${child.status}`;
+        failedInvocation = child.stderr?.trim() || child.error?.message || `exit ${child.status}`;
         break;
       }
     }
@@ -150,7 +157,7 @@ export function pushSecrets(opts: PushOptions): PushResult {
         key,
         env: opts.env,
         source: opts.source ?? "cli",
-        detail: `pushed to ${opts.target}${opts.repo ? ` (${opts.repo})` : ""}`,
+        detail: `${opts.canaryKeys?.includes(key) ? "canary honeytoken " : ""}pushed to ${opts.target}${opts.repo ? ` (${opts.repo})` : ""}`,
       });
     }
   }

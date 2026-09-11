@@ -13,12 +13,7 @@ vi.mock("../../core/notify.js", () => ({
   notifyUser: vi.fn(() => true),
 }));
 
-import {
-  plantCanary,
-  disarmCanary,
-  listCanaries,
-  CANARY_FORMATS,
-} from "../../core/canary.js";
+import { plantCanary, disarmCanary, listCanaries, CANARY_FORMATS } from "../../core/canary.js";
 import { resetCanaryAlertThrottle } from "../../core/canary-alert.js";
 import {
   setSecret,
@@ -58,6 +53,38 @@ describe("plantCanary", () => {
     expect(anthropic.value.startsWith("sk-ant-api03-")).toBe(true);
   });
 
+  const REAL_SHAPES: Record<string, RegExp> = {
+    aws: /^AKIA[A-Z0-9]{16}$/,
+    "aws-secret": /^[A-Za-z0-9+/]{40}$/,
+    github: /^ghp_[A-Za-z0-9]{36}$/,
+    "github-pat": /^github_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{59}$/,
+    openai: /^sk-[A-Za-z0-9]{48}$/,
+    "openai-project": /^sk-proj-[A-Za-z0-9_-]{74}T3BlbkFJ[A-Za-z0-9_-]{74}$/,
+    anthropic: /^sk-ant-api03-[A-Za-z0-9_-]{91}AA$/,
+    stripe: /^sk_live_[A-Za-z0-9]{24}$/,
+    gitlab: /^glpat-[A-Za-z0-9_-]{20}$/,
+    slack: /^xoxb-\d{12}-\d{13}-[A-Za-z0-9]{24}$/,
+    google: /^AIza[A-Za-z0-9_-]{35}$/,
+    npm: /^npm_[A-Za-z0-9]{36}$/,
+    generic: /^qk_[A-Za-z0-9]{40}$/,
+  };
+
+  it("every format matches its issuer's real token shape", () => {
+    expect(Object.keys(CANARY_FORMATS).sort()).toEqual(Object.keys(REAL_SHAPES).sort());
+    for (const [name, shape] of Object.entries(REAL_SHAPES)) {
+      for (let i = 0; i < 5; i++) {
+        const value = CANARY_FORMATS[name].generate();
+        expect(value, `${name}: ${value}`).toMatch(shape);
+      }
+    }
+  });
+
+  it("does not repeat values", () => {
+    const seen = new Set<string>();
+    for (let i = 0; i < 50; i++) seen.add(CANARY_FORMATS.anthropic.generate());
+    expect(seen.size).toBe(50);
+  });
+
   it("stores canary metadata on the envelope", () => {
     plantCanary("CANARY_KEY", { format: "github" });
     const env = getEnvelope("CANARY_KEY", { scope: "global" });
@@ -77,9 +104,9 @@ describe("plantCanary", () => {
     expect(env?.envelope.meta.description).toBeUndefined();
 
     plantCanary("COVERED", { format: "aws", description: "prod db key" });
-    expect(
-      getEnvelope("COVERED", { scope: "global" })?.envelope.meta.description,
-    ).toBe("prod db key");
+    expect(getEnvelope("COVERED", { scope: "global" })?.envelope.meta.description).toBe(
+      "prod db key",
+    );
   });
 
   it("refuses to overwrite a real secret unless forced (core-level guard)", () => {

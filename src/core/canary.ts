@@ -12,6 +12,7 @@
  * valid credentials.
  */
 
+import { randomInt } from "node:crypto";
 import { generateSecret } from "./noise.js";
 import {
   setSecret,
@@ -29,40 +30,85 @@ export interface CanaryFormat {
   generate(): string;
 }
 
-const ALPHA_UPPER_NUM = () =>
-  generateSecret({ format: "alphanumeric", length: 16 }).toUpperCase();
+const ALNUM = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+const UPPER_NUM = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+const BASE64 = ALNUM + "+/";
+const URLSAFE = ALNUM + "_-";
+const DIGITS = "0123456789";
+
+function pick(charset: string, length: number): string {
+  let out = "";
+  for (let i = 0; i < length; i++) out += charset[randomInt(charset.length)];
+  return out;
+}
 
 /**
  * Token shapes per provider. Prefixes match the liveness-provider registry in
- * validate.ts; body length/charset approximates the real issuer closely
- * enough to pass shape checks (the AWS body satisfies validate.ts's
- * /^(AKIA|ASIA)[A-Z0-9]{16}$/).
+ * validate.ts so a canary auto-detects like the real thing; body length and
+ * charset track each issuer's current format closely enough to pass shape
+ * checks and secret-scanner heuristics (the AWS body satisfies validate.ts's
+ * /^(AKIA|ASIA)[A-Z0-9]{16}$/). Every value is CSPRNG noise — never valid.
  */
 export const CANARY_FORMATS: Record<string, CanaryFormat> = {
   aws: {
     name: "aws",
     description: "AWS access key id (AKIA…)",
-    generate: () => `AKIA${ALPHA_UPPER_NUM()}`,
+    generate: () => `AKIA${pick(UPPER_NUM, 16)}`,
+  },
+  "aws-secret": {
+    name: "aws-secret",
+    description: "AWS secret access key (40-char base64)",
+    generate: () => pick(BASE64, 40),
   },
   github: {
     name: "github",
-    description: "GitHub personal access token (ghp_…)",
-    generate: () => generateSecret({ format: "api-key", prefix: "ghp_", length: 36 }),
+    description: "GitHub classic personal access token (ghp_…)",
+    generate: () => `ghp_${pick(ALNUM, 36)}`,
+  },
+  "github-pat": {
+    name: "github-pat",
+    description: "GitHub fine-grained personal access token (github_pat_…)",
+    generate: () => `github_pat_${pick(ALNUM, 22)}_${pick(ALNUM, 59)}`,
   },
   openai: {
     name: "openai",
     description: "OpenAI API key (sk-…)",
-    generate: () => generateSecret({ format: "api-key", prefix: "sk-", length: 48 }),
+    generate: () => `sk-${pick(ALNUM, 48)}`,
+  },
+  "openai-project": {
+    name: "openai-project",
+    description: "OpenAI project API key (sk-proj-…)",
+    generate: () => `sk-proj-${pick(URLSAFE, 74)}T3BlbkFJ${pick(URLSAFE, 74)}`,
   },
   anthropic: {
     name: "anthropic",
-    description: "Anthropic API key (sk-ant-…)",
-    generate: () => generateSecret({ format: "api-key", prefix: "sk-ant-api03-", length: 80 }),
+    description: "Anthropic API key (sk-ant-api03-…)",
+    generate: () => `sk-ant-api03-${pick(URLSAFE, 91)}AA`,
   },
   stripe: {
     name: "stripe",
     description: "Stripe live secret key (sk_live_…)",
-    generate: () => generateSecret({ format: "api-key", prefix: "sk_live_", length: 24 }),
+    generate: () => `sk_live_${pick(ALNUM, 24)}`,
+  },
+  gitlab: {
+    name: "gitlab",
+    description: "GitLab personal access token (glpat-…)",
+    generate: () => `glpat-${pick(URLSAFE, 20)}`,
+  },
+  slack: {
+    name: "slack",
+    description: "Slack bot token (xoxb-…)",
+    generate: () => `xoxb-${pick(DIGITS, 12)}-${pick(DIGITS, 13)}-${pick(ALNUM, 24)}`,
+  },
+  google: {
+    name: "google",
+    description: "Google API key (AIza…)",
+    generate: () => `AIza${pick(URLSAFE, 35)}`,
+  },
+  npm: {
+    name: "npm",
+    description: "npm access token (npm_…)",
+    generate: () => `npm_${pick(ALNUM, 36)}`,
   },
   generic: {
     name: "generic",
