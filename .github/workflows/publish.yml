@@ -87,6 +87,27 @@ jobs:
             npm publish --provenance --access public
           fi
 
+      - name: Wait for npm to serve the new version
+        # The MCP Registry validates that the npm version exists before it
+        # accepts a server.json. npm publish returns before the registry
+        # serves the tarball, and both v0.17.0 and v0.17.5 lost that race
+        # ("version '0.17.x' was not found (status: 404)"). Same tolerance
+        # loop as the smithery job and update-homebrew.yml.
+        if: ${{ !inputs.smithery_only }}
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          VER=$(node -p "require('./package.json').version")
+          for i in $(seq 1 30); do
+            if npm view "$NAME@$VER" version >/dev/null 2>&1; then
+              echo "npm has $NAME@$VER"
+              exit 0
+            fi
+            echo "waiting for $NAME@$VER on npm ($i/30)..."
+            sleep 10
+          done
+          echo "::error::npm never served $NAME@$VER — cannot register with the MCP Registry"
+          exit 1
+
       - name: Install mcp-publisher
         if: ${{ !inputs.smithery_only }}
         # Pinned (not `latest`) so a breaking mcp-publisher release or renamed

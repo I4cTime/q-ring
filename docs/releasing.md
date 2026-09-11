@@ -43,7 +43,7 @@ Also learned the hard way: `release.yml` must not share `publish.yml`'s concurre
 
 ## Recovering from a failed release
 
-- **npm/MCP publish failed:** fix the cause, then re-run from the Actions tab with `workflow_dispatch` on `publish.yml`, passing the tag as `ref`. The npm step skips if the version already published.
+- **npm/MCP publish failed:** fix the cause, then re-run from the Actions tab with `workflow_dispatch` on `publish.yml`, passing the tag as `ref`, or `gh run rerun <run-id> --failed` (re-runs the failed job and the jobs that were skipped behind it). The npm step skips if the version already published. The MCP Registry step waits for npm to serve the version first — it validates the package exists, and `npm publish` returns before the registry does (v0.17.0 and v0.17.5 both hit that race before the wait was added).
 - **Homebrew failed:** re-run the `update-homebrew.yml` job — it re-derives everything from the tag and npm.
 - **Smithery failed:** re-run the `smithery` job, or dispatch `publish.yml` with `smithery_only: true` (skips the npm and MCP Registry steps, which reject nothing but waste a run). Manual fallback: `pnpm run build:mcpb && SMITHERY_API_KEY=… node scripts/smithery-publish.mjs dist-mcpb/qring-<ver>.mcpb -n i4ctime/q-ring`. Do not fall back to `smithery mcp publish`: it publishes fine but wipes the tool list from the listing.
 - **Wrong notes:** edit the GitHub Release body in the UI; nothing downstream depends on it.
