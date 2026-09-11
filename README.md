@@ -979,7 +979,7 @@ The q-ring repo ships three first-party editor packs — each one adds rules/ste
 |--------|--------|-----------|
 | [`cursor-plugin/`](cursor-plugin/README.md) | [Cursor](https://cursor.com) | 3 rules, 5 skills, 2 agents, 8 slash commands, 3 hooks, MCP autoconnect |
 | [`kiro-plugin/`](kiro-plugin/README.md) | [Kiro](https://kiro.dev) | Official [Power](https://kiro.dev/docs/powers/create/) layout: `POWER.md`, root `mcp.json`, `steering/`, `hooks/`; or flatten with `plugin:sync:kiro` |
-| [`claude-code-plugin/`](claude-code-plugin/README.md) | [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) | `CLAUDE.md` memory, project `.mcp.json`, 2 subagents, 8 slash commands, 5 skills, 3 hook scripts |
+| [`claude-code-plugin/`](claude-code-plugin/README.md) | [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) | `CLAUDE.md` memory, project `.mcp.json`, 2 subagents, 8 slash commands, 6 skills, 3 hook scripts |
 
 ### Cursor Plugin
 
@@ -1014,7 +1014,7 @@ See [`kiro-plugin/README.md`](kiro-plugin/README.md) for the full breakdown.
 
 ### Claude Code Plugin
 
-For [Claude Code](https://docs.claude.com/en/docs/claude-code/overview), q-ring ships a `CLAUDE.md` memory file, a project-scoped `.mcp.json`, two [subagents](https://docs.claude.com/en/docs/claude-code/sub-agents) (`secret-ops`, `security-auditor`), eight [slash commands](https://docs.claude.com/en/docs/claude-code/slash-commands) (`/qring-scan-secrets`, `/qring-health-check`, …), five [skills](https://docs.claude.com/en/docs/claude-code/skills), and three [hooks](https://docs.claude.com/en/docs/claude-code/hooks) (post-edit lint reminder, pre-Bash `.env` guard, session-start context primer).
+For [Claude Code](https://docs.claude.com/en/docs/claude-code/overview), q-ring ships a `CLAUDE.md` memory file, a project-scoped `.mcp.json`, two [subagents](https://docs.claude.com/en/docs/claude-code/sub-agents) (`secret-ops`, `security-auditor`), eight [slash commands](https://docs.claude.com/en/docs/claude-code/slash-commands) (`/qring-scan-secrets`, `/qring-health-check`, …), six [skills](https://docs.claude.com/en/docs/claude-code/skills), and three [hooks](https://docs.claude.com/en/docs/claude-code/hooks) (post-edit lint reminder, pre-Bash `.env` guard, session-start context primer).
 
 ```bash
 # Install into the current project ($PWD)

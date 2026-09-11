@@ -1,6 +1,6 @@
 {
   "name": "qring",
-  "description": "Quantum keyring for AI agents — manage secrets, scan for leaks, rotate keys, and enforce policy directly from Claude Code.",
+  "description": "OS keychain secrets for AI coding agents, over MCP — manage secrets, scan for leaks, rotate keys, and enforce policy directly from Claude Code.",
   "version": "0.16.2",
   "author": {
     "name": "I4cTime"

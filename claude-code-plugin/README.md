@@ -1,6 +1,6 @@
 # q-ring Claude Code Plugin
 
-Quantum keyring for AI agents — manage secrets, scan for leaks, rotate keys, and enforce policy directly from [Claude Code](https://docs.claude.com/en/docs/claude-code/overview).
+OS keychain secrets for AI coding agents, over MCP — manage secrets, scan for leaks, rotate keys, and enforce policy directly from [Claude Code](https://docs.claude.com/en/docs/claude-code/overview).
 
 This package mirrors the q-ring [Cursor plugin](../cursor-plugin/README.md) for Claude Code's native primitives: project [memory](https://docs.claude.com/en/docs/claude-code/memory) (`CLAUDE.md`), [subagents](https://docs.claude.com/en/docs/claude-code/sub-agents), [slash commands](https://docs.claude.com/en/docs/claude-code/slash-commands), [skills](https://docs.claude.com/en/docs/claude-code/skills), [hooks](https://docs.claude.com/en/docs/claude-code/hooks), and [project-scoped MCP](https://docs.claude.com/en/docs/claude-code/mcp).
 
@@ -27,9 +27,9 @@ qring-mcp --help
 
 ## What's Included
 
-### Project memory (`CLAUDE.md`)
+### Always-on rules (`skills/secret-hygiene-rules/` and `memory/CLAUDE.md`)
 
-Loaded into every Claude Code conversation in this project. Provides the always-on rules — never hardcode secrets, use q-ring for all operations, and warn about `.env` files. Equivalent to `cursor-plugin/rules/*.mdc`.
+The always-on rules — never hardcode secrets, use q-ring for all operations, and warn about `.env` files — are the equivalent of `cursor-plugin/rules/*.mdc` and ship two ways. Plugin installs get them as the `secret-hygiene-rules` skill (a plugin cannot ship a loaded `CLAUDE.md`, so the skill is generated from the Cursor rules by `pnpm run plugin:gen-skills`). The project-copy path (`pnpm run plugin:sync:claude`) additionally writes `memory/CLAUDE.md` to the project root, where Claude Code loads it into every conversation.
 
 ### MCP server (`.mcp.json`)
 
@@ -61,6 +61,7 @@ Invoke explicitly with `> Use the secret-ops subagent to store my OpenAI key` or
 
 | Skill | Triggers On |
 |-------|-------------|
+| `secret-hygiene-rules` | Any code touching credentials, tokens, connection strings, or `.env` files — the always-on rules for plugin installs |
 | `secret-management` | Mentions of secrets, API keys, tokens, credentials, `.env` files |
 | `secret-scanning` | Requests to scan, lint, audit, or find leaked credentials |
 | `secret-rotation` | Expired keys, rotation, validation, CI checks |
@@ -103,7 +104,7 @@ pnpm run plugin:sync:claude
 
 This copies into your project (`$PWD` by default):
 
-- `claude-code-plugin/CLAUDE.md` → `./CLAUDE.md`
+- `claude-code-plugin/memory/CLAUDE.md` → `./CLAUDE.md`
 - `claude-code-plugin/.mcp.json` → `./.mcp.json`
 - `claude-code-plugin/agents|commands|skills|hooks/` → `./.claude/…`
 - `claude-code-plugin/.claude/settings.json` → `./.claude/settings.json`
@@ -143,7 +144,7 @@ mkdir -p .claude
 cp -r claude-code-plugin/agents claude-code-plugin/commands claude-code-plugin/skills claude-code-plugin/hooks .claude/
 rm -f .claude/hooks/hooks.json   # plugin-only manifest; project installs use settings.json
 cp    claude-code-plugin/.claude/settings.json .claude/settings.json
-cp    claude-code-plugin/CLAUDE.md  CLAUDE.md
+cp    claude-code-plugin/memory/CLAUDE.md  CLAUDE.md
 cp    claude-code-plugin/.mcp.json  .mcp.json
 ```
 

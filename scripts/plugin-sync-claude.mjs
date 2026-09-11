@@ -23,7 +23,7 @@
  *
  * Project-scoped layout (source dirs live at the plugin root, matching the
  * Claude Code plugin format; they are copied under .claude/ for project use):
- *   claude-code-plugin/CLAUDE.md            -> $DEST/CLAUDE.md
+ *   claude-code-plugin/memory/CLAUDE.md     -> $DEST/CLAUDE.md
  *   claude-code-plugin/.mcp.json            -> $DEST/.mcp.json
  *   claude-code-plugin/agents/*             -> $DEST/.claude/agents/
  *   claude-code-plugin/commands/*           -> $DEST/.claude/commands/
@@ -40,14 +40,7 @@
  * destination, this script writes `<filename>.qring-template` next to it and
  * leaves the original alone. Pass `--force` to overwrite anyway.
  */
-import {
-  cpSync,
-  mkdirSync,
-  existsSync,
-  readdirSync,
-  statSync,
-  copyFileSync,
-} from "node:fs";
+import { cpSync, mkdirSync, existsSync, readdirSync, statSync, copyFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -110,7 +103,7 @@ if (existsSync(settingsSrc)) {
 }
 
 if (!userScope) {
-  const claudeMd = join(src, "CLAUDE.md");
+  const claudeMd = join(src, "memory", "CLAUDE.md");
   const mcpJson = join(src, ".mcp.json");
   if (existsSync(claudeMd)) writeOrTemplate(claudeMd, join(dest, "CLAUDE.md"));
   if (existsSync(mcpJson)) writeOrTemplate(mcpJson, join(dest, ".mcp.json"));

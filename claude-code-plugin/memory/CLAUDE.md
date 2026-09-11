@@ -35,7 +35,7 @@ When a `.env`, `.env.local`, `.env.production`, or similar file is open or being
 
 - **Subagents** under `.claude/agents/` — `secret-ops` (CRUD/transfer assistant) and `security-auditor` (proactive monitoring).
 - **Slash commands** under `.claude/commands/` — `/qring-scan-secrets`, `/qring-health-check`, `/qring-rotate-expired`, `/qring-setup-project`, `/qring-teleport-secrets`, `/qring-dashboard`, `/qring-exec-safe`, `/qring-analyze`.
-- **Skills** under `.claude/skills/` — auto-triggered by topic: `secret-management`, `secret-scanning`, `secret-rotation`, `project-onboarding`, `exec-with-secrets`.
+- **Skills** under `.claude/skills/` — auto-triggered by topic: `secret-hygiene-rules` (this file's rules, for plugin installs), `secret-management`, `secret-scanning`, `secret-rotation`, `project-onboarding`, `exec-with-secrets`.
 - **Hooks** in `.claude/settings.json` — lint reminders after edits, `.env` commit guards, session-start context hint.
 
 The MCP server `q-ring` (configured in `.mcp.json`) exposes 44 tools for secrets, scanning, rotation, auditing, and governance.

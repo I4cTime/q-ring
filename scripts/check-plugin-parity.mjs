@@ -50,9 +50,15 @@ expectEqual(
 
 // ── Skills ────────────────────────────────────────────────────────────────
 const cursorSkills = dirs("cursor-plugin/skills");
-expectEqual("skills (cursor vs claude)", cursorSkills, dirs("claude-code-plugin/skills"));
-const kiroSkillFiles = stems("kiro-plugin/steering", { strip: "qring-" }).filter(
-  (s) => cursorSkills.includes(s),
+// `secret-hygiene-rules` is generated from cursor-plugin/rules/*.mdc and exists
+// only for Claude Code (Cursor/Kiro ship the same content as rules/steering).
+expectEqual(
+  "skills (cursor vs claude)",
+  cursorSkills,
+  dirs("claude-code-plugin/skills").filter((s) => s !== "secret-hygiene-rules"),
+);
+const kiroSkillFiles = stems("kiro-plugin/steering", { strip: "qring-" }).filter((s) =>
+  cursorSkills.includes(s),
 );
 expectEqual("skills (cursor vs kiro steering)", cursorSkills, kiroSkillFiles);
 
@@ -61,9 +67,7 @@ let actualTools = 0;
 for (const f of readdirSync(join(root, "src", "mcp", "tools"))) {
   if (!f.endsWith(".ts")) continue;
   actualTools += (
-    readFileSync(join(root, "src", "mcp", "tools", f), "utf8").match(
-      /server\.tool\(/g,
-    ) ?? []
+    readFileSync(join(root, "src", "mcp", "tools", f), "utf8").match(/server\.tool\(/g) ?? []
   ).length;
 }
 
@@ -109,7 +113,9 @@ const VERSIONED = [
 for (const [file, pick] of VERSIONED) {
   const v = pick(JSON.parse(readFileSync(join(root, file), "utf8")));
   if (v !== pkgVersion) {
-    errors.push(`${file}: version ${v} != package.json ${pkgVersion} (run: pnpm run sync-versions)`);
+    errors.push(
+      `${file}: version ${v} != package.json ${pkgVersion} (run: pnpm run sync-versions)`,
+    );
   }
 }
 

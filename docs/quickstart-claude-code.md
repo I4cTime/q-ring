@@ -18,7 +18,7 @@ Inside Claude Code:
 /plugin install qring@q-ring
 ```
 
-That registers the MCP server (all 44 tools), 8 slash commands, 2 subagents, 5 skills, and 3 safety hooks in one step.
+That registers the MCP server (all 44 tools), 8 slash commands, 2 subagents, 6 skills, and 3 safety hooks in one step.
 
 Prefer project-scoped files instead of a plugin? From a checkout of this repo: `pnpm run plugin:sync:claude -- /path/to/your/project`.
 
