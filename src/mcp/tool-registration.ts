@@ -9,14 +9,18 @@ import { registerHookTools } from "./tools/hooks.js";
 import { registerToolingTools } from "./tools/tooling.js";
 import { registerAgentTools } from "./tools/agent.js";
 import { registerPolicyTools } from "./tools/policy.js";
+import { registerMcpResources } from "./resources.js";
 
 /**
- * Register every MCP tool on the given server.
+ * Register every MCP tool (and resource) on the given server.
  *
  * Tools are grouped by concern in `src/mcp/tools/*.ts`. Keep the registration
- * order stable — some MCP clients cache the tool list ordering.
+ * order stable — some MCP clients cache the tool list ordering. Resources
+ * (read-only state such as the agent session timeline) live in
+ * `src/mcp/resources.ts`.
  */
 export function registerMcpTools(server: McpServer): void {
+  registerMcpResources(server);
   registerSecretTools(server);
   registerProjectTools(server);
   registerTunnelTools(server);

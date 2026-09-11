@@ -45,6 +45,33 @@ describe("dashboard server auth + security headers", () => {
     expect(snap.auditChain.totalEvents).toBeGreaterThanOrEqual(0);
   });
 
+  it("includes agent sessions in the snapshot, summaries with a short event tail", async () => {
+    const res = await fetch(`${base}/api/status?token=${dash.token}`);
+    const snap = (await res.json()) as {
+      sessions: {
+        id: string;
+        agent: string;
+        eventCount: number;
+        recent: unknown[];
+        events?: unknown;
+      }[];
+    };
+    expect(Array.isArray(snap.sessions)).toBe(true);
+    for (const s of snap.sessions) {
+      expect(typeof s.id).toBe("string");
+      expect(typeof s.agent).toBe("string");
+      expect(s.events).toBeUndefined();
+      expect(s.recent.length).toBeLessThanOrEqual(10);
+    }
+  });
+
+  it("ships the sessions card in the client bundle and its styles", async () => {
+    const res = await fetch(`${base}/?token=${dash.token}`);
+    const html = await res.text();
+    expect(html).toContain(".sessions-list");
+    expect(html).toContain("Agent Sessions (24h)");
+  });
+
   it("serves the entanglement graph and chain badge styles", async () => {
     const res = await fetch(`${base}/?token=${dash.token}`);
     const html = await res.text();
@@ -56,9 +83,7 @@ describe("dashboard server auth + security headers", () => {
   it("sends security headers on every response", async () => {
     for (const url of [`${base}/`, `${base}/?token=${dash.token}`]) {
       const res = await fetch(url);
-      expect(res.headers.get("content-security-policy")).toContain(
-        "default-src 'none'",
-      );
+      expect(res.headers.get("content-security-policy")).toContain("default-src 'none'");
       expect(res.headers.get("x-frame-options")).toBe("DENY");
       expect(res.headers.get("x-content-type-options")).toBe("nosniff");
       expect(res.headers.get("referrer-policy")).toBe("no-referrer");

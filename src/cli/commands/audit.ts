@@ -1,25 +1,39 @@
 import type { Command } from "commander";
 import { listSecrets } from "../../core/keyring.js";
-import {
-  queryAudit,
-  detectAnomalies,
-  verifyAuditChain,
-  exportAudit,
-} from "../../core/observer.js";
+import { queryAudit, detectAnomalies, verifyAuditChain, exportAudit } from "../../core/observer.js";
+import { listAgentSessions } from "../../core/sessions.js";
 import { writeFileSync } from "node:fs";
 import { c, SYMBOLS } from "../../utils/colors.js";
 import { emitJson } from "../helpers.js";
 import { buildOpts } from "../options.js";
+
+/** `--since` accepts an ISO date or a duration such as 30m, 24h, 7d. */
+export function parseSince(value: string): string {
+  const m = value.trim().match(/^(\d+)\s*([mhd])$/i);
+  if (m) {
+    const unit = { m: 60, h: 3600, d: 86400 }[m[2].toLowerCase() as "m" | "h" | "d"];
+    return new Date(Date.now() - Number(m[1]) * unit * 1000).toISOString();
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(`--since: "${value}" is not an ISO date or a duration like 24h / 7d`);
+  }
+  return date.toISOString();
+}
+
+function fmtSeconds(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
+  return `${Math.floor(seconds / 86400)}d`;
+}
 
 export function registerAuditCommands(program: Command): void {
   program
     .command("audit")
     .description("View the audit log (observer effect)")
     .option("-k, --key <key>", "Filter by key")
-    .option(
-      "-a, --action <action>",
-      "Filter by action (read, write, delete, etc.)",
-    )
+    .option("-a, --action <action>", "Filter by action (read, write, delete, etc.)")
     .option("--agent <label>", "Filter by agent label (clientInfo name@version)")
     .option("-n, --limit <n>", "Number of events to show", parseInt, 20)
     .option("--anomalies", "Detect access anomalies")
@@ -57,9 +71,7 @@ export function registerAuditCommands(program: Command): void {
         return;
       }
 
-      console.log(
-        c.bold(`\n  ${SYMBOLS.eye} Audit log (${events.length} events)\n`),
-      );
+      console.log(c.bold(`\n  ${SYMBOLS.eye} Audit log (${events.length} events)\n`));
 
       for (const event of events) {
         const ts = new Date(event.timestamp).toLocaleString();
@@ -106,13 +118,9 @@ export function registerAuditCommands(program: Command): void {
           `${SYMBOLS.shield} ${c.green("Audit chain intact")} — ${result.totalEvents} events verified`,
         );
       } else {
+        console.log(`${SYMBOLS.cross} ${c.red("Audit chain BROKEN")} at event #${result.brokenAt}`);
         console.log(
-          `${SYMBOLS.cross} ${c.red("Audit chain BROKEN")} at event #${result.brokenAt}`,
-        );
-        console.log(
-          c.dim(
-            `  ${result.validEvents}/${result.totalEvents} events valid before break`,
-          ),
+          c.dim(`  ${result.validEvents}/${result.totalEvents} events valid before break`),
         );
         if (result.brokenEvent) {
           console.log(
@@ -144,6 +152,67 @@ export function registerAuditCommands(program: Command): void {
         console.log(`${SYMBOLS.check} Exported to ${cmd.output}`);
       } else {
         console.log(output);
+      }
+    });
+
+  program
+    .command("audit:sessions")
+    .description("Audit activity folded into per-agent sessions (who did what, per MCP client)")
+    .option("--agent <label>", "Only sessions for this agent label (clientInfo name@version)")
+    .option("--since <when>", "ISO date, or a duration like 24h / 7d (default: 7d)")
+    .option("-n, --limit <n>", "Max sessions to show", parseInt, 20)
+    .option("-v, --verbose", "Print each session's event lines")
+    .option("--json", "Output as JSON")
+    .action((cmd) => {
+      const sessions = listAgentSessions({
+        agent: cmd.agent,
+        since: parseSince(cmd.since ?? "7d"),
+        limit: cmd.limit,
+      });
+
+      if (emitJson(program, cmd, { sessions })) return;
+
+      if (sessions.length === 0) {
+        console.log(
+          c.dim(
+            "No agent sessions in range. Sessions appear once an MCP client (Cursor, Claude Code, Kiro, or an airlock) has touched the ring.",
+          ),
+        );
+        return;
+      }
+
+      console.log(c.bold(`\n  ${SYMBOLS.eye} Agent sessions (${sessions.length})\n`));
+      for (const s of sessions) {
+        const started = new Date(s.startedAt);
+        const ended = new Date(s.endedAt);
+        const seconds = Math.max(0, Math.round((ended.getTime() - started.getTime()) / 1000));
+        const who = s.wrapLabel ? `airlock: ${s.wrapLabel}` : s.agent;
+        const head = [
+          c.cyan(`⟨${who}⟩`),
+          c.dim(`[${s.source}]`),
+          c.dim(
+            `${started.toLocaleString()} → ${ended.toLocaleTimeString()} (${fmtSeconds(seconds)})`,
+          ),
+          `${s.eventCount} events`,
+          s.denials > 0 ? c.red(`${s.denials} denied`) : c.green("0 denied"),
+          s.countsByAction.canary ? c.red(`${s.countsByAction.canary} canary trips`) : "",
+        ];
+        console.log(`  ${head.filter(Boolean).join("  ")}`);
+        console.log(c.dim(`    id ${s.id} · keys: ${s.keys.length ? s.keys.join(", ") : "—"}`));
+        if (cmd.verbose) {
+          for (const e of s.events) {
+            const parts = [
+              c.dim(new Date(e.timestamp).toLocaleTimeString()),
+              (e.action === "policy_deny" || e.action === "canary" ? c.red : c.yellow)(
+                e.action.padEnd(11),
+              ),
+              e.key ? c.bold(e.key) : "",
+              e.detail ? c.dim(e.detail) : "",
+            ];
+            console.log(`      ${parts.filter(Boolean).join("  ")}`);
+          }
+        }
+        console.log();
       }
     });
 
@@ -200,9 +269,7 @@ export function registerAuditCommands(program: Command): void {
       console.log(c.bold(`\n  ${SYMBOLS.shield} Secret health report\n`));
 
       for (const key of expiredKeys) {
-        console.log(
-          `  ${c.red(SYMBOLS.cross)} ${c.bold(key)} ${c.bgRed(c.white(" EXPIRED "))}`,
-        );
+        console.log(`  ${c.red(SYMBOLS.cross)} ${c.bold(key)} ${c.bgRed(c.white(" EXPIRED "))}`);
       }
       for (const s of staleKeys) {
         console.log(
