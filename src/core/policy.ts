@@ -44,13 +44,38 @@ const secretsPolicySchema = z
     maxTtlSeconds: z.number().optional(),
   })
   .strict();
+const rateLimitSchema = z
+  .object({
+    maxCalls: z.number().int().positive(),
+    perSeconds: z.number().positive(),
+  })
+  .strict();
+/**
+ * Airlock (`qring mcp wrap`) policy. Tool names accept `*` globs so a wrapped
+ * server's whole namespace can be gated (`"github_*"`). `approveTools` are
+ * allowed only while a `qring mcp approve <tool>` grant is live; rate limits
+ * are sliding windows per tool, `toolRateLimits` overriding `rateLimit`.
+ */
+const wrapPolicySchema = z
+  .object({
+    allowTools: stringArray.optional(),
+    denyTools: stringArray.optional(),
+    approveTools: stringArray.optional(),
+    rateLimit: rateLimitSchema.optional(),
+    toolRateLimits: z.record(z.string(), rateLimitSchema).optional(),
+    redactResults: z.boolean().optional(),
+  })
+  .strict();
 const policySchema = z
   .object({
     mcp: mcpPolicySchema.optional(),
     exec: execPolicySchema.optional(),
     secrets: secretsPolicySchema.optional(),
+    wrap: wrapPolicySchema.optional(),
   })
   .strict();
+
+export type WrapRateLimit = z.infer<typeof rateLimitSchema>;
 
 export type PolicyConfig = z.infer<typeof policySchema>;
 
@@ -214,7 +239,11 @@ export function checkSecretLifecyclePolicy(
   return { allowed: true, policySource: ".q-ring.json" };
 }
 
-export function checkKeyReadPolicy(key: string, tags: string[] | undefined, projectPath?: string): PolicyDecision {
+export function checkKeyReadPolicy(
+  key: string,
+  tags: string[] | undefined,
+  projectPath?: string,
+): PolicyDecision {
   const policy = loadPolicy(projectPath);
   if (!policy.mcp) return { allowed: true, policySource: "no-policy" };
 
@@ -294,6 +323,7 @@ export function getPolicySummary(projectPath?: string): {
   hasMcpPolicy: boolean;
   hasExecPolicy: boolean;
   hasSecretPolicy: boolean;
+  hasWrapPolicy: boolean;
   details: PolicyConfig;
 } {
   const policy = loadPolicy(projectPath);
@@ -301,6 +331,76 @@ export function getPolicySummary(projectPath?: string): {
     hasMcpPolicy: !!policy.mcp,
     hasExecPolicy: !!policy.exec,
     hasSecretPolicy: !!policy.secrets,
+    hasWrapPolicy: !!policy.wrap,
     details: policy,
   };
+}
+
+// ── Airlock (wrap) policy ────────────────────────────────────────────────
+
+/** `*` matches any run of characters; everything else is literal. */
+function matchesToolPattern(pattern: string, toolName: string): boolean {
+  if (!pattern.includes("*")) return pattern === toolName;
+  const re = new RegExp(
+    "^" +
+      pattern
+        .split("*")
+        .map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+        .join(".*") +
+      "$",
+  );
+  return re.test(toolName);
+}
+
+function anyPatternMatches(patterns: string[] | undefined, toolName: string): string | undefined {
+  return patterns?.find((p) => matchesToolPattern(p, toolName));
+}
+
+/** Allow/deny decision for a tool call crossing the airlock. Deny wins. */
+export function checkWrapToolPolicy(toolName: string, projectPath?: string): PolicyDecision {
+  const wrap = loadPolicy(projectPath).wrap;
+  if (!wrap) return { allowed: true, policySource: "no-policy" };
+
+  const denied = anyPatternMatches(wrap.denyTools, toolName);
+  if (denied) {
+    return {
+      allowed: false,
+      reason: `wrapped tool "${toolName}" is denied by policy (${denied})`,
+      policySource: ".q-ring.json policy.wrap.denyTools",
+    };
+  }
+  if (wrap.allowTools && !anyPatternMatches(wrap.allowTools, toolName)) {
+    return {
+      allowed: false,
+      reason: `wrapped tool "${toolName}" is not in the allow list`,
+      policySource: ".q-ring.json policy.wrap.allowTools",
+    };
+  }
+  return { allowed: true, policySource: ".q-ring.json policy.wrap" };
+}
+
+/** Whether a wrapped tool needs a live `qring mcp approve` grant. */
+export function wrapToolRequiresApproval(toolName: string, projectPath?: string): boolean {
+  const wrap = loadPolicy(projectPath).wrap;
+  return !!anyPatternMatches(wrap?.approveTools, toolName);
+}
+
+/** Effective rate limit for a wrapped tool: per-tool override, else global. */
+export function getWrapRateLimit(
+  toolName: string,
+  projectPath?: string,
+): WrapRateLimit | undefined {
+  const wrap = loadPolicy(projectPath).wrap;
+  if (!wrap) return undefined;
+  const perTool = wrap.toolRateLimits
+    ? Object.entries(wrap.toolRateLimits).find(([pattern]) =>
+        matchesToolPattern(pattern, toolName),
+      )?.[1]
+    : undefined;
+  return perTool ?? wrap.rateLimit;
+}
+
+/** Whether airlock results are scrubbed of known secret values (default on). */
+export function wrapRedactsResults(projectPath?: string): boolean {
+  return loadPolicy(projectPath).wrap?.redactResults ?? true;
 }

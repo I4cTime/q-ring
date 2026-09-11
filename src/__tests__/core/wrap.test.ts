@@ -107,9 +107,7 @@ describe("mcp airlock proxy", () => {
       name: "echo",
       arguments: { msg: "super-secret-value" },
     });
-    expect((result.content as Array<{ text: string }>)[0].text).toBe(
-      "echo: super-secret-value",
-    );
+    expect((result.content as Array<{ text: string }>)[0].text).toBe("echo: super-secret-value");
 
     const events = queryAudit({ action: "wrap", correlationId: "wrap-test-session" });
     expect(events.length).toBe(1);
@@ -168,19 +166,17 @@ describe("mcp airlock proxy", () => {
     const host = new Client({ name: "test-host", version: "9.9.9" });
     await host.connect(hostSide);
 
-    await expect(
-      host.callTool({ name: "no_such_tool", arguments: {} }),
-    ).rejects.toBeInstanceOf(McpError);
+    await expect(host.callTool({ name: "no_such_tool", arguments: {} })).rejects.toBeInstanceOf(
+      McpError,
+    );
   });
 
   it("relays progress notifications under the host's own token", async () => {
     const { host } = await buildAirlock();
     const seen: Array<{ progress: number; total?: number }> = [];
-    const result = await host.callTool(
-      { name: "ticker", arguments: {} },
-      undefined,
-      { onprogress: (p) => seen.push(p) },
-    );
+    const result = await host.callTool({ name: "ticker", arguments: {} }, undefined, {
+      onprogress: (p) => seen.push(p),
+    });
     expect((result.content as Array<{ text: string }>)[0].text).toBe("done");
     expect(seen.map((p) => p.progress)).toEqual([1, 2, 3]);
     expect(seen[0].total).toBe(3);
@@ -198,7 +194,7 @@ describe("mcp airlock proxy", () => {
     await notified; // resolves only if the airlock relayed it
   });
 
-  it("answers tools/list with an empty list for a downstream without tools", async () => {
+  it("does not advertise tools for a downstream without them", async () => {
     const bare = new McpServer({ name: "no-tools", version: "1.0.0" });
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
     await bare.connect(serverSide);
@@ -214,8 +210,8 @@ describe("mcp airlock proxy", () => {
     const host = new Client({ name: "test-host", version: "9.9.9" });
     await host.connect(hostSide);
 
-    const { tools } = await host.listTools();
-    expect(tools).toEqual([]);
+    expect(host.getServerCapabilities()?.tools).toBeUndefined();
+    await expect(host.listTools()).rejects.toThrow(/Method not found|does not support tools/);
   });
 
   it("audits one wrap event per call", async () => {
