@@ -1,6 +1,6 @@
 # q-ring Cursor Plugin
 
-Quantum keyring for AI agents — manage secrets, scan for leaks, rotate keys, and enforce policy directly from Cursor.
+OS keychain secrets for AI coding agents, over MCP — manage secrets, scan for leaks, rotate keys, and enforce policy directly from Cursor.
 
 > **Looking for another editor?** See the sister packs: [`kiro-plugin/`](../kiro-plugin/README.md) for [Kiro](https://kiro.dev) and [`claude-code-plugin/`](../claude-code-plugin/README.md) for [Claude Code](https://docs.claude.com/en/docs/claude-code/overview).
 
