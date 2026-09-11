@@ -71,7 +71,7 @@
   "homepage": "https://qring.i4c.studio",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@napi-rs/keyring": "^1.3.0",
+    "@napi-rs/keyring": "^2.0.0",
     "commander": "^15.0.0",
     "ipaddr.js": "^1.9.1",
     "zod": "^4.4.3"
