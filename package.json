@@ -1,6 +1,6 @@
 {
   "name": "@i4ctime/q-ring",
-  "version": "0.16.2",
+  "version": "0.17.0",
   "mcpName": "io.github.I4cTime/q-ring",
   "description": "OS keychain secrets for AI coding agents, over MCP — Cursor, Kiro, Claude Code. Native vault storage, policy-governed access, audit log.",
   "type": "module",

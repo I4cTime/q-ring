@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-09-11
+
 ### Added
 - **MCP tool annotations.** All 44 tools now advertise the MCP behavior
   hints (`readOnlyHint`, `destructiveHint`, `idempotentHint`,
