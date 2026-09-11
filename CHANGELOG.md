@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Smithery listing now shows q-ring's tools.** Bundle publishes went
+  through the `smithery` CLI, which can only forward manifest metadata —
+  and the MCPB manifest cannot express tool schemas (smithery-ai/cli#787)
+  — so the listing sat at "No capabilities found" with Capability Quality
+  0/40. `scripts/build-mcpb.mjs` now captures the vendored server's live
+  `tools/list` and `scripts/smithery-publish.mjs` publishes the bundle
+  through the registry API with that server card attached. `publish.yml`
+  gained a `smithery_only` dispatch input to republish without touching
+  npm or the MCP Registry.
+
 ## [0.16.2] — 2026-09-03
 
 Hardening pass over the v0.16 surface, driven by an internal full-repo
