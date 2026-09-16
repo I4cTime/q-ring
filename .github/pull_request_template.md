@@ -1,6 +1,6 @@
 <!--
   Thanks for contributing to q-ring. Keep PRs focused; one logical change per PR.
-  CI (check + CodeQL analyze) and 1 approval are required before merge on develop/main.
+  CI (check + CodeQL analyze) and 1 approval are required before merge on main.
 -->
 
 ## Summary
