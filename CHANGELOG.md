@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.17.6] — 2026-09-16
+
+### Fixed
+- **Canary values can no longer read as placeholders.** CSPRNG noise
+  occasionally spelled a placeholder marker (`xxx` turns up in a 74-char body
+  roughly once every few hundred draws), and `scan` would then report the
+  planted canary as a placeholder instead of a secret. Every canary format
+  now regenerates until the value passes the same heuristic `scan` uses.
+- Test suite: the canary alert registry's `0600` mode assertion is skipped
+  on Windows, where `chmod` is a no-op — the Windows compat job had been
+  failing on it since 0.17.5.
+
+### Security
+- Dependency floors: hono ≥ 4.13.5 (three moderate advisories in the
+  transitive MCP transport dependency). In-range bumps: zod 4.6.5, @types/node
+  26.6.1, eslint 10.10.0, typescript-eslint 8.70.0.
+
 ## [0.17.5] — 2026-09-11
 
 The "watchtower" release — see everything. Finishes the v0.16 airlock and
