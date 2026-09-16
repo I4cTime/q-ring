@@ -75,7 +75,10 @@ describe("canary alert registry", () => {
     expect(ch.id).toHaveLength(8);
     expect(ch.enabled).toBe(true);
     expect(listCanaryAlerts().map((c) => c.id)).toEqual([ch.id]);
-    expect(statSync(process.env.QRING_CANARY_ALERTS_PATH!).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") {
+      // chmod is a no-op on Windows (mode reads back 0666)
+      expect(statSync(process.env.QRING_CANARY_ALERTS_PATH!).mode & 0o777).toBe(0o600);
+    }
 
     expect(setCanaryAlertEnabled(ch.id, false)).toBe(true);
     expect(listCanaryAlerts()[0].enabled).toBe(false);

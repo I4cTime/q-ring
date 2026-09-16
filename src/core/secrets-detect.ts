@@ -32,7 +32,7 @@ export function calculateEntropy(str: string): number {
   return entropy;
 }
 
-function isPlaceholderValue(value: string): boolean {
+export function isPlaceholderValue(value: string): boolean {
   const lv = value.toLowerCase();
   return (
     lv.includes("example") ||

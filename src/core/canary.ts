@@ -22,6 +22,7 @@ import {
   type KeyringOptions,
 } from "./keyring.js";
 import type { Scope } from "./scope.js";
+import { isPlaceholderValue } from "./secrets-detect.js";
 
 export interface CanaryFormat {
   /** Provider name shown in `canary list` */
@@ -43,6 +44,22 @@ function pick(charset: string, length: number): string {
 }
 
 /**
+ * CSPRNG noise occasionally spells a placeholder marker ("xxx" turns up in a
+ * 74-char body roughly once every few hundred draws), and `scan` would then
+ * report the planted canary as a placeholder instead of a secret. Regenerate
+ * until the value reads as a real token to the same heuristic scan uses.
+ */
+function dodgingPlaceholders(generate: () => string): () => string {
+  return () => {
+    for (let attempt = 0; attempt < 32; attempt++) {
+      const value = generate();
+      if (!isPlaceholderValue(value)) return value;
+    }
+    throw new Error("canary generator kept producing placeholder-like values");
+  };
+}
+
+/**
  * Token shapes per provider. Prefixes match the liveness-provider registry in
  * validate.ts so a canary auto-detects like the real thing; body length and
  * charset track each issuer's current format closely enough to pass shape
@@ -53,67 +70,67 @@ export const CANARY_FORMATS: Record<string, CanaryFormat> = {
   aws: {
     name: "aws",
     description: "AWS access key id (AKIA…)",
-    generate: () => `AKIA${pick(UPPER_NUM, 16)}`,
+    generate: dodgingPlaceholders(() => `AKIA${pick(UPPER_NUM, 16)}`),
   },
   "aws-secret": {
     name: "aws-secret",
     description: "AWS secret access key (40-char base64)",
-    generate: () => pick(BASE64, 40),
+    generate: dodgingPlaceholders(() => pick(BASE64, 40)),
   },
   github: {
     name: "github",
     description: "GitHub classic personal access token (ghp_…)",
-    generate: () => `ghp_${pick(ALNUM, 36)}`,
+    generate: dodgingPlaceholders(() => `ghp_${pick(ALNUM, 36)}`),
   },
   "github-pat": {
     name: "github-pat",
     description: "GitHub fine-grained personal access token (github_pat_…)",
-    generate: () => `github_pat_${pick(ALNUM, 22)}_${pick(ALNUM, 59)}`,
+    generate: dodgingPlaceholders(() => `github_pat_${pick(ALNUM, 22)}_${pick(ALNUM, 59)}`),
   },
   openai: {
     name: "openai",
     description: "OpenAI API key (sk-…)",
-    generate: () => `sk-${pick(ALNUM, 48)}`,
+    generate: dodgingPlaceholders(() => `sk-${pick(ALNUM, 48)}`),
   },
   "openai-project": {
     name: "openai-project",
     description: "OpenAI project API key (sk-proj-…)",
-    generate: () => `sk-proj-${pick(URLSAFE, 74)}T3BlbkFJ${pick(URLSAFE, 74)}`,
+    generate: dodgingPlaceholders(() => `sk-proj-${pick(URLSAFE, 74)}T3BlbkFJ${pick(URLSAFE, 74)}`),
   },
   anthropic: {
     name: "anthropic",
     description: "Anthropic API key (sk-ant-api03-…)",
-    generate: () => `sk-ant-api03-${pick(URLSAFE, 91)}AA`,
+    generate: dodgingPlaceholders(() => `sk-ant-api03-${pick(URLSAFE, 91)}AA`),
   },
   stripe: {
     name: "stripe",
     description: "Stripe live secret key (sk_live_…)",
-    generate: () => `sk_live_${pick(ALNUM, 24)}`,
+    generate: dodgingPlaceholders(() => `sk_live_${pick(ALNUM, 24)}`),
   },
   gitlab: {
     name: "gitlab",
     description: "GitLab personal access token (glpat-…)",
-    generate: () => `glpat-${pick(URLSAFE, 20)}`,
+    generate: dodgingPlaceholders(() => `glpat-${pick(URLSAFE, 20)}`),
   },
   slack: {
     name: "slack",
     description: "Slack bot token (xoxb-…)",
-    generate: () => `xoxb-${pick(DIGITS, 12)}-${pick(DIGITS, 13)}-${pick(ALNUM, 24)}`,
+    generate: dodgingPlaceholders(() => `xoxb-${pick(DIGITS, 12)}-${pick(DIGITS, 13)}-${pick(ALNUM, 24)}`),
   },
   google: {
     name: "google",
     description: "Google API key (AIza…)",
-    generate: () => `AIza${pick(URLSAFE, 35)}`,
+    generate: dodgingPlaceholders(() => `AIza${pick(URLSAFE, 35)}`),
   },
   npm: {
     name: "npm",
     description: "npm access token (npm_…)",
-    generate: () => `npm_${pick(ALNUM, 36)}`,
+    generate: dodgingPlaceholders(() => `npm_${pick(ALNUM, 36)}`),
   },
   generic: {
     name: "generic",
     description: "Generic high-entropy API key",
-    generate: () => generateSecret({ format: "api-key", prefix: "qk_", length: 40 }),
+    generate: dodgingPlaceholders(() => generateSecret({ format: "api-key", prefix: "qk_", length: 40 })),
   },
 };
 
