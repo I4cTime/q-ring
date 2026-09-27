@@ -235,10 +235,12 @@ export function registerQuantumCommands(program: Command): void {
         console.error(c.red(`${SYMBOLS.cross} ${msg}`));
         process.exit(1);
       }
-      process.stdout.write(identity.recipient);
+      // Always newline-terminated: `$(qring teleport identity)` strips it,
+      // while `>> recipients.txt` needs it.
+      console.log(identity.recipient);
       if (process.stdout.isTTY) {
         console.log(
-          `\n${SYMBOLS.key} ${c.green("identity created")} ${c.dim(`(id ${identity.id})`)} — share the line above with anyone who should \`teleport pack --to\` you`,
+          `${SYMBOLS.key} ${c.green("identity created")} ${c.dim(`(id ${identity.id})`)} — share the line above with anyone who should \`teleport pack --to\` you`,
         );
       }
     });
@@ -262,9 +264,9 @@ export function registerQuantumCommands(program: Command): void {
         );
         process.exit(1);
       }
-      process.stdout.write(identity.recipient);
+      console.log(identity.recipient);
       if (process.stdout.isTTY) {
-        console.log(`\n${c.dim(`recipient id: ${identity.id}`)}`);
+        console.log(c.dim(`recipient id: ${identity.id}`));
       }
     });
 
