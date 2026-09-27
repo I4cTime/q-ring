@@ -27,6 +27,17 @@ All notable changes to this project will be documented in this file.
   `qring rotate:due [--all] [--json]` lists what needs attention most-overdue
   first, the dashboard gains a "Rotate soon" card, KPI and health pill, and
   `set_secret` / `inspect_secret` carry `rotateEveryDays` / `rotation`.
+- **Teleport v2: recipient packs.** `qring teleport keygen` mints an X25519
+  identity (private key in the OS keyring, never a file) and prints a
+  `qring1…` recipient string; `qring teleport identity` shows it again.
+  `qring teleport pack --to <recipient…>` encrypts a scoped secret set to any
+  number of recipients — a random content key under AES-256-GCM, wrapped per
+  recipient with HKDF-SHA256 over an ephemeral X25519 agreement, `node:crypto`
+  only — so a teammate unpacks with nothing but their own keyring. `unpack`
+  detects v1 vs v2; `--dry-run` shows the addressed recipient ids and whether
+  you are one. MCP: `teleport_pack` accepts `recipients` (exactly one of
+  passphrase / recipients), `teleport_unpack` needs no passphrase for v2.
+  Passphrase bundles keep working unchanged.
 
 ### Fixed
 - **Registries never race or leak into your real config from tests.** Hooks,

@@ -227,16 +227,27 @@ qring tunnel list
 
 ### Teleportation — Encrypted Sharing
 
-Pack secrets into AES-256-GCM encrypted bundles for secure transfer between machines. Keys are derived with PBKDF2-HMAC-SHA512 (210 000 iterations) from your passphrase; each bundle records its iteration count, so bundles produced by older versions still unpack.
+Pack secrets into AES-256-GCM encrypted bundles for secure transfer between machines. Two ways to lock a bundle:
+
+- **Passphrase** (v1): keys derived with PBKDF2-HMAC-SHA512 (210 000 iterations); each bundle records its iteration count, so old bundles still unpack.
+- **Recipients** (v2, 0.18): each teammate runs `qring teleport keygen` once and shares their recipient string (`qring1…`, an X25519 public key; the private half lives in their OS keyring). `pack --to` encrypts a fresh content key to every recipient — HKDF-SHA256 over an ephemeral X25519 agreement, AES-256-GCM throughout, `node:crypto` only — so nothing secret travels beside the bundle and nobody has to whisper a passphrase.
 
 ```bash
-# Pack secrets (prompts for passphrase)
+# Passphrase bundle (prompts)
 qring teleport pack --keys "API_KEY,DB_PASS" > bundle.txt
-
-# On another machine: unpack (prompts for passphrase)
 cat bundle.txt | qring teleport unpack
 
-# Preview without importing
+# Recipient bundle: teammates publish their recipient once…
+qring teleport keygen            # → qring1a3F…  (share this; keep the keyring)
+qring teleport identity          # print it again later
+
+# …then you address the pack to them (repeatable or comma-separated)
+qring teleport pack --keys "API_KEY,DB_PASS" --to qring1a3F… --to qring1Zz9… > bundle.txt
+
+# They unpack with the identity in their keyring — no passphrase
+cat bundle.txt | qring teleport unpack
+
+# Preview: who it's addressed to, whether that's you, and what's inside
 qring teleport unpack <bundle> --dry-run
 ```
 

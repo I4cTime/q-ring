@@ -48,7 +48,7 @@ approval gates.
 | Generation         | `generate`                                       | `generate_secret`                                               |
 | Entanglement       | `entangle` / `disentangle`                       | `entangle_secrets` / `disentangle_secrets`                      |
 | Tunnel             | `tunnel create/read/destroy/list`                | `tunnel_create` / `tunnel_read` / `tunnel_destroy` / `tunnel_list` |
-| Teleport           | `teleport pack/unpack`                           | `teleport_pack` / `teleport_unpack`                             |
+| Teleport           | `teleport pack [--to …]/unpack`                  | `teleport_pack` (`passphrase` or `recipients`) / `teleport_unpack` |
 | Project context    | `context`                                        | `get_project_context`                                           |
 | Project check      | `check`                                          | `check_project`                                                 |
 | Env generation     | `env:generate`                                   | `env_generate`                                                  |
@@ -77,6 +77,7 @@ approval gates.
 | `qring wizard`                                            | Interactive service setup                                       |
 | `hook enable` / `disable` / `test`                        | Runtime lifecycle for secret-change hooks                       |
 | `qring doctor`                                            | Install self-check (keyring, audit, manifest, MCP binary)       |
+| `qring teleport keygen` / `identity`                      | Recipient identity lives in the operator's keyring; agents only ever handle recipient strings |
 | `qring rotate:due`                                        | Rotation reminders list; agents read the same status per key via `inspect_secret.rotation` and `status_dashboard` |
 | `qring completion <shell>`                                | bash/zsh/fish completion scripts generated from the CLI itself  |
 

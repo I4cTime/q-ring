@@ -47,13 +47,19 @@
         },
         {
           "name": "QRING_FILE_PASSPHRASE",
-          "description": "Passphrase for the encrypted file backend (AES-256-GCM). Required only when QRING_BACKEND=file — without it the file backend fails closed.",
+          "description": "Passphrase for the encrypted file backend (AES-256-GCM). Required only when QRING_BACKEND=file \u2014 without it the file backend fails closed.",
           "isRequired": false,
           "isSecret": true
         },
         {
           "name": "QRING_FILE_BACKEND_PATH",
           "description": "Custom path for the encrypted file store (default: ~/.config/q-ring/file-backend.enc).",
+          "isRequired": false,
+          "format": "filepath"
+        },
+        {
+          "name": "QRING_CONFIG_DIR",
+          "description": "Directory for q-ring's registries \u2014 hooks, entanglement, approvals, canary webhooks, agent memory (default: ~/.config/q-ring).",
           "isRequired": false,
           "format": "filepath"
         }
