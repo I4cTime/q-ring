@@ -80,8 +80,15 @@ export function registerBridgeCommands(program: Command): void {
     .option("--repo <owner/name>", "GitHub repository (github target)")
     .option(
       "--vercel-env <envs>",
-      "Comma-separated Vercel environments (default: production)",
+      "Comma-separated Vercel environments (vercel target; default: production)",
     )
+    .option("--app <name>", "fly.io app (fly target; default: the app in fly.toml)")
+    .option("--service <name>", "Railway service name or ID (railway target; default: linked service)")
+    .option(
+      "--railway-env <name>",
+      "Railway environment name or ID (railway target; default: linked environment)",
+    )
+    .option("--site <id>", "Netlify site name or ID (netlify target; default: linked site)")
     .option("--dry-run", "Show what would be pushed without pushing")
     .option("--json", "Output as JSON")
     .action((targetArg: string, cmd) => {
@@ -100,6 +107,10 @@ export function registerBridgeCommands(program: Command): void {
           env: cmd.env,
           repo: cmd.repo,
           vercelEnvs: cmd.vercelEnv?.split(",").map((e: string) => e.trim()),
+          app: cmd.app,
+          service: cmd.service,
+          railwayEnv: cmd.railwayEnv,
+          site: cmd.site,
           dryRun: cmd.dryRun === true,
           source: "cli",
         });
