@@ -448,7 +448,7 @@ Hooks are fire-and-forget: a failing hook never blocks secret operations. The ho
 
 ### Configurable Rotation
 
-Set a rotation format per secret so the agent auto-rotates with the correct value shape.
+Set a rotation format per secret so the agent auto-rotates with the correct value shape, and a rotation interval so q-ring reminds you before a credential goes stale. Every secret remembers when its value last changed (`rotatedAt`); with `--rotate-every` it becomes *due soon* inside the last 20% of the interval (or the last 7 days, whichever is shorter) and *overdue* past it — in `qring inspect`, `qring rotate:due`, the dashboard's "Rotate soon" card and the `inspect_secret` tool.
 
 ```bash
 # Store a secret with rotation format metadata
@@ -456,6 +456,13 @@ qring set STRIPE_KEY "sk-..." --rotation-format api-key --rotation-prefix "sk-"
 
 # Store a password with password rotation format
 qring set DB_PASS "..." --rotation-format password
+
+# Remind me every 90 days
+qring set STRIPE_KEY "sk-..." --rotate-every 90
+
+# What needs rotating? (most overdue first; --all lists every scheduled secret)
+qring rotate:due
+qring rotate:due --json
 ```
 
 ### Secure Execution & Auto-Redaction

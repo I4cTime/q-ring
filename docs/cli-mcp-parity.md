@@ -77,6 +77,7 @@ approval gates.
 | `qring wizard`                                            | Interactive service setup                                       |
 | `hook enable` / `disable` / `test`                        | Runtime lifecycle for secret-change hooks                       |
 | `qring doctor`                                            | Install self-check (keyring, audit, manifest, MCP binary)       |
+| `qring rotate:due`                                        | Rotation reminders list; agents read the same status per key via `inspect_secret.rotation` and `status_dashboard` |
 | `qring completion <shell>`                                | bash/zsh/fish completion scripts generated from the CLI itself  |
 
 ## MCP-only (no CLI subcommand)
@@ -92,7 +93,7 @@ approval gates.
   `import`, `audit`, `audit:verify`, `health`, `analyze`, `recall` (list
   mode), `check`, `env`, `validate` (single, `--all`, `--list-providers`),
   `rotate`, `tunnel list`, `hook list`, `approvals`, `scan`, `lint`,
-  `promote`, `diff`.
+  `promote`, `diff`, `rotate:due`.
   See `emitJson` in `src/cli/helpers.ts`.
 - **Legacy shapes:** `qring context --json`, `qring ci:validate --json`, and
   `qring policy --json` print their payload without the `{ok, data}` envelope

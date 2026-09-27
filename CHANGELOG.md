@@ -19,6 +19,14 @@ All notable changes to this project will be documented in this file.
   stdin (`flyctl secrets import`, `railway variable set --stdin`) or, for
   Netlify's import-only CLI, a `0600` temp file inside a private temp dir
   that is removed even when the CLI fails — never argv.
+- **Rotation reminders.** Every secret now records when its value last
+  changed (`rotatedAt`, set by `set`, `rotate` and auto-rotation alike).
+  `qring set KEY --rotate-every 90` schedules a reminder: the secret turns
+  *due soon* inside the last 20% of the interval (or 7 days, whichever is
+  shorter) and *overdue* past it. `qring inspect` shows the status,
+  `qring rotate:due [--all] [--json]` lists what needs attention most-overdue
+  first, the dashboard gains a "Rotate soon" card, KPI and health pill, and
+  `set_secret` / `inspect_secret` carry `rotateEveryDays` / `rotation`.
 
 ### Fixed
 - **Registries never race or leak into your real config from tests.** Hooks,
