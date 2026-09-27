@@ -2,7 +2,14 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { toolAnnotations } from "../tool-annotations.js";
 import { z } from "zod";
 import { getSecret, setSecret, listSecrets } from "../../core/keyring.js";
-import { teleportPack, teleportUnpack } from "../../core/teleport.js";
+import {
+  teleportPack,
+  teleportPackFor,
+  teleportUnpackAuto,
+  inspectTeleportBundle,
+  loadTeleportIdentity,
+  parseRecipient,
+} from "../../core/teleport.js";
 import { text, opts, enforceToolPolicy, commonSchemas } from "./_shared.js";
 
 const { teamId, orgId, scope, projectPath } = commonSchemas;
@@ -13,7 +20,8 @@ export function registerTeleportTools(server: McpServer): void {
     [
       "[teleport] Encrypt one or more secrets into a single AES-256-GCM bundle string that can be safely transferred between machines.",
       "Use to hand off a curated set of credentials to another developer or environment; prefer `export_secrets` for plaintext .env output (single machine, trusted) and `tunnel_create` for ephemeral one-shot delivery on the same machine.",
-      "Reads each secret value (records 'export' audit events) and produces a base64-encoded ciphertext. The bundle is unreadable without the same passphrase via `teleport_unpack`. Returns the bundle string directly. Errors with 'No secrets to pack' if the filter matched zero secrets.",
+      "Two modes, exactly one required: `passphrase` (v1, symmetric — receiver needs the same string) or `recipients` (v2, public-key — each receiver's `qring1...` string from `qring teleport identity`; no shared secret, only the listed identities can open it).",
+      "Reads each secret value (records 'export' audit events) and produces a base64-encoded ciphertext. Returns the bundle string directly. Errors with 'No secrets to pack' if the filter matched zero secrets.",
     ].join(" "),
     {
       keys: z
@@ -24,8 +32,15 @@ export function registerTeleportTools(server: McpServer): void {
         ),
       passphrase: z
         .string()
+        .optional()
         .describe(
-          "Symmetric passphrase used to derive the AES-256-GCM key. The receiver must supply the same string to `teleport_unpack`. Pick something high-entropy and share it out-of-band.",
+          "Symmetric passphrase used to derive the AES-256-GCM key (v1 bundle). The receiver must supply the same string to `teleport_unpack`. Pick something high-entropy and share it out-of-band. Mutually exclusive with `recipients`.",
+        ),
+      recipients: z
+        .array(z.string())
+        .optional()
+        .describe(
+          "Recipient public keys (`qring1...` strings, one per teammate) for a v2 recipient pack. The bundle can only be opened by the matching private keys, which each receiver created with `qring teleport keygen`. Mutually exclusive with `passphrase`.",
         ),
       scope,
       projectPath,
@@ -36,6 +51,28 @@ export function registerTeleportTools(server: McpServer): void {
     async (params) => {
       const toolBlock = enforceToolPolicy("teleport_pack", params.projectPath);
       if (toolBlock) return toolBlock;
+
+      const recipients = (params.recipients ?? [])
+        .flatMap((r) => r.split(","))
+        .map((r) => r.trim())
+        .filter((r) => r.length > 0);
+      const hasPassphrase =
+        typeof params.passphrase === "string" && params.passphrase.length > 0;
+
+      if (hasPassphrase === (recipients.length > 0)) {
+        return text(
+          "teleport_pack needs exactly one of `passphrase` (v1) or `recipients` (v2)",
+          true,
+        );
+      }
+      for (const r of recipients) {
+        try {
+          parseRecipient(r);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return text(`Bad recipient "${r}": ${msg}`, true);
+        }
+      }
 
       const o = opts(params);
       const entries = listSecrets(o);
@@ -51,7 +88,10 @@ export function registerTeleportTools(server: McpServer): void {
 
       if (secrets.length === 0) return text("No secrets to pack", true);
 
-      const bundle = teleportPack(secrets, params.passphrase);
+      const bundle =
+        recipients.length > 0
+          ? teleportPackFor(secrets, recipients)
+          : teleportPack(secrets, params.passphrase as string);
       return text(bundle);
     },
   );
@@ -60,8 +100,9 @@ export function registerTeleportTools(server: McpServer): void {
     "teleport_unpack",
     [
       "[teleport] Decrypt a bundle produced by `teleport_pack` and import each contained secret into the local keyring.",
-      "Use on the receiving machine after a packer hands you the bundle and passphrase out-of-band; prefer `dryRun=true` first to preview what will be written.",
-      "When dryRun is false this mutates the keyring (one 'write' event per imported secret) at the requested scope. Bad passphrase or tampered bundle returns JSON `{ ok: false, error: { message } }` with `isError: true`. On success returns 'Imported N secret(s) from teleport bundle'; in dryRun mode returns 'Would import N secrets:' followed by a `KEY [scope]` listing.",
+      "Use on the receiving machine after a packer hands you the bundle; prefer `dryRun=true` first to preview what will be written.",
+      "Passphrase (v1) bundles need `passphrase`. Recipient (v2) bundles need no input: this machine's teleport identity is read from the OS keyring (create one with `qring teleport keygen`; the private key is never returned).",
+      "When dryRun is false this mutates the keyring (one 'write' event per imported secret) at the requested scope. Bad passphrase, missing identity, not-a-recipient or tampered bundle returns JSON `{ ok: false, error: { message } }` with `isError: true`. On success returns 'Imported N secret(s) from teleport bundle'; in dryRun mode returns 'Would import N secrets:' followed by a `KEY [scope]` listing (v2 also lists the recipient ids the bundle is addressed to).",
     ].join(" "),
     {
       bundle: z
@@ -71,8 +112,9 @@ export function registerTeleportTools(server: McpServer): void {
         ),
       passphrase: z
         .string()
+        .optional()
         .describe(
-          "The same passphrase that was used to pack this bundle. Bad passphrases return an authentication error rather than wrong plaintext.",
+          "The passphrase used to pack a v1 bundle. Omit for v2 recipient bundles (decrypted with this machine's keyring identity). Bad passphrases return an authentication error rather than wrong plaintext.",
         ),
       scope: scope.default("global"),
       projectPath,
@@ -92,13 +134,39 @@ export function registerTeleportTools(server: McpServer): void {
       if (toolBlock) return toolBlock;
 
       try {
-        const payload = teleportUnpack(params.bundle, params.passphrase);
+        const info = inspectTeleportBundle(params.bundle);
+
+        let header = "";
+        let identity: ReturnType<typeof loadTeleportIdentity> = null;
+        if (info.v === 2) {
+          identity = loadTeleportIdentity();
+          if (!identity) {
+            throw new Error(
+              "ERR_TELEPORT_NO_IDENTITY: this bundle is addressed to recipient keys and this machine has no teleport identity — run `qring teleport keygen` first",
+            );
+          }
+          const ids = info.recipients
+            .map((id) => (id === identity!.id ? `${id} (you)` : id))
+            .join(", ");
+          header = `Addressed to recipient id(s): ${ids}\n`;
+        } else if (params.passphrase === undefined) {
+          throw new Error(
+            "ERR_TELEPORT_PASSPHRASE_REQUIRED: this is a passphrase (v1) bundle — pass `passphrase`",
+          );
+        }
+
+        const payload = teleportUnpackAuto(params.bundle, {
+          passphrase: params.passphrase,
+          identity: identity?.privateKey,
+        });
 
         if (params.dryRun) {
           const preview = payload.secrets
             .map((s) => `${s.key} [${s.scope ?? "global"}]`)
             .join("\n");
-          return text(`Would import ${payload.secrets.length} secrets:\n${preview}`);
+          return text(
+            `${header}Would import ${payload.secrets.length} secrets:\n${preview}`,
+          );
         }
 
         const o = opts(params);
