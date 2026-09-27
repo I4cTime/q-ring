@@ -20,7 +20,7 @@ describe("createProgram", () => {
       "wizard", "analyze", "env", "generate", "entangle", "disentangle",
       "tunnel", "teleport", "audit", "audit:verify", "audit:export",
       "health", "hook", "env:generate", "status", "agent",
-      "rotate", "ci:validate", "policy", "canary", "mcp",
+      "rotate", "rotate:due", "ci:validate", "policy", "canary", "mcp",
     ];
 
     for (const name of expected) {

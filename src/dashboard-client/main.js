@@ -27,6 +27,7 @@ const icons = {
   health: ic('<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>'),
   environment: ic('<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>'),
   decay: ic('<path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/>'),
+  rotate: ic('<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>'),
   superposition: ic('<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>'),
   entangle: ic('<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>'),
   tunnel: ic('<path d="M9 10h.01"/><path d="M15 10h.01"/><path d="M12 2a8 8 0 0 0-8 8v12l3-3 2.5 2.5L12 19l2.5 2.5L17 19l3 3V10a8 8 0 0 0-8-8z"/>'),
@@ -52,6 +53,18 @@ function envClass(e) {
   if (k === "dev" || k === "development") return "env-dev";
   if (k === "test" || k === "testing") return "env-test";
   return "env-default";
+}
+function rotationColor(state) {
+  if (state === "overdue") return "var(--danger)";
+  if (state === "due-soon") return "var(--warning)";
+  if (state === "ok") return "var(--accent)";
+  return "var(--text-dim)";
+}
+function rotationLabel(r) {
+  if (!r || r.state === "unscheduled" || r.daysUntilDue == null) return "unscheduled";
+  if (r.daysUntilDue > 0) return "due in " + r.daysUntilDue + "d";
+  if (r.daysUntilDue === 0) return "due now";
+  return "overdue " + -r.daysUntilDue + "d";
 }
 function decayColor(pct, expired) {
   if (expired) return "var(--danger)";
@@ -174,6 +187,7 @@ function KpiStrip({ snap }) {
   const items = [
     { label: "Secrets", icon: icons.key, value: s.health.total, sub: s.health.healthy + " healthy · " + s.health.stale + " stale · " + s.health.expired + " expired", cls: "" },
     { label: "Environment", icon: icons.environment, value: s.environment ? s.environment.env : "none", sub: s.environment ? "via " + s.environment.source : "no env detected", cls: s.environment ? "" : "dim" },
+    { label: "Rotate soon", icon: icons.rotate, value: s.health.rotationDue || 0, sub: s.health.rotationDue ? "due-soon or overdue" : "rotation on track", cls: s.health.rotationDue > 0 ? "warning" : "green" },
     { label: "Protected", icon: icons.lock, value: s.protectedCount, sub: "require approval", cls: s.protectedCount > 0 ? "warning" : "dim" },
     { label: "Approvals", icon: icons.approve, value: validApprovals, sub: "active grants", cls: validApprovals > 0 ? "green" : "dim" },
     { label: "Hooks", icon: icons.hook, value: enabledHooks, sub: "enabled / " + (s.hooks || []).length + " total", cls: enabledHooks > 0 ? "" : "dim" },
@@ -228,6 +242,9 @@ function HealthCard({ snap, delay }) {
       ${["global", "project", "team", "org"].filter((k) => sc[k]).map(
         (k) => html`<span class="scope-pill" key=${k}><strong>${sc[k]}</strong>${k}</span>`,
       )}
+      ${h.rotationDue
+        ? html`<span class="scope-pill rotation-due" title="Rotation reminder due-soon or overdue"><strong>${h.rotationDue}</strong>rotate soon</span>`
+        : null}
     </div>
   <//>`;
 }
@@ -319,6 +336,34 @@ function DecayCard({ snap, delay }) {
             <span class="decay-time" style=${"color:" + col}>${label}</span>
           </div>`;
         })}</div>`}
+  <//>`;
+}
+
+function RotationCard({ snap, delay }) {
+  const all = snap.secrets || [];
+  const scheduled = all.filter((x) => x.rotation && x.rotation.state !== "unscheduled");
+  const due = scheduled
+    .filter((x) => x.rotation.state === "due-soon" || x.rotation.state === "overdue")
+    .sort((a, b) => (a.rotation.daysUntilDue || 0) - (b.rotation.daysUntilDue || 0));
+  const overdue = due.filter((x) => x.rotation.state === "overdue").length;
+  const aside = due.length ? due.length + " due · " + overdue + " overdue" : scheduled.length + " scheduled";
+  const asideStyle = overdue ? "color:var(--danger)" : due.length ? "color:var(--warning)" : "";
+  return html`<${Card} delay=${delay}>
+    <${CardTitle} icon=${icons.rotate} title="Rotation Reminders" aside=${aside} asideStyle=${asideStyle} />
+    ${!scheduled.length
+      ? html`<${Empty} cta="$ qring set KEY --rotate-every 90">No rotation reminders configured.<//>`
+      : !due.length
+        ? html`<${Empty} cta="$ qring rotate:due --all">All ${scheduled.length} scheduled secrets are on track.<//>`
+        : html`<div class="rotation-list">${due.slice(0, 12).map((x) => {
+            const col = rotationColor(x.rotation.state);
+            return html`<div class="rotation-item" key=${x.scope + ":" + x.key}>
+              <span class="rotation-dot" style=${"background:" + col}></span>
+              <span class="rotation-key" title=${x.key}>${x.key}</span>
+              <span class="rotation-scope">${x.scope}</span>
+              <span class="rotation-every">every ${x.rotation.rotateEveryDays}d</span>
+              <span class="rotation-due" style=${"color:" + col}>${rotationLabel(x.rotation)}</span>
+            </div>`;
+          })}</div>`}
   <//>`;
 }
 
@@ -727,9 +772,10 @@ function App() {
     <${SecretsSection} snap=${snap} query=${query} setQuery=${setQuery} sort=${sort} setSort=${setSort} searchRef=${searchRef} />
     <section class="grid">
       <${DecayCard} snap=${snap} delay=${0} />
-      <${SuperpositionCard} snap=${snap} delay=${60} />
-      <${EntanglementCard} snap=${snap} delay=${120} />
-      <${TunnelsCard} snap=${snap} delay=${180} />
+      <${RotationCard} snap=${snap} delay=${60} />
+      <${SuperpositionCard} snap=${snap} delay=${120} />
+      <${EntanglementCard} snap=${snap} delay=${180} />
+      <${TunnelsCard} snap=${snap} delay=${240} />
     </section>
     <section class="grid">
       <${ApprovalsCard} snap=${snap} delay=${0} />

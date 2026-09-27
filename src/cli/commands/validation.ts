@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import type { Scope } from "../../core/scope.js";
 import {
   getSecret,
   setSecret,
@@ -12,9 +13,15 @@ import {
   ciValidateBatch,
   registry as providerRegistry,
 } from "../../core/validate.js";
-import { c, SYMBOLS } from "../../utils/colors.js";
-import { wantsJsonOutput, emitJson } from "../helpers.js";
+import {
+  rotationStatus,
+  describeRotation,
+  compareRotationUrgency,
+} from "../../core/rotation.js";
+import { c, SYMBOLS, scopeColor } from "../../utils/colors.js";
+import { wantsJsonOutput, emitJson, safeStr } from "../helpers.js";
 import { buildOpts } from "../options.js";
+import { rotationBadge } from "./secrets.js";
 
 export function registerValidationCommands(program: Command): void {
   program
@@ -232,6 +239,73 @@ export function registerValidationCommands(program: Command): void {
       } else {
         console.log(c.yellow(`${SYMBOLS.warning} ${result.message}`));
       }
+    });
+
+  program
+    .command("rotate:due")
+    .description(
+      "List secrets whose rotation reminder is due soon or overdue (--all: every scheduled secret)",
+    )
+    .option("-g, --global", "Global scope only")
+    .option("-p, --project", "Project scope only")
+    .option("--team <id>", "Team scope only")
+    .option("--org <id>", "Org scope only")
+    .option("--project-path <path>", "Explicit project path")
+    .option("--all", "Include scheduled secrets that are not yet due")
+    .option("--json", "Output as JSON")
+    .action((cmd) => {
+      const opts = buildOpts(cmd);
+      const entries = listSecrets(opts);
+
+      const scheduled = entries
+        .filter((e) => e.envelope)
+        .map((e) => ({
+          key: safeStr(e.key),
+          scope: safeStr(e.scope),
+          rotation: rotationStatus(e.envelope!.meta),
+        }))
+        .filter((e) => e.rotation.state !== "unscheduled")
+        .sort((a, b) => compareRotationUrgency(a.rotation, b.rotation));
+
+      const due = scheduled.filter(
+        (e) => e.rotation.state === "due-soon" || e.rotation.state === "overdue",
+      );
+      const shown = cmd.all ? scheduled : due;
+
+      if (
+        emitJson(program, cmd, {
+          entries: shown,
+          dueCount: due.length,
+          scheduledCount: scheduled.length,
+        })
+      ) {
+        return;
+      }
+
+      if (shown.length === 0) {
+        console.log(
+          c.dim(
+            scheduled.length === 0
+              ? "No secrets have a rotation reminder (set one with: qring set KEY --rotate-every 90)"
+              : `Nothing due — ${scheduled.length} scheduled secret(s) are on track`,
+          ),
+        );
+        return;
+      }
+
+      console.log(
+        c.bold(
+          `\n  ${SYMBOLS.shield} Rotation reminders (${due.length} due of ${scheduled.length} scheduled)\n`,
+        ),
+      );
+      const maxKeyLen = Math.max(...shown.map((e) => e.key.length));
+      for (const e of shown) {
+        const r = e.rotation;
+        console.log(
+          `  ${c.dim("[")}${scopeColor(e.scope as Scope)}${c.dim("]")}  ${c.bold(e.key.padEnd(maxKeyLen))}  ${rotationBadge(r.state)}  ${describeRotation(r)}  ${c.dim(`(last rotated ${r.ageDays}d ago, every ${r.rotateEveryDays}d)`)}`,
+        );
+      }
+      console.log();
     });
 
   program
