@@ -13,7 +13,7 @@ describe("createProgram", () => {
     const commands = program.commands.map((c) => c.name());
 
     const expected = [
-      "set", "get", "delete", "list", "inspect", "export", "import",
+      "set", "get", "delete", "list", "inspect", "export", "import", "promote", "diff",
       "check", "validate", "exec", "scan", "lint", "context",
       "remember", "recall", "forget", "approve", "approvals",
       "hook:install", "hook:uninstall", "hook:run",
