@@ -32,6 +32,22 @@ const PBKDF2_ITERATIONS = 210_000; // OWASP 2023 floor, matches memory.ts/telepo
 const KEY_LENGTH = 32;
 const FILE_PREFIX = "qfile1"; // qfile1:<saltB64>:<iv>:<tag>:<ciphertext>
 
+/**
+ * Translate a native keyring failure into a BackendUnavailableError with a
+ * message that says what to do. @napi-rs/keyring 2.x throws for a locked or
+ * inaccessible credential store where 1.x returned null/false — the right
+ * behaviour for a secrets tool (fail loud, never "not found"), but the raw
+ * error is an OS string; this gives it q-ring's voice.
+ */
+function keyringFailure(op: string, err: unknown): BackendUnavailableError {
+  const detail = err instanceof Error ? err.message : String(err);
+  return new BackendUnavailableError(
+    `OS keyring ${op} failed — the credential store is locked or unreachable ` +
+      `(${detail}). Unlock your keyring (or set ${BACKEND_ENV}=file with ` +
+      `${PASSPHRASE_ENV} for a headless store) and retry.`,
+  );
+}
+
 export class BackendUnavailableError extends Error {
   constructor(message: string) {
     super(message);
@@ -179,7 +195,11 @@ export class Entry {
     if (activeBackend() === "file") {
       return loadStore().map[this.storeKey()] ?? null;
     }
-    return this.delegate().getPassword();
+    try {
+      return this.delegate().getPassword();
+    } catch (err) {
+      throw keyringFailure("read", err);
+    }
   }
 
   setPassword(password: string): void {
@@ -200,7 +220,11 @@ export class Entry {
         return existed;
       });
     }
-    return this.delegate().deleteCredential();
+    try {
+      return this.delegate().deleteCredential();
+    } catch (err) {
+      throw keyringFailure("delete", err);
+    }
   }
 
   // @napi-rs/keyring's other delete alias, used by `qring doctor`.

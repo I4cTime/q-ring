@@ -15,7 +15,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
 import { join } from "node:path";
-import { homedir, hostname, userInfo } from "node:os";
+import { hostname, userInfo } from "node:os";
 import {
   createCipheriv,
   createDecipheriv,
@@ -24,13 +24,14 @@ import {
   pbkdf2Sync,
 } from "node:crypto";
 import { Entry } from "./backend.js";
+import { configDir } from "../utils/config-dir.js";
 
 const MEMORY_FILE = "agent-memory.enc";
 const KEYRING_SERVICE = "qring-memory-key";
 const KEYRING_ACCOUNT = "encryption-key";
 
 function getMemoryDir(): string {
-  const dir = join(homedir(), ".config", "q-ring");
+  const dir = configDir();
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
   }

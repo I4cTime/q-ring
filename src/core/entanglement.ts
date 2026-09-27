@@ -9,8 +9,8 @@
 
 import { existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import { loadJsonRegistry } from "../utils/registry.js";
+import { configDir } from "../utils/config-dir.js";
 
 export interface EntanglementProvenance {
   /** Audit source that created the link (cli/mcp/...). */
@@ -39,7 +39,7 @@ interface EntanglementRegistry {
 const REGISTRY_VERSION = 1;
 
 function getRegistryPath(): string {
-  const dir = join(homedir(), ".config", "q-ring");
+  const dir = configDir();
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
   }

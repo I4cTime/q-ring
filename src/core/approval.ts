@@ -14,9 +14,9 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { loadJsonRegistry } from "../utils/registry.js";
+import { configDir } from "../utils/config-dir.js";
 
 export interface ApprovalEntry {
   id: string;
@@ -45,7 +45,7 @@ interface ApprovalRegistry {
 }
 
 function getHmacSecret(): string {
-  const dir = join(homedir(), ".config", "q-ring");
+  const dir = configDir();
   const secretPath = join(dir, ".approval-key");
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
 
@@ -88,7 +88,7 @@ function verifyHmac(entry: ApprovalEntry): boolean {
 }
 
 function getRegistryPath(): string {
-  const dir = join(homedir(), ".config", "q-ring");
+  const dir = configDir();
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
   }

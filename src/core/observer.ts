@@ -23,10 +23,10 @@ import {
   statSync,
 } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { Entry } from "./backend.js";
 import { withFileLock } from "../utils/file-lock.js";
+import { configDir } from "../utils/config-dir.js";
 
 // The audit chain's tamper-evidence root is a keyed anchor — the HMAC of the
 // head line — stored in the OS keyring, OUTSIDE the log file. The per-line
@@ -163,7 +163,7 @@ function getAuditDir(): string {
     }
     return process.env.QRING_AUDIT_DIR;
   }
-  const dir = join(homedir(), ".config", "q-ring");
+  const dir = configDir();
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
   }

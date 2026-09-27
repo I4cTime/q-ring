@@ -19,6 +19,10 @@ describe("approval HMAC + project binding", () => {
 
   beforeEach(() => {
     prevHome = process.env.HOME;
+    // The approval registry resolves through QRING_CONFIG_DIR first; this
+    // test wants it under the swapped HOME, so clear the override for the
+    // duration (test-env restores the isolated default afterEach).
+    delete process.env.QRING_CONFIG_DIR;
     prevUserProfile = process.env.USERPROFILE;
     dir = join(tmpdir(), `qring-approval-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     mkdirSync(dir, { recursive: true });

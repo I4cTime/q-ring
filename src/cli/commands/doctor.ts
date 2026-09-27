@@ -1,13 +1,13 @@
 import type { Command } from "commander";
 import { existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join, delimiter } from "node:path";
-import { homedir } from "node:os";
 import { verifyAuditChain } from "../../core/observer.js";
 import { getPolicySummary } from "../../core/policy.js";
 import { countLegacyApprovals } from "../../core/approval.js";
 import { c, SYMBOLS } from "../../utils/colors.js";
 import { emitJson } from "../helpers.js";
 import { PACKAGE_VERSION } from "../../version.js";
+import { configDir } from "../../utils/config-dir.js";
 
 type CheckStatus = "ok" | "warn" | "fail";
 
@@ -18,7 +18,7 @@ interface CheckResult {
 }
 
 function auditDir(): string {
-  return process.env.QRING_AUDIT_DIR ?? join(homedir(), ".config", "q-ring");
+  return process.env.QRING_AUDIT_DIR ?? configDir();
 }
 
 function checkNode(): CheckResult {

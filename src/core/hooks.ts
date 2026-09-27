@@ -7,13 +7,13 @@
 
 import { existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { httpRequest } from "../utils/http-request.js";
 import { loadJsonRegistry } from "../utils/registry.js";
 import { logAudit } from "./observer.js";
 import { checkSSRF } from "./ssrf.js";
+import { configDir } from "../utils/config-dir.js";
 
 export type HookType = "shell" | "http" | "signal";
 export type HookAction = "write" | "delete" | "rotate";
@@ -57,7 +57,7 @@ interface HookRegistry {
 }
 
 function getRegistryPath(): string {
-  const dir = join(homedir(), ".config", "q-ring");
+  const dir = configDir();
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true, mode: 0o700 });
   }

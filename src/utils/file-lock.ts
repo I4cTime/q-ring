@@ -6,7 +6,7 @@ import {
   statSync,
 } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { configDir } from "./config-dir.js";
 
 /** Non-spinning synchronous sleep — yields the CPU instead of busy-waiting. */
 function sleepSync(ms: number): void {
@@ -55,7 +55,7 @@ export function withFileLock<T>(
     process.env.QRING_LOCK_DIR ??
     (process.env.QRING_AUDIT_DIR
       ? join(process.env.QRING_AUDIT_DIR, ".locks")
-      : join(homedir(), ".config", "q-ring"));
+      : configDir());
   const lockDir = join(baseDir, opts.dir ?? "locks");
   mkdirSync(lockDir, { recursive: true, mode: 0o700 });
   const safe = Buffer.from(name, "utf8").toString("base64url");
