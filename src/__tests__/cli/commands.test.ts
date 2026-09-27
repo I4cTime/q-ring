@@ -46,6 +46,17 @@ describe("createProgram", () => {
     const subNames = tpCmd!.commands.map((c) => c.name());
     expect(subNames).toContain("pack");
     expect(subNames).toContain("unpack");
+    expect(subNames).toContain("keygen");
+    expect(subNames).toContain("identity");
+  });
+
+  it("teleport pack accepts --to recipients and keygen accepts --force", () => {
+    const program = createProgram();
+    const tpCmd = program.commands.find((c) => c.name() === "teleport")!;
+    const pack = tpCmd.commands.find((c) => c.name() === "pack")!;
+    expect(pack.options.map((o) => o.long)).toContain("--to");
+    const keygen = tpCmd.commands.find((c) => c.name() === "keygen")!;
+    expect(keygen.options.map((o) => o.long)).toContain("--force");
   });
 
   it("registers canary subcommands", () => {
