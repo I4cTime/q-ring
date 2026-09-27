@@ -237,7 +237,9 @@ describe("pushSecrets — netlify", () => {
 
     expect(seen.path!.startsWith(tmpdir())).toBe(true);
     expect(seen.content).toBe(`NL_KEY='${VALUE}'\n`);
-    expect(seen.mode).toBe(0o600);
+    // chmod is a no-op on Windows (mode reads back 0666) — same skip as the
+    // canary registry test; the content/removal assertions still run there.
+    if (process.platform !== "win32") expect(seen.mode).toBe(0o600);
     expect(existsSync(seen.path!)).toBe(false);
   });
 
