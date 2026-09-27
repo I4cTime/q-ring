@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-09-27
+
 ### Added
 - **Environment promotion.** `qring diff staging prod` compares two
   environments key by key — same / different / missing on one side /
