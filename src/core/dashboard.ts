@@ -9,6 +9,7 @@ import { createServer, type IncomingMessage, type ServerResponse, type Server } 
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { listSecrets } from "./keyring.js";
 import { checkDecay, type DecayStatus, type QuantumEnvelope } from "./envelope.js";
+import { rotationStatus, type RotationStatus } from "./rotation.js";
 import { listEntanglements, type EntanglementPair } from "./entanglement.js";
 import { tunnelList } from "./tunnel.js";
 import {
@@ -50,6 +51,8 @@ export interface SecretSnapshot {
   jitProvider?: string;
   /** Whether the rotation format is declared on this envelope */
   hasRotationFormat: boolean;
+  /** Rotation-reminder age/due status (value-change based, not TTL) */
+  rotation: RotationStatus;
 }
 
 export interface TunnelSnapshot {
@@ -159,7 +162,15 @@ export interface DashboardSnapshot {
   /** All visible secrets (no values) */
   secrets: SecretSnapshot[];
   /** Headline counts of secret health */
-  health: { healthy: number; stale: number; expired: number; noDecay: number; total: number };
+  health: {
+    healthy: number;
+    stale: number;
+    expired: number;
+    noDecay: number;
+    total: number;
+    /** Secrets whose rotation reminder is due-soon or overdue */
+    rotationDue: number;
+  };
   /** Counts per scope */
   scopes: ScopeBreakdown;
   /** Secrets that require approval before MCP read */
@@ -234,6 +245,9 @@ function toSecretSnapshot(entry: {
     requiresApproval: envelope?.meta.requiresApproval,
     jitProvider: envelope?.meta.jitProvider,
     hasRotationFormat: !!envelope?.meta.rotationFormat,
+    rotation: rotationStatus(
+      envelope?.meta ?? { createdAt: "", updatedAt: "" },
+    ),
   };
 }
 
@@ -342,6 +356,7 @@ export function collectSnapshot(): DashboardSnapshot {
   let stale = 0;
   let expired = 0;
   let noDecay = 0;
+  let rotationDue = 0;
   let protectedCount = 0;
   const scopes: ScopeBreakdown = { global: 0, project: 0, team: 0, org: 0 };
 
@@ -351,6 +366,7 @@ export function collectSnapshot(): DashboardSnapshot {
     else if (s.decay.isStale) stale++;
     else healthy++;
     if (s.requiresApproval) protectedCount++;
+    if (s.rotation.state === "due-soon" || s.rotation.state === "overdue") rotationDue++;
     if (s.scope === "global") scopes.global++;
     else if (s.scope === "project") scopes.project++;
     else if (s.scope === "team") scopes.team++;
@@ -402,7 +418,7 @@ export function collectSnapshot(): DashboardSnapshot {
     version: PACKAGE_VERSION,
     projectPath,
     secrets,
-    health: { healthy, stale, expired, noDecay, total: secrets.length },
+    health: { healthy, stale, expired, noDecay, total: secrets.length, rotationDue },
     scopes,
     protectedCount,
     entanglements: listEntanglements(),

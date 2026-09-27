@@ -75,6 +75,8 @@ export interface SetSecretOptions extends KeyringOptions {
   rotationFormat?: string;
   /** Prefix for auto-rotation (e.g. "sk-") */
   rotationPrefix?: string;
+  /** Rotation reminder interval in days (1–3650) */
+  rotateEveryDays?: number;
   /** Provider for liveness validation (e.g. "openai", "stripe") */
   provider?: string;
   /** Whether reading this secret via MCP requires explicit user approval */
@@ -85,6 +87,13 @@ export interface SetSecretOptions extends KeyringOptions {
   canary?: boolean;
   /** Provider token shape the canary value imitates */
   canaryFormat?: string;
+}
+
+export const MAX_ROTATE_EVERY_DAYS = 3650;
+
+/** True for a whole number of days in 1..MAX_ROTATE_EVERY_DAYS. */
+export function isValidRotateEveryDays(days: number): boolean {
+  return Number.isInteger(days) && days >= 1 && days <= MAX_ROTATE_EVERY_DAYS;
 }
 
 function readEnvelope(service: string, key: string): QuantumEnvelope | null {
@@ -320,6 +329,22 @@ export function setSecret(
 
   const rotFmt = opts.rotationFormat ?? existing?.meta.rotationFormat;
   const rotPfx = opts.rotationPrefix ?? existing?.meta.rotationPrefix;
+  const rotEvery = opts.rotateEveryDays ?? existing?.meta.rotateEveryDays;
+  if (rotEvery !== undefined && !isValidRotateEveryDays(rotEvery)) {
+    throw new Error(
+      `rotateEveryDays must be a whole number of days between 1 and ${MAX_ROTATE_EVERY_DAYS}`,
+    );
+  }
+  // Rotation age is anchored to the last time the VALUE changed — a metadata-
+  // only re-set (description, tags, interval) must not reset the clock.
+  const valueChanged =
+    !existing ||
+    (opts.states
+      ? JSON.stringify(existing.states ?? null) !== JSON.stringify(opts.states)
+      : existing.states !== undefined || existing.value !== value);
+  const rotatedAt = valueChanged
+    ? new Date().toISOString()
+    : (existing?.meta.rotatedAt ?? existing?.meta.updatedAt ?? existing?.meta.createdAt);
   const prov = opts.provider ?? existing?.meta.provider;
   const reqApp = opts.requiresApproval ?? existing?.meta.requiresApproval;
   const jitProv = opts.jitProvider ?? existing?.meta.jitProvider;
@@ -352,6 +377,8 @@ export function setSecret(
       entangled: existing?.meta.entangled,
       rotationFormat: rotFmt,
       rotationPrefix: rotPfx,
+      rotatedAt,
+      rotateEveryDays: rotEvery,
       provider: prov,
       requiresApproval: reqApp,
       jitProvider: jitProv,
@@ -367,6 +394,8 @@ export function setSecret(
       entangled: existing?.meta.entangled,
       rotationFormat: rotFmt,
       rotationPrefix: rotPfx,
+      rotatedAt,
+      rotateEveryDays: rotEvery,
       provider: prov,
       requiresApproval: reqApp,
       jitProvider: jitProv,

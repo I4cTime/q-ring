@@ -157,6 +157,14 @@ body{min-height:100vh;overflow-x:hidden;position:relative}
 .decay-bar{flex:1;height:6px;border-radius:3px;background:rgba(255,255,255,0.06);overflow:hidden;position:relative}
 .decay-fill{height:100%;border-radius:3px;transition:width .6s ease}
 .decay-time{font-size:.8rem;color:var(--text-dim);min-width:60px;text-align:right;font-family:var(--font-mono)}
+.rotation-list{display:flex;flex-direction:column;gap:8px;max-height:280px;overflow-y:auto}
+.rotation-item{display:flex;align-items:center;gap:10px}
+.rotation-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.rotation-key{font-family:var(--font-mono);font-size:.85rem;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rotation-scope{font-size:.72rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.04em}
+.rotation-every{font-size:.78rem;color:var(--text-dim);font-family:var(--font-mono)}
+.rotation-due{font-size:.8rem;min-width:84px;text-align:right;font-family:var(--font-mono);font-weight:600}
+.scope-pill.rotation-due{color:var(--warning)}
 
 /* Superposition pills */
 .super-list{display:flex;flex-direction:column;gap:8px;max-height:280px;overflow-y:auto}

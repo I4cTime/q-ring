@@ -60,7 +60,7 @@ const COMMAND_GROUPS: Array<{
   {
     name: "Validation & Rotation",
     symbol: SYMBOLS.shield,
-    commands: ["validate", "rotate", "ci:validate"],
+    commands: ["validate", "rotate", "rotate:due", "ci:validate"],
   },
   {
     name: "Dev Tooling",

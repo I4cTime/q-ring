@@ -65,6 +65,46 @@ describe("dashboard server auth + security headers", () => {
     }
   });
 
+  it("includes rotation status per secret and a rotationDue health count", async () => {
+    const res = await fetch(`${base}/api/status?token=${dash.token}`);
+    const snap = (await res.json()) as {
+      health: { rotationDue: number; total: number };
+      secrets: {
+        rotation: {
+          lastRotatedAt: string;
+          ageDays: number;
+          rotateEveryDays: number | null;
+          dueAt: string | null;
+          daysUntilDue: number | null;
+          state: string;
+        };
+      }[];
+    };
+    expect(typeof snap.health.rotationDue).toBe("number");
+    expect(snap.health.rotationDue).toBeGreaterThanOrEqual(0);
+    expect(snap.health.rotationDue).toBeLessThanOrEqual(snap.health.total);
+    let due = 0;
+    for (const s of snap.secrets) {
+      expect(s.rotation).toBeDefined();
+      expect(typeof s.rotation.ageDays).toBe("number");
+      expect(["ok", "due-soon", "overdue", "unscheduled"]).toContain(s.rotation.state);
+      if (s.rotation.state === "unscheduled") {
+        expect(s.rotation.rotateEveryDays).toBeNull();
+        expect(s.rotation.dueAt).toBeNull();
+      }
+      if (s.rotation.state === "due-soon" || s.rotation.state === "overdue") due++;
+    }
+    expect(snap.health.rotationDue).toBe(due);
+  });
+
+  it("ships the rotation reminders card in the client bundle and its styles", async () => {
+    const res = await fetch(`${base}/?token=${dash.token}`);
+    const html = await res.text();
+    expect(html).toContain(".rotation-list");
+    expect(html).toContain("Rotation Reminders");
+    expect(html).toContain("Rotate soon"); // KPI strip
+  });
+
   it("ships the sessions card in the client bundle and its styles", async () => {
     const res = await fetch(`${base}/?token=${dash.token}`);
     const html = await res.text();

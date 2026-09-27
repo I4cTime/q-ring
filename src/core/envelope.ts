@@ -40,6 +40,10 @@ export interface SecretMetadata {
   rotationFormat?: string;
   /** Prefix to use when auto-rotating api-key/token formats */
   rotationPrefix?: string;
+  /** ISO timestamp of the last time the VALUE changed (rotation age anchor) */
+  rotatedAt?: string;
+  /** Rotation reminder interval in days (1–3650); unset = unscheduled */
+  rotateEveryDays?: number;
   /** Provider name for liveness validation (e.g. "openai", "stripe", "github") */
   provider?: string;
   /** Custom validation URL for generic HTTP provider */
@@ -87,6 +91,10 @@ const SecretMetadataSchema = z.object({
   ephemeral: z.boolean().optional(),
   rotationFormat: z.string().optional(),
   rotationPrefix: z.string().optional(),
+  rotatedAt: z.string().optional(),
+  // `.catch(undefined)`: a bad interval strips the reminder rather than
+  // rejecting the whole envelope (which would surface the JSON as the value).
+  rotateEveryDays: z.number().int().positive().max(3650).optional().catch(undefined),
   provider: z.string().optional(),
   validationUrl: z.string().optional(),
   requiresApproval: z.boolean().optional(),
@@ -115,6 +123,8 @@ export function createEnvelope(
     entangled?: EntanglementLink[];
     rotationFormat?: string;
     rotationPrefix?: string;
+    rotatedAt?: string;
+    rotateEveryDays?: number;
     provider?: string;
     requiresApproval?: boolean;
     jitProvider?: string;
@@ -145,6 +155,8 @@ export function createEnvelope(
       accessCount: 0,
       rotationFormat: opts?.rotationFormat,
       rotationPrefix: opts?.rotationPrefix,
+      rotatedAt: opts?.rotatedAt ?? now,
+      rotateEveryDays: opts?.rotateEveryDays,
       provider: opts?.provider,
       requiresApproval: opts?.requiresApproval,
       jitProvider: opts?.jitProvider,

@@ -7,10 +7,13 @@ import {
   listSecrets,
   exportSecrets,
   getEnvelope,
+  isValidRotateEveryDays,
+  MAX_ROTATE_EVERY_DAYS,
   type SetSecretOptions,
 } from "../../core/keyring.js";
 import type { Scope } from "../../core/scope.js";
 import { checkDecay } from "../../core/envelope.js";
+import { rotationStatus, describeRotation } from "../../core/rotation.js";
 import { importDotenv } from "../../core/import.js";
 import { promptSecret, confirm } from "../../utils/prompt.js";
 import {
@@ -23,6 +26,14 @@ import {
 import { safeStr, safeNum, safeArr, wantsJsonOutput, emitJson } from "../helpers.js";
 import { buildOpts } from "../options.js";
 import { filterSecretsByKeyGlob } from "../../services/list-secrets-filter.js";
+
+/** Coloured state marker for rotation status lines. */
+export function rotationBadge(state: string): string {
+  if (state === "overdue") return c.red(`${SYMBOLS.cross} overdue`);
+  if (state === "due-soon") return c.yellow(`${SYMBOLS.warning} due soon`);
+  if (state === "ok") return c.green(`${SYMBOLS.check} ok`);
+  return c.dim("unscheduled");
+}
 
 export function registerSecretsCommands(program: Command): void {
   program
@@ -51,6 +62,10 @@ export function registerSecretsCommands(program: Command): void {
     )
     .option("--rotation-prefix <prefix>", "Prefix for auto-rotation (e.g. sk-)")
     .option(
+      "--rotate-every <days>",
+      `Remind to rotate every N days (1-${MAX_ROTATE_EVERY_DAYS}); see \`qring rotate:due\``,
+    )
+    .option(
       "--requires-approval",
       "Require explicit user approval for MCP agents to read",
     )
@@ -71,6 +86,22 @@ export function registerSecretsCommands(program: Command): void {
         }
       }
 
+      let rotateEveryDays: number | undefined;
+      if (cmd.rotateEvery !== undefined) {
+        const parsed = /^\d+$/.test(String(cmd.rotateEvery).trim())
+          ? Number(cmd.rotateEvery)
+          : Number.NaN;
+        if (!isValidRotateEveryDays(parsed)) {
+          console.error(
+            c.red(
+              `${SYMBOLS.cross} --rotate-every must be a whole number of days between 1 and ${MAX_ROTATE_EVERY_DAYS} (got "${cmd.rotateEvery}")`,
+            ),
+          );
+          process.exit(1);
+        }
+        rotateEveryDays = parsed;
+      }
+
       const setOpts: SetSecretOptions = {
         ...opts,
         ttlSeconds: cmd.ttl,
@@ -79,6 +110,7 @@ export function registerSecretsCommands(program: Command): void {
         tags: cmd.tags?.split(",").map((t: string) => t.trim()),
         rotationFormat: cmd.rotationFormat,
         rotationPrefix: cmd.rotationPrefix,
+        rotateEveryDays,
         requiresApproval: cmd.requiresApproval,
         jitProvider: cmd.jitProvider,
       };
@@ -115,6 +147,7 @@ export function registerSecretsCommands(program: Command): void {
         setSecret(key, value, setOpts);
         const extras: string[] = [];
         if (cmd.ttl) extras.push(`${SYMBOLS.clock} ttl=${cmd.ttl}s`);
+        if (rotateEveryDays) extras.push(c.dim(`rotate every ${rotateEveryDays}d`));
         if (cmd.description) extras.push(c.dim(cmd.description));
 
         console.log(
@@ -343,6 +376,7 @@ export function registerSecretsCommands(program: Command): void {
 
       const { envelope, scope } = result;
       const decay = checkDecay(envelope);
+      const rotation = rotationStatus(envelope.meta);
 
       if (
         emitJson(program, cmd, {
@@ -368,6 +402,7 @@ export function registerSecretsCommands(program: Command): void {
             key: safeStr(l.key),
           })),
           decay,
+          rotation,
         })
       ) {
         return;
@@ -431,6 +466,13 @@ export function registerSecretsCommands(program: Command): void {
           `  ${c.dim("decay:")}     ${decayIndicator(decayPct, expired)} ${decayTime}`,
         );
       }
+
+      const rotAge = `${rotation.ageDays}d ago`;
+      const rotLine =
+        rotation.state === "unscheduled"
+          ? c.dim(`last rotated ${rotAge} · no reminder set`)
+          : `${rotationBadge(rotation.state)} ${describeRotation(rotation)} ${c.dim(`(last rotated ${rotAge}, every ${rotation.rotateEveryDays}d)`)}`;
+      console.log(`  ${c.dim("rotation:")}  ${rotLine}`);
 
       if (entangled.length > 0) {
         console.log(`  ${c.dim("entangled:")}`);
