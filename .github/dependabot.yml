@@ -4,8 +4,8 @@ updates:
   - package-ecosystem: npm
     directory: "/"
     schedule:
-      interval: weekly
-      day: monday
+      interval: cron
+      cronjob: "0 9 * * mon#1,mon#2"
     open-pull-requests-limit: 5
     labels:
       - dependencies
@@ -30,8 +30,8 @@ updates:
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
-      interval: weekly
-      day: monday
+      interval: cron
+      cronjob: "0 9 * * mon#1,mon#2"
     labels:
       - dependencies
       - github-actions
