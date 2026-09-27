@@ -16,12 +16,12 @@
 
 import { existsSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { loadJsonRegistry } from "../utils/registry.js";
 import { httpRequest } from "../utils/http-request.js";
 import { checkSSRF } from "./ssrf.js";
 import { logAudit } from "./observer.js";
+import { configDir } from "../utils/config-dir.js";
 
 export type CanaryAlertType = "discord" | "slack" | "ntfy" | "generic";
 
@@ -63,7 +63,7 @@ interface AlertRegistry {
 function getRegistryPath(): string {
   const override = process.env.QRING_CANARY_ALERTS_PATH;
   if (override) return override;
-  const dir = join(homedir(), ".config", "q-ring");
+  const dir = configDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   return join(dir, "canary-alerts.json");
 }

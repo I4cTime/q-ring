@@ -13,14 +13,14 @@ describe("createProgram", () => {
     const commands = program.commands.map((c) => c.name());
 
     const expected = [
-      "set", "get", "delete", "list", "inspect", "export", "import",
+      "set", "get", "delete", "list", "inspect", "export", "import", "promote", "diff",
       "check", "validate", "exec", "scan", "lint", "context",
       "remember", "recall", "forget", "approve", "approvals",
       "hook:install", "hook:uninstall", "hook:run",
       "wizard", "analyze", "env", "generate", "entangle", "disentangle",
       "tunnel", "teleport", "audit", "audit:verify", "audit:export",
       "health", "hook", "env:generate", "status", "agent",
-      "rotate", "ci:validate", "policy", "canary", "mcp",
+      "rotate", "rotate:due", "ci:validate", "policy", "canary", "mcp",
     ];
 
     for (const name of expected) {
@@ -46,6 +46,17 @@ describe("createProgram", () => {
     const subNames = tpCmd!.commands.map((c) => c.name());
     expect(subNames).toContain("pack");
     expect(subNames).toContain("unpack");
+    expect(subNames).toContain("keygen");
+    expect(subNames).toContain("identity");
+  });
+
+  it("teleport pack accepts --to recipients and keygen accepts --force", () => {
+    const program = createProgram();
+    const tpCmd = program.commands.find((c) => c.name() === "teleport")!;
+    const pack = tpCmd.commands.find((c) => c.name() === "pack")!;
+    expect(pack.options.map((o) => o.long)).toContain("--to");
+    const keygen = tpCmd.commands.find((c) => c.name() === "keygen")!;
+    expect(keygen.options.map((o) => o.long)).toContain("--force");
   });
 
   it("registers canary subcommands", () => {

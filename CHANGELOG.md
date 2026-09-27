@@ -4,6 +4,57 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-09-27
+
+### Added
+- **Environment promotion.** `qring diff staging prod` compares two
+  environments key by key — same / different / missing on one side /
+  single-value — without printing a value, and exits 1 on drift so it works
+  as a CI gate. `qring promote KEY --from staging --to prod` copies one
+  superposition state into another through the normal write path (policy,
+  audit, hooks), is a no-op when the target already matches, and asks (or
+  needs `--force`) before overwriting a different value. MCP: `diff_environments`,
+  `promote_secret` (46 tools).
+- **Three more push targets.** `qring push fly --app`, `qring push railway
+  --service --railway-env`, `qring push netlify --site` on the existing
+  push architecture: each platform's own authenticated CLI, values over
+  stdin (`flyctl secrets import`, `railway variable set --stdin`) or, for
+  Netlify's import-only CLI, a `0600` temp file inside a private temp dir
+  that is removed even when the CLI fails — never argv.
+- **Rotation reminders.** Every secret now records when its value last
+  changed (`rotatedAt`, set by `set`, `rotate` and auto-rotation alike).
+  `qring set KEY --rotate-every 90` schedules a reminder: the secret turns
+  *due soon* inside the last 20% of the interval (or 7 days, whichever is
+  shorter) and *overdue* past it. `qring inspect` shows the status,
+  `qring rotate:due [--all] [--json]` lists what needs attention most-overdue
+  first, the dashboard gains a "Rotate soon" card, KPI and health pill, and
+  `set_secret` / `inspect_secret` carry `rotateEveryDays` / `rotation`.
+- **Teleport v2: recipient packs.** `qring teleport keygen` mints an X25519
+  identity (private key in the OS keyring, never a file) and prints a
+  `qring1…` recipient string; `qring teleport identity` shows it again.
+  `qring teleport pack --to <recipient…>` encrypts a scoped secret set to any
+  number of recipients — a random content key under AES-256-GCM, wrapped per
+  recipient with HKDF-SHA256 over an ephemeral X25519 agreement, `node:crypto`
+  only — so a teammate unpacks with nothing but their own keyring. `unpack`
+  detects v1 vs v2; `--dry-run` shows the addressed recipient ids and whether
+  you are one. MCP: `teleport_pack` accepts `recipients` (exactly one of
+  passphrase / recipients), `teleport_unpack` needs no passphrase for v2.
+  Passphrase bundles keep working unchanged.
+
+### Fixed
+- **Registries never race or leak into your real config from tests.** Hooks,
+  entanglement, canary webhooks, approvals, agent memory and observer state
+  resolve their directory through the new `QRING_CONFIG_DIR` (default
+  unchanged: `~/.config/q-ring`); the test suite gives every worker its own,
+  which ends the intermittent "registry was corrupt" CI failure.
+- **A locked or unreachable OS keyring now says so.** `@napi-rs/keyring` 2.x
+  throws where 1.x returned "not found"; q-ring translates those into a
+  `BackendUnavailableError` that explains how to unlock or switch to the
+  file backend.
+
+### Changed
+- Dependencies: `@napi-rs/keyring` 2.1, vitest 5, minor dev bumps.
+
 ## [0.17.6] — 2026-09-16
 
 ### Fixed

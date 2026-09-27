@@ -16,7 +16,7 @@ pnpm install
 pnpm run plugin:sync            # copies cursor-plugin/ to ~/.cursor/plugins/local/my-plugin
 ```
 
-Restart Cursor. You get the MCP server (all 44 tools), 3 always-on rules, 8 commands, 2 agents, 5 skills, and 3 natural-language hooks.
+Restart Cursor. You get the MCP server (all 46 tools), 3 always-on rules, 8 commands, 2 agents, 5 skills, and 3 natural-language hooks.
 
 ## 3. First five minutes
 

@@ -67,7 +67,7 @@ qring-mcp --help
 
 ### MCP Server
 
-The plugin connects to the `qring-mcp` server via stdio transport, providing access to all 44 q-ring MCP tools for secret management, scanning, rotation, auditing, and governance.
+The plugin connects to the `qring-mcp` server via stdio transport, providing access to all 46 q-ring MCP tools for secret management, scanning, rotation, auditing, and governance.
 
 ## Installation
 

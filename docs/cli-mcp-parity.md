@@ -44,10 +44,11 @@ approval gates.
 | ------------------ | ------------------------------------------------ | --------------------------------------------------------------- |
 | Secret CRUD        | `set` `get` `delete` `list` `inspect` `export` `import` | `set_secret` `get_secret` `delete_secret` `list_secrets` `inspect_secret` `export_secrets` `import_dotenv` |
 | Existence check    | `has` (exit 0/1, `--quiet` for scripts)          | `has_secret`                                                    |
+| Env promotion      | `promote KEY --from A --to B` / `diff A B` (exit 1 on drift) | `promote_secret` / `diff_environments`                  |
 | Generation         | `generate`                                       | `generate_secret`                                               |
 | Entanglement       | `entangle` / `disentangle`                       | `entangle_secrets` / `disentangle_secrets`                      |
 | Tunnel             | `tunnel create/read/destroy/list`                | `tunnel_create` / `tunnel_read` / `tunnel_destroy` / `tunnel_list` |
-| Teleport           | `teleport pack/unpack`                           | `teleport_pack` / `teleport_unpack`                             |
+| Teleport           | `teleport pack [--to …]/unpack`                  | `teleport_pack` (`passphrase` or `recipients`) / `teleport_unpack` |
 | Project context    | `context`                                        | `get_project_context`                                           |
 | Project check      | `check`                                          | `check_project`                                                 |
 | Env generation     | `env:generate`                                   | `env_generate`                                                  |
@@ -76,6 +77,8 @@ approval gates.
 | `qring wizard`                                            | Interactive service setup                                       |
 | `hook enable` / `disable` / `test`                        | Runtime lifecycle for secret-change hooks                       |
 | `qring doctor`                                            | Install self-check (keyring, audit, manifest, MCP binary)       |
+| `qring teleport keygen` / `identity`                      | Recipient identity lives in the operator's keyring; agents only ever handle recipient strings |
+| `qring rotate:due`                                        | Rotation reminders list; agents read the same status per key via `inspect_secret.rotation` and `status_dashboard` |
 | `qring completion <shell>`                                | bash/zsh/fish completion scripts generated from the CLI itself  |
 
 ## MCP-only (no CLI subcommand)
@@ -90,7 +93,8 @@ approval gates.
   `{ "ok": true, "data": … }` for: `get`, `has`, `delete`, `list`, `inspect`,
   `import`, `audit`, `audit:verify`, `health`, `analyze`, `recall` (list
   mode), `check`, `env`, `validate` (single, `--all`, `--list-providers`),
-  `rotate`, `tunnel list`, `hook list`, `approvals`, `scan`, `lint`.
+  `rotate`, `tunnel list`, `hook list`, `approvals`, `scan`, `lint`,
+  `promote`, `diff`, `rotate:due`.
   See `emitJson` in `src/cli/helpers.ts`.
 - **Legacy shapes:** `qring context --json`, `qring ci:validate --json`, and
   `qring policy --json` print their payload without the `{ok, data}` envelope

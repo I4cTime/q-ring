@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync, statSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -131,5 +131,152 @@ describe("pushSecrets", () => {
     expect(() =>
       pushSecrets({ target: "github", keys: ["K"], projectPath: project, silent: true }),
     ).toThrow(/gh.*not found/);
+  });
+});
+
+/** Every non-probe spawn: [binary, argv, options]. */
+function pushCalls(): [string, string[], { input?: string }][] {
+  return spawnSyncMock.mock.calls.filter((c) => !c[1]?.includes("--version")) as never;
+}
+
+describe("pushSecrets — fly", () => {
+  const VALUE = "fly-secret#with-hash";
+
+  it("feeds KEY=VALUE to `flyctl secrets import` on stdin, triple-quoted, never argv", () => {
+    setSecret("FLY_KEY", VALUE, { scope: "project", projectPath: project, silent: true });
+    const result = pushSecrets({ target: "fly", keys: ["FLY_KEY"], projectPath: project, silent: true });
+
+    expect(result.pushed).toEqual(["FLY_KEY"]);
+    const [[bin, argv, options]] = pushCalls();
+    expect(bin).toBe("flyctl");
+    expect(argv).toEqual(["secrets", "import"]);
+    expect(options.input).toBe(`FLY_KEY="""${VALUE}"""\n`);
+    expect(JSON.stringify(argv)).not.toContain(VALUE);
+  });
+
+  it("passes --app when given", () => {
+    setSecret("K", VALUE, { scope: "project", projectPath: project, silent: true });
+    pushSecrets({ target: "fly", keys: ["K"], app: "my-app", projectPath: project, silent: true });
+    const [[, argv]] = pushCalls();
+    expect(argv).toEqual(["secrets", "import", "--app", "my-app"]);
+  });
+
+  it("dry run never invokes flyctl", () => {
+    setSecret("K", VALUE, { scope: "project", projectPath: project, silent: true });
+    const result = pushSecrets({ target: "fly", keys: ["K"], projectPath: project, dryRun: true, silent: true });
+    expect(result.pushed).toEqual(["K"]);
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("pushSecrets — railway", () => {
+  const VALUE = "railway-secret-value";
+
+  it("uses `railway variable set KEY --stdin` with the raw value on stdin", () => {
+    setSecret("RW_KEY", VALUE, { scope: "project", projectPath: project, silent: true });
+    const result = pushSecrets({ target: "railway", keys: ["RW_KEY"], projectPath: project, silent: true });
+
+    expect(result.pushed).toEqual(["RW_KEY"]);
+    const [[bin, argv, options]] = pushCalls();
+    expect(bin).toBe("railway");
+    expect(argv).toEqual(["variable", "set", "RW_KEY", "--stdin"]);
+    expect(options.input).toBe(VALUE);
+    expect(JSON.stringify(argv)).not.toContain(VALUE);
+  });
+
+  it("passes --service and --environment when given", () => {
+    setSecret("K", VALUE, { scope: "project", projectPath: project, silent: true });
+    pushSecrets({
+      target: "railway", keys: ["K"], service: "api", railwayEnv: "staging",
+      projectPath: project, silent: true,
+    });
+    const [[, argv]] = pushCalls();
+    expect(argv).toEqual([
+      "variable", "set", "K", "--stdin", "--service", "api", "--environment", "staging",
+    ]);
+  });
+
+  it("dry run never invokes railway", () => {
+    setSecret("K", VALUE, { scope: "project", projectPath: project, silent: true });
+    const result = pushSecrets({ target: "railway", keys: ["K"], projectPath: project, dryRun: true, silent: true });
+    expect(result.pushed).toEqual(["K"]);
+    expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("pushSecrets — netlify", () => {
+  const VALUE = "netlify-secret#value";
+
+  /** Mock that snapshots the temp file while the CLI "runs". */
+  function captureImportFile(): { path?: string; content?: string; mode?: number } {
+    const seen: { path?: string; content?: string; mode?: number } = {};
+    spawnSyncMock.mockImplementation((_bin: string, args: string[]) => {
+      if (args.includes("--version")) return { status: 0, stdout: "", stderr: "" };
+      seen.path = args[1];
+      seen.content = readFileSync(args[1], "utf8");
+      seen.mode = statSync(args[1]).mode & 0o777;
+      return { status: 0, stdout: "", stderr: "" };
+    });
+    return seen;
+  }
+
+  it("imports a 0600 dotenv temp file via `netlify env:import`, never the value in argv", () => {
+    setSecret("NL_KEY", VALUE, { scope: "project", projectPath: project, silent: true });
+    const seen = captureImportFile();
+
+    const result = pushSecrets({ target: "netlify", keys: ["NL_KEY"], projectPath: project, silent: true });
+
+    expect(result.pushed).toEqual(["NL_KEY"]);
+    const [[bin, argv, options]] = pushCalls();
+    expect(bin).toBe("netlify");
+    expect(argv[0]).toBe("env:import");
+    expect(argv[1]).toBe(seen.path);
+    expect(argv).toHaveLength(2);
+    expect(JSON.stringify(argv)).not.toContain(VALUE);
+    expect(options.input).toBe("");
+
+    expect(seen.path!.startsWith(tmpdir())).toBe(true);
+    expect(seen.content).toBe(`NL_KEY='${VALUE}'\n`);
+    // chmod is a no-op on Windows (mode reads back 0666) — same skip as the
+    // canary registry test; the content/removal assertions still run there.
+    if (process.platform !== "win32") expect(seen.mode).toBe(0o600);
+    expect(existsSync(seen.path!)).toBe(false);
+  });
+
+  it("removes the temp file even when the CLI fails", () => {
+    setSecret("K", VALUE, { scope: "project", projectPath: project, silent: true });
+    let path = "";
+    spawnSyncMock.mockImplementation((_bin: string, args: string[]) => {
+      if (args.includes("--version")) return { status: 0, stdout: "", stderr: "" };
+      path = args[1];
+      return { status: 1, stdout: "", stderr: "not linked" };
+    });
+
+    const result = pushSecrets({ target: "netlify", keys: ["K"], projectPath: project, silent: true });
+
+    expect(result.failed).toEqual([{ key: "K", error: "not linked" }]);
+    expect(path).not.toBe("");
+    expect(existsSync(path)).toBe(false);
+  });
+
+  it("double-quotes a value containing a single quote", () => {
+    setSecret("K", "it's", { scope: "project", projectPath: project, silent: true });
+    const seen = captureImportFile();
+    pushSecrets({ target: "netlify", keys: ["K"], projectPath: project, silent: true });
+    expect(seen.content).toBe(`K="it's"\n`);
+  });
+
+  it("passes --site when given", () => {
+    setSecret("K", VALUE, { scope: "project", projectPath: project, silent: true });
+    pushSecrets({ target: "netlify", keys: ["K"], site: "my-site", projectPath: project, silent: true });
+    const [[, argv]] = pushCalls();
+    expect(argv.slice(2)).toEqual(["--site", "my-site"]);
+  });
+
+  it("dry run never invokes netlify and writes no file", () => {
+    setSecret("K", VALUE, { scope: "project", projectPath: project, silent: true });
+    const result = pushSecrets({ target: "netlify", keys: ["K"], projectPath: project, dryRun: true, silent: true });
+    expect(result.pushed).toEqual(["K"]);
+    expect(spawnSyncMock).not.toHaveBeenCalled();
   });
 });

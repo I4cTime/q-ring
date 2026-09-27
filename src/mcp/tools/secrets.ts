@@ -14,6 +14,7 @@ import {
   exportSecrets,
 } from "../../core/keyring.js";
 import { checkDecay } from "../../core/envelope.js";
+import { rotationStatus } from "../../core/rotation.js";
 import type { Scope } from "../../core/scope.js";
 import { generateSecret, estimateEntropy, type NoiseFormat } from "../../core/noise.js";
 import { importDotenv } from "../../core/import.js";
@@ -186,6 +187,15 @@ export function registerSecretTools(server: McpServer): void {
         .describe(
           "Literal prefix prepended on auto-rotation (only used with rotationFormat 'api-key' or 'token'). Example: 'sk-'.",
         ),
+      rotateEveryDays: z
+        .number()
+        .int()
+        .min(1)
+        .max(3650)
+        .optional()
+        .describe(
+          "Rotation reminder interval in days (1-3650). `inspect_secret` then reports rotation state ok / due-soon / overdue, and the dashboard and `qring rotate:due` surface it. Purely a reminder — nothing rotates automatically. Omit to keep the existing interval.",
+        ),
       teamId,
       orgId,
     },
@@ -214,6 +224,7 @@ export function registerSecretTools(server: McpServer): void {
           tags: params.tags,
           rotationFormat: params.rotationFormat,
           rotationPrefix: params.rotationPrefix,
+          rotateEveryDays: params.rotateEveryDays,
         });
 
         return text(`[${params.scope ?? "global"}] ${params.key} set for env:${params.env}`);
@@ -226,6 +237,7 @@ export function registerSecretTools(server: McpServer): void {
         tags: params.tags,
         rotationFormat: params.rotationFormat,
         rotationPrefix: params.rotationPrefix,
+        rotateEveryDays: params.rotateEveryDays,
       });
 
       return text(`[${params.scope ?? "global"}] ${params.key} saved`);
@@ -397,7 +409,7 @@ export function registerSecretTools(server: McpServer): void {
     [
       "[secrets] Show full metadata for a single secret — env states, decay window, entanglement links, access counters — without ever revealing the value.",
       "Use when you need to understand the shape of a key before reading it or to debug 'why is this expired/stale'; prefer `get_secret` for the actual value, `list_secrets` for a many-key overview, and `audit_log` for the full access timeline.",
-      "Read-only; does not write a 'read' event since the value is not exposed. Returns pretty-printed JSON with fields: key, scope, type ('superposition'|'collapsed'), created, updated, accessCount, lastAccessed, environments, defaultEnv, decay { expired, stale, lifetimePercent, timeRemaining }, entangled, description, tags. Errors with not-found if the key is absent.",
+      "Read-only; does not write a 'read' event since the value is not exposed. Returns pretty-printed JSON with fields: key, scope, type ('superposition'|'collapsed'), created, updated, accessCount, lastAccessed, environments, defaultEnv, decay { expired, stale, lifetimePercent, timeRemaining }, rotation { lastRotatedAt, ageDays, rotateEveryDays, dueAt, daysUntilDue, state: 'ok'|'due-soon'|'overdue'|'unscheduled' }, entangled, description, tags. Errors with not-found if the key is absent.",
     ].join(" "),
     {
       key: z.string().describe("Exact secret key name to inspect. Example: 'OPENAI_API_KEY'."),
@@ -440,6 +452,8 @@ export function registerSecretTools(server: McpServer): void {
           timeRemaining: decay.timeRemaining,
         };
       }
+
+      info.rotation = rotationStatus(envelope.meta);
 
       if (envelope.meta.entangled?.length) {
         info.entangled = envelope.meta.entangled;

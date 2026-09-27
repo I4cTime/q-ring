@@ -49,6 +49,9 @@ const memPath = () => join(homedir(), ".config", "q-ring", "agent-memory.enc");
 beforeEach(() => {
   resetFakeKeyring();
   delete process.env.QRING_MEMORY_PASSPHRASE;
+  // memory.ts resolves its store through QRING_CONFIG_DIR before the mocked
+  // homedir(); clear the override so the mock's temp home is used.
+  delete process.env.QRING_CONFIG_DIR;
   clearMemory();
 });
 afterEach(() => {

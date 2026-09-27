@@ -35,6 +35,8 @@ export const TOOL_ANNOTATIONS: Record<string, ToolAnnotations> = {
   get_secret: READ,
   list_secrets: READ,
   set_secret: hints(false, true, true, false),
+  promote_secret: hints(false, true, true, false),
+  diff_environments: hints(true, false, true, false),
   delete_secret: hints(false, true, true, false),
   has_secret: READ,
   export_secrets: READ,

@@ -3,6 +3,7 @@ import { PACKAGE_VERSION } from "../version.js";
 import { c, SYMBOLS } from "../utils/colors.js";
 import { registerSecretsCommands } from "./commands/secrets.js";
 import { registerProjectCommands } from "./commands/project.js";
+import { registerEnvironmentCommands } from "./commands/environments.js";
 import { registerQuantumCommands } from "./commands/quantum.js";
 import { registerValidationCommands } from "./commands/validation.js";
 import { registerToolingCommands } from "./commands/tooling.js";
@@ -44,7 +45,7 @@ const COMMAND_GROUPS: Array<{
   {
     name: "Project",
     symbol: SYMBOLS.package,
-    commands: ["context", "check", "env", "env:generate", "wizard"],
+    commands: ["context", "check", "env", "env:generate", "promote", "diff", "wizard"],
   },
   {
     name: "Quantum",
@@ -60,7 +61,7 @@ const COMMAND_GROUPS: Array<{
   {
     name: "Validation & Rotation",
     symbol: SYMBOLS.shield,
-    commands: ["validate", "rotate", "ci:validate"],
+    commands: ["validate", "rotate", "rotate:due", "ci:validate"],
   },
   {
     name: "Dev Tooling",
@@ -235,6 +236,7 @@ export function createProgram(): Command {
 
   registerSecretsCommands(program);
   registerProjectCommands(program);
+  registerEnvironmentCommands(program);
   registerQuantumCommands(program);
   registerValidationCommands(program);
   registerToolingCommands(program);

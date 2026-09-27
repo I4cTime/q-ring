@@ -33,7 +33,7 @@ The always-on rules — never hardcode secrets, use q-ring for all operations, a
 
 ### MCP server (`.mcp.json`)
 
-Project-scoped MCP config that connects Claude Code to the local `qring-mcp` binary over stdio. All 44 q-ring MCP tools become available in chat.
+Project-scoped MCP config that connects Claude Code to the local `qring-mcp` binary over stdio. All 46 q-ring MCP tools become available in chat.
 
 ### Subagents (`agents/*.md`)
 

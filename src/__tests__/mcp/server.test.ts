@@ -5,6 +5,8 @@ const EXPECTED_TOOLS = [
   "get_secret",
   "list_secrets",
   "set_secret",
+  "promote_secret",
+  "diff_environments",
   "delete_secret",
   "has_secret",
   "export_secrets",

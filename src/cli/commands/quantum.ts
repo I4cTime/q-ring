@@ -19,7 +19,16 @@ import {
   tunnelDestroy,
   tunnelList,
 } from "../../core/tunnel.js";
-import { teleportPack, teleportUnpack } from "../../core/teleport.js";
+import {
+  teleportPack,
+  teleportPackFor,
+  teleportUnpackAuto,
+  inspectTeleportBundle,
+  generateTeleportIdentity,
+  loadTeleportIdentity,
+  parseRecipient,
+  type TeleportPayload,
+} from "../../core/teleport.js";
 import { promptSecret, confirm } from "../../utils/prompt.js";
 import { c, SYMBOLS } from "../../utils/colors.js";
 import { emitJson } from "../helpers.js";
@@ -212,20 +221,93 @@ export function registerQuantumCommands(program: Command): void {
     .alias("tp")
     .description("Encrypted secret sharing (quantum teleportation)");
 
+  tp.command("keygen")
+    .description(
+      "Create your teleport identity (X25519 keypair, private key in the OS keyring)",
+    )
+    .option("--force", "Replace an existing identity")
+    .action((cmd) => {
+      let identity: ReturnType<typeof generateTeleportIdentity>;
+      try {
+        identity = generateTeleportIdentity({ force: Boolean(cmd.force) });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(c.red(`${SYMBOLS.cross} ${msg}`));
+        process.exit(1);
+      }
+      // Always newline-terminated: `$(qring teleport identity)` strips it,
+      // while `>> recipients.txt` needs it.
+      console.log(identity.recipient);
+      if (process.stdout.isTTY) {
+        console.log(
+          `${SYMBOLS.key} ${c.green("identity created")} ${c.dim(`(id ${identity.id})`)} — share the line above with anyone who should \`teleport pack --to\` you`,
+        );
+      }
+    });
+
+  tp.command("identity")
+    .description("Print your public teleport recipient string")
+    .action(() => {
+      let identity: ReturnType<typeof loadTeleportIdentity>;
+      try {
+        identity = loadTeleportIdentity();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(c.red(`${SYMBOLS.cross} ${msg}`));
+        process.exit(1);
+      }
+      if (!identity) {
+        console.error(
+          c.red(
+            `${SYMBOLS.cross} No teleport identity found — run ${c.bold("qring teleport keygen")} first`,
+          ),
+        );
+        process.exit(1);
+      }
+      console.log(identity.recipient);
+      if (process.stdout.isTTY) {
+        console.log(c.dim(`recipient id: ${identity.id}`));
+      }
+    });
+
   tp.command("pack")
     .description("Pack secrets into an encrypted bundle")
     .option("-k, --keys <keys>", "Comma-separated key names to pack")
+    .option(
+      "--to <recipient...>",
+      "Recipient(s) from `qring teleport identity` (repeatable or comma-separated); skips the passphrase",
+    )
     .option("-g, --global", "Pack global scope")
     .option("-p, --project", "Pack project scope")
     .option("--project-path <path>", "Explicit project path")
     .action(async (cmd) => {
       const opts = buildOpts(cmd);
-      const passphrase = await promptSecret(
-        `${SYMBOLS.lock} Enter passphrase for encryption: `,
-      );
-      if (!passphrase) {
-        console.error(c.red("Passphrase required"));
-        process.exit(1);
+
+      // `--to a --to b` and `--to a,b` both work; validate before touching
+      // any secret so a typo in a recipient never reads the keyring.
+      const recipients: string[] = ((cmd.to as string[] | undefined) ?? [])
+        .flatMap((r) => r.split(","))
+        .map((r) => r.trim())
+        .filter((r) => r.length > 0);
+      for (const r of recipients) {
+        try {
+          parseRecipient(r);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(c.red(`${SYMBOLS.cross} Bad recipient "${r}": ${msg}`));
+          process.exit(1);
+        }
+      }
+
+      let passphrase: string | undefined;
+      if (recipients.length === 0) {
+        passphrase = await promptSecret(
+          `${SYMBOLS.lock} Enter passphrase for encryption: `,
+        );
+        if (!passphrase) {
+          console.error(c.red("Passphrase required (or pass --to <recipient>)"));
+          process.exit(1);
+        }
       }
 
       const entries = listSecrets(opts);
@@ -248,11 +330,18 @@ export function registerQuantumCommands(program: Command): void {
         process.exit(1);
       }
 
-      const bundle = teleportPack(secrets, passphrase);
+      const bundle =
+        recipients.length > 0
+          ? teleportPackFor(secrets, recipients)
+          : teleportPack(secrets, passphrase as string);
       process.stdout.write(bundle);
       if (process.stdout.isTTY) {
+        const to =
+          recipients.length > 0
+            ? c.dim(` for ${recipients.length} recipient(s)`)
+            : "";
         console.log(
-          `\n${SYMBOLS.package} ${c.green("packed")} ${secrets.length} secret(s)`,
+          `\n${SYMBOLS.package} ${c.green("packed")} ${secrets.length} secret(s)${to}`,
         );
       }
     });
@@ -273,21 +362,81 @@ export function registerQuantumCommands(program: Command): void {
         bundle = Buffer.concat(chunks).toString("utf8").trim();
       }
 
-      const passphrase = await promptSecret(
-        `${SYMBOLS.lock} Enter passphrase for decryption: `,
-      );
+      // Peek at the format first: v1 needs a passphrase prompt, v2 needs our
+      // keyring identity and must never prompt.
+      let info: ReturnType<typeof inspectTeleportBundle>;
+      try {
+        info = inspectTeleportBundle(bundle);
+      } catch {
+        console.error(
+          c.red(`${SYMBOLS.cross} Failed to unpack: corrupted bundle`),
+        );
+        process.exit(1);
+      }
+
+      let passphrase: string | undefined;
+      let identity: ReturnType<typeof loadTeleportIdentity> = null;
+      if (info.v === 1) {
+        passphrase = await promptSecret(
+          `${SYMBOLS.lock} Enter passphrase for decryption: `,
+        );
+      } else {
+        try {
+          identity = loadTeleportIdentity();
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(c.red(`${SYMBOLS.cross} ${msg}`));
+          process.exit(1);
+        }
+        if (cmd.dryRun) {
+          const mine = identity ? info.recipients.includes(identity.id) : false;
+          console.log(
+            `\n${SYMBOLS.package} ${c.bold("Recipient bundle")} addressed to ${info.recipients.length} recipient id(s):`,
+          );
+          for (const id of info.recipients) {
+            const marker =
+              identity && id === identity.id ? c.green(" (you)") : "";
+            console.log(`  ${SYMBOLS.key} ${id}${marker}`);
+          }
+          if (!identity) {
+            console.log(
+              c.dim(
+                `  no local identity — run ${c.bold("qring teleport keygen")} to create one`,
+              ),
+            );
+          } else if (!mine) {
+            console.log(
+              c.dim(`  your id ${identity.id} is not among them; unpack will fail`),
+            );
+          }
+          console.log();
+        }
+        if (!identity) {
+          console.error(
+            c.red(
+              `${SYMBOLS.cross} This bundle is addressed to recipient keys and you have no teleport identity — run ${c.bold("qring teleport keygen")} first`,
+            ),
+          );
+          process.exit(1);
+        }
+      }
 
       // Only the decrypt itself maps to "wrong passphrase" — errors from the
       // confirm/import steps below must not be swallowed by this catch.
-      let payload: ReturnType<typeof teleportUnpack>;
+      let payload: TeleportPayload;
       try {
-        payload = teleportUnpack(bundle, passphrase);
-      } catch {
-        console.error(
-          c.red(
-            `${SYMBOLS.cross} Failed to unpack: wrong passphrase or corrupted bundle`,
-          ),
-        );
+        payload = teleportUnpackAuto(bundle, {
+          passphrase,
+          identity: identity?.privateKey,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const reason = msg.startsWith("ERR_TELEPORT_NOT_A_RECIPIENT")
+          ? `this bundle is not addressed to your identity (${identity?.id})`
+          : info.v === 1
+            ? "wrong passphrase or corrupted bundle"
+            : "corrupted bundle or mismatched identity";
+        console.error(c.red(`${SYMBOLS.cross} Failed to unpack: ${reason}`));
         process.exit(1);
       }
 

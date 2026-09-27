@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerSecretTools } from "./tools/secrets.js";
+import { registerEnvironmentTools } from "./tools/environments.js";
 import { registerProjectTools } from "./tools/project.js";
 import { registerTunnelTools } from "./tools/tunnel.js";
 import { registerTeleportTools } from "./tools/teleport.js";
@@ -22,6 +23,7 @@ import { registerMcpResources } from "./resources.js";
 export function registerMcpTools(server: McpServer): void {
   registerMcpResources(server);
   registerSecretTools(server);
+  registerEnvironmentTools(server);
   registerProjectTools(server);
   registerTunnelTools(server);
   registerTeleportTools(server);

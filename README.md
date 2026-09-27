@@ -10,7 +10,7 @@
 [![NPM Version](https://img.shields.io/npm/v/@i4ctime/q-ring?style=flat-square&color=0ea5e9)](https://www.npmjs.com/package/@i4ctime/q-ring)
 [![NPM Downloads](https://img.shields.io/npm/dm/@i4ctime/q-ring?style=flat-square&color=0ea5e9&label=downloads)](https://www.npmjs.com/package/@i4ctime/q-ring)
 [![Docs](https://img.shields.io/badge/docs-website-0ea5e9?style=flat-square)](https://qring.i4c.studio/docs)
-[![MCP Tools](https://img.shields.io/badge/MCP_tools-44-0ea5e9?style=flat-square)](https://glama.ai/mcp/servers/I4cTime/q-ring)
+[![MCP Tools](https://img.shields.io/badge/MCP_tools-46-0ea5e9?style=flat-square)](https://glama.ai/mcp/servers/I4cTime/q-ring)
 [![Smithery](https://img.shields.io/badge/smithery-i4ctime%2Fq--ring-0ea5e9?style=flat-square)](https://smithery.ai/servers/i4ctime/q-ring)
 [![Cursor Directory](https://img.shields.io/badge/cursor_directory-q--ring-0ea5e9?style=flat-square)](https://cursor.directory/plugins/q-ring)
 [![PulseMCP](https://img.shields.io/badge/pulsemcp-q--ring-0ea5e9?style=flat-square)](https://www.pulsemcp.com/servers/i4ctime-q-ring)
@@ -33,7 +33,7 @@ Stop pasting API keys into plain-text `.env` files or wrestling with clunky secr
 - **Entanglement:** Link keys across projects so rotating one automatically updates them all.
 - **Tunneling:** Create ephemeral, in-memory secrets that self-destruct after a set time or read count.
 - **Teleportation:** Securely pack and share AES-256-GCM encrypted secret bundles.
-- **Seamless AI Integration:** 44 built-in MCP tools for native use in **Cursor**, **Kiro**, and **Claude Code**.
+- **Seamless AI Integration:** 46 built-in MCP tools for native use in **Cursor**, **Kiro**, and **Claude Code**.
 
 ## 🚀 Installation
 
@@ -110,6 +110,23 @@ QRING_ENV=dev  qring get API_KEY   # → sk-dev-123
 # Inspect the quantum state
 qring inspect API_KEY
 ```
+
+### Environment Promotion — Diff, Then Promote
+
+Once a secret carries per-environment states, promotion replaces copy-paste: compare two environments key by key (statuses only, never values), then copy a value from one state to another. `diff` exits 1 on drift, so it doubles as a CI gate; `promote` refuses to overwrite a differing target unless you say so.
+
+```bash
+# What differs between staging and prod? (same / different / missing on one side)
+qring diff staging prod
+
+# Make prod match staging for one key (asks before overwriting a different value)
+qring promote DATABASE_URL --from staging --to prod
+
+# Non-interactive, e.g. in a release script
+qring promote DATABASE_URL --from staging --to prod --force --json
+```
+
+MCP agents get the same two operations as `diff_environments` and `promote_secret`.
 
 ### Wavefunction Collapse — Smart Environment Detection
 
@@ -210,16 +227,27 @@ qring tunnel list
 
 ### Teleportation — Encrypted Sharing
 
-Pack secrets into AES-256-GCM encrypted bundles for secure transfer between machines. Keys are derived with PBKDF2-HMAC-SHA512 (210 000 iterations) from your passphrase; each bundle records its iteration count, so bundles produced by older versions still unpack.
+Pack secrets into AES-256-GCM encrypted bundles for secure transfer between machines. Two ways to lock a bundle:
+
+- **Passphrase** (v1): keys derived with PBKDF2-HMAC-SHA512 (210 000 iterations); each bundle records its iteration count, so old bundles still unpack.
+- **Recipients** (v2, 0.18): each teammate runs `qring teleport keygen` once and shares their recipient string (`qring1…`, an X25519 public key; the private half lives in their OS keyring). `pack --to` encrypts a fresh content key to every recipient — HKDF-SHA256 over an ephemeral X25519 agreement, AES-256-GCM throughout, `node:crypto` only — so nothing secret travels beside the bundle and nobody has to whisper a passphrase.
 
 ```bash
-# Pack secrets (prompts for passphrase)
+# Passphrase bundle (prompts)
 qring teleport pack --keys "API_KEY,DB_PASS" > bundle.txt
-
-# On another machine: unpack (prompts for passphrase)
 cat bundle.txt | qring teleport unpack
 
-# Preview without importing
+# Recipient bundle: teammates publish their recipient once…
+qring teleport keygen            # → qring1a3F…  (share this; keep the keyring)
+qring teleport identity          # print it again later
+
+# …then you address the pack to them (repeatable or comma-separated)
+qring teleport pack --keys "API_KEY,DB_PASS" --to qring1a3F… --to qring1Zz9… > bundle.txt
+
+# They unpack with the identity in their keyring — no passphrase
+cat bundle.txt | qring teleport unpack
+
+# Preview: who it's addressed to, whether that's you, and what's inside
 qring teleport unpack <bundle> --dry-run
 ```
 
@@ -339,7 +367,7 @@ qring setup cursor --dry-run
 
 ### Push to Deployment Platforms
 
-Push manifest secrets to GitHub Actions, Vercel, or Cloudflare Workers through each platform's **own authenticated CLI** (`gh` / `vercel` / `wrangler`) — q-ring never holds platform tokens, and values travel over stdin, never argv. Every push is recorded in the audit chain.
+Push manifest secrets to GitHub Actions, Vercel, Cloudflare Workers, fly.io, Railway, or Netlify through each platform's **own authenticated CLI** (`gh` / `vercel` / `wrangler` / `flyctl` / `railway` / `netlify`) — q-ring never holds platform tokens, and values travel over stdin (or, for Netlify's import-only CLI, a `0600` temp file that is removed immediately), never argv. Every push is recorded in the audit chain.
 
 ```bash
 # Push the .q-ring.json manifest keys to GitHub Actions secrets
@@ -350,6 +378,11 @@ qring push vercel --vercel-env production,preview
 
 # Push to Cloudflare Workers secrets
 qring push cloudflare
+
+# fly.io (flyctl secrets import over stdin — note flyctl deploys per import), Railway, Netlify
+qring push fly --app my-app
+qring push railway --service api --railway-env production
+qring push netlify --site 1234-abcd
 
 # Explicit keys, preview first
 qring push github --keys DATABASE_URL,API_KEY --dry-run
@@ -426,7 +459,7 @@ Hooks are fire-and-forget: a failing hook never blocks secret operations. The ho
 
 ### Configurable Rotation
 
-Set a rotation format per secret so the agent auto-rotates with the correct value shape.
+Set a rotation format per secret so the agent auto-rotates with the correct value shape, and a rotation interval so q-ring reminds you before a credential goes stale. Every secret remembers when its value last changed (`rotatedAt`); with `--rotate-every` it becomes *due soon* inside the last 20% of the interval (or the last 7 days, whichever is shorter) and *overdue* past it — in `qring inspect`, `qring rotate:due`, the dashboard's "Rotate soon" card and the `inspect_secret` tool.
 
 ```bash
 # Store a secret with rotation format metadata
@@ -434,6 +467,13 @@ qring set STRIPE_KEY "sk-..." --rotation-format api-key --rotation-prefix "sk-"
 
 # Store a password with password rotation format
 qring set DB_PASS "..." --rotation-format password
+
+# Remind me every 90 days
+qring set STRIPE_KEY "sk-..." --rotate-every 90
+
+# What needs rotating? (most overdue first; --all lists every scheduled secret)
+qring rotate:due
+qring rotate:due --json
 ```
 
 ### Secure Execution & Auto-Redaction
@@ -883,7 +923,7 @@ qring status --no-open
 
 ## MCP Server
 
-q-ring includes a full MCP server with 44 tools for AI agent integration.
+q-ring includes a full MCP server with 46 tools for AI agent integration.
 
 ### Core Tools
 
@@ -892,6 +932,8 @@ q-ring includes a full MCP server with 44 tools for AI agent integration.
 | `get_secret` | Read a secret value (collapses superposition, audits the read) |
 | `list_secrets` | List keys + metadata in scope (values never exposed); filter by tag, expiry, glob |
 | `set_secret` | Create or overwrite a single secret with optional TTL, per-env state, tags, rotation format |
+| `promote_secret` | Copy one secret's value from one environment state to another (no-op when equal; `force` to overwrite a differing target) |
+| `diff_environments` | Compare two environments key by key — same / different / only-a / only-b / collapsed; statuses only, never values |
 | `delete_secret` | Permanently remove a secret value (not undoable from q-ring) |
 | `has_secret` | Boolean existence check that respects decay (no audit read) |
 | `export_secrets` | Render multiple secrets as `.env` or JSON for one-off export (skips approval-protected keys without a grant) |
@@ -1074,7 +1116,7 @@ The **q-ring Cursor Plugin** brings quantum secret management directly into your
 | **2 Agents** | `security-auditor` (proactive monitoring) and `secret-ops` (day-to-day assistant) |
 | **8 Commands** | `/qring:scan-secrets`, `/qring:health-check`, `/qring:rotate-expired`, `/qring:setup-project`, `/qring:teleport-secrets`, `/qring:dashboard`, `/qring:exec-safe`, `/qring:analyze` |
 | **3 Hooks** | `afterFileEdit` (lint scan), `sessionStart` (project context), `beforeShellExecution` (`.env` guard) |
-| **MCP Connector** | Auto-connects to `qring-mcp` via stdio — all 44 tools available |
+| **MCP Connector** | Auto-connects to `qring-mcp` via stdio — all 46 tools available |
 
 Install from the Cursor marketplace or see [`cursor-plugin/README.md`](cursor-plugin/README.md) for manual setup.
 

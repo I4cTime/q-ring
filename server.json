@@ -24,12 +24,12 @@
     "url": "https://github.com/I4cTime/q-ring",
     "source": "github"
   },
-  "version": "0.17.6",
+  "version": "0.18.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@i4ctime/q-ring",
-      "version": "0.17.6",
+      "version": "0.18.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
@@ -54,6 +54,12 @@
         {
           "name": "QRING_FILE_BACKEND_PATH",
           "description": "Custom path for the encrypted file store (default: ~/.config/q-ring/file-backend.enc).",
+          "isRequired": false,
+          "format": "filepath"
+        },
+        {
+          "name": "QRING_CONFIG_DIR",
+          "description": "Directory for q-ring's registries — hooks, entanglement, approvals, canary webhooks, agent memory (default: ~/.config/q-ring).",
           "isRequired": false,
           "format": "filepath"
         }
