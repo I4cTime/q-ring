@@ -38,7 +38,7 @@ qring-mcp --help
 
 ### MCP server (`mcp.json` at power root)
 
-When you add this folder as a Power, Kiro loads [`mcp.json`](mcp.json) from the power root (per [Adding MCP servers](https://kiro.dev/docs/powers/create/)). It connects to the local `qring-mcp` binary over stdio so all 44 q-ring MCP tools are available — `get_secret`, `set_secret`, `scan_codebase_for_secrets`, `rotate_secret`, `health_check`, and so on.
+When you add this folder as a Power, Kiro loads [`mcp.json`](mcp.json) from the power root (per [Adding MCP servers](https://kiro.dev/docs/powers/create/)). It connects to the local `qring-mcp` binary over stdio so all 46 q-ring MCP tools are available — `get_secret`, `set_secret`, `scan_codebase_for_secrets`, `rotate_secret`, `health_check`, and so on.
 
 If you use **`pnpm run plugin:sync:kiro`** instead, the same file is copied to **`.kiro/settings/mcp.json`** (Kiro’s user-level MCP location for a flattened install).
 

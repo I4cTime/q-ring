@@ -1,7 +1,7 @@
 ---
 name: "q-ring"
 displayName: "q-ring — quantum keyring for AI agents"
-description: "Secure secrets in the OS keychain with superposition, entanglement, audit trails, and 44 MCP tools — store and retrieve API keys, scan for leaks, rotate credentials, and enforce policy without pasting secrets into .env or chat."
+description: "Secure secrets in the OS keychain with superposition, entanglement, audit trails, and 46 MCP tools — store and retrieve API keys, scan for leaks, rotate credentials, and enforce policy without pasting secrets into .env or chat."
 keywords:
   - "q-ring"
   - "qring"
