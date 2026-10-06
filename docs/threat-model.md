@@ -251,7 +251,7 @@ sees redacted output, not the secret.
 - Require approval for anything you would rotate if it leaked.
 - Run `qring doctor` after upgrading — it flags pre-v0.14 approvals
   that lack a project binding.
-- Verify the audit chain (`qring audit verify`) on a schedule, and keep
+- Verify the audit chain (`qring audit:verify`) on a schedule, and keep
   `QRING_MEMORY_PASSPHRASE` set on headless/CI hosts where no OS
   keyring is available.
 
