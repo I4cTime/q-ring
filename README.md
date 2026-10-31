@@ -6,9 +6,12 @@
 
 **OS keychain secrets for AI coding agents, over MCP.**
 
+Website: [qring.i4c.studio](https://qring.i4c.studio)
+
 [![CI](https://img.shields.io/github/actions/workflow/status/I4cTime/q-ring/ci.yml?style=flat-square&label=CI)](https://github.com/I4cTime/q-ring/actions/workflows/ci.yml)
 [![NPM Version](https://img.shields.io/npm/v/@i4ctime/q-ring?style=flat-square&color=0ea5e9)](https://www.npmjs.com/package/@i4ctime/q-ring)
 [![NPM Downloads](https://img.shields.io/npm/dm/@i4ctime/q-ring?style=flat-square&color=0ea5e9&label=downloads)](https://www.npmjs.com/package/@i4ctime/q-ring)
+[![Website](https://img.shields.io/badge/website-qring.i4c.studio-0ea5e9?style=flat-square)](https://qring.i4c.studio)
 [![Docs](https://img.shields.io/badge/docs-website-0ea5e9?style=flat-square)](https://qring.i4c.studio/docs)
 [![MCP Tools](https://img.shields.io/badge/MCP_tools-46-0ea5e9?style=flat-square)](https://glama.ai/mcp/servers/I4cTime/q-ring)
 [![Smithery](https://img.shields.io/badge/smithery-i4ctime%2Fq--ring-0ea5e9?style=flat-square)](https://smithery.ai/servers/i4ctime/q-ring)
