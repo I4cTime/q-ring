@@ -10,11 +10,18 @@
  */
 
 import { spawn } from "node:child_process";
+import {
+  withoutQringCredentials,
+  isProcessControlEnvName,
+  hasEnvNameShape,
+  isCredentialShapedName,
+} from "./child-env.js";
 import { StringDecoder } from "node:string_decoder";
 import { Transform } from "node:stream";
 import { listSecrets, getSecret, type KeyringOptions } from "./keyring.js";
 import { checkDecay } from "./envelope.js";
-import { checkExecPolicy, getExecMaxRuntime } from "./policy.js";
+import { checkExecPolicy, getExecMaxRuntime, getPolicyRoot } from "./policy.js";
+import { readProjectConfig } from "./collapse.js";
 import {
   RedactionSet,
   RedactionStream,
@@ -60,9 +67,20 @@ const BUILTIN_PROFILES: Record<string, ExecProfile> = {
   },
 };
 
+/**
+ * Resolve an exec profile by name. An unknown name is an error: falling back
+ * to an empty profile would silently run a typo (`--profile restriced`) with
+ * no restrictions at all. Own-property lookup so `constructor`/`__proto__`
+ * cannot resolve to an Object.prototype member.
+ */
 export function getProfile(name?: string): ExecProfile {
   if (!name) return BUILTIN_PROFILES.unrestricted;
-  return BUILTIN_PROFILES[name] ?? { name };
+  if (!Object.hasOwn(BUILTIN_PROFILES, name)) {
+    throw new Error(
+      `Unknown exec profile "${name}". Known profiles: ${Object.keys(BUILTIN_PROFILES).join(", ")}`,
+    );
+  }
+  return BUILTIN_PROFILES[name];
 }
 
 export function listProfiles(): ExecProfile[] {
@@ -84,6 +102,20 @@ export interface ExecResult {
   code: number;
   stdout: string;
   stderr: string;
+  /** A note for the caller about what was injected (MCP exec without a manifest). */
+  note?: string;
+}
+
+/**
+ * Shown to an MCP caller when no manifest limits what exec injects. Names
+ * the keys the credential-shape rule skipped (names only, never values).
+ */
+export function noManifestNote(skipped: string[]): string {
+  return (
+    "no manifest in .q-ring.json: only credential-shaped secret names (…_KEY, …_TOKEN, …_SECRET, …_URL, …_DSN, …) were injected" +
+    (skipped.length ? `; skipped: ${skipped.join(", ")}` : "") +
+    "; declare secrets there to lift this rule and choose exactly what exec_with_secrets injects"
+  );
 }
 
 /**
@@ -214,6 +246,27 @@ export async function execCommand(opts: ExecOptions): Promise<ExecResult> {
     silent: true, // list silently
   });
 
+  // The boundary for an MCP caller is the operator's manifest: when the
+  // project declares its secrets, exec_with_secrets injects only those (the
+  // same least-privilege set `qring run` uses), intersected with `keys`. A
+  // key an agent planted with set_secret is inert unless the operator
+  // declared it. Read from the pinned policy root, not a caller-chosen path.
+  // Without a manifest only credential-shaped names are injected (below,
+  // after the shape rule and denylist), and the result says which were
+  // skipped.
+  let note: string | undefined;
+  let credentialShapedOnly = false;
+  if ((opts.source ?? "cli") === "mcp") {
+    const root = getPolicyRoot() ?? opts.projectPath ?? process.cwd();
+    const declared = Object.keys(readProjectConfig(root)?.secrets ?? {});
+    if (declared.length > 0) {
+      const allowed = new Set(declared);
+      entries = entries.filter((e) => allowed.has(e.key));
+    } else {
+      credentialShapedOnly = true;
+    }
+  }
+
   if (opts.keys?.length) {
     const keySet = new Set(opts.keys);
     entries = entries.filter((e) => keySet.has(e.key));
@@ -223,6 +276,41 @@ export async function execCommand(opts: ExecOptions): Promise<ExecResult> {
     entries = entries.filter((e) =>
       opts.tags!.some((t) => e.envelope?.meta.tags?.includes(t)),
     );
+  }
+
+  // A secret named NODE_OPTIONS, LD_PRELOAD, PATH, BASH_ENV, ... is code
+  // that runs inside whatever command is allowed (`--import=data:...` needs
+  // no file). Anyone who can write a key (an MCP agent, a teleport bundle)
+  // could otherwise turn policy.exec.allowCommands into arbitrary
+  // execution. Only the local operator may inject one, by naming it in --keys.
+  entries = entries.filter((e) => {
+    // Shape first, never overridable: `BASH_FUNC_ls%%` is a bash function
+    // definition, not a variable.
+    if (!hasEnvNameShape(e.key)) {
+      if ((opts.source ?? "cli") !== "mcp") {
+        process.stderr.write(
+          `[QRING] not injecting "${e.key}": not a plain environment variable name\n`,
+        );
+      }
+      return false;
+    }
+    if (!isProcessControlEnvName(e.key)) return true;
+    if ((opts.source ?? "cli") !== "mcp" && opts.keys?.includes(e.key)) return true;
+    if ((opts.source ?? "cli") !== "mcp") {
+      process.stderr.write(
+        `[QRING] not injecting "${e.key}": it controls process start-up; pass --keys ${e.key} to inject it deliberately\n`,
+      );
+    }
+    return false;
+  });
+
+  // Third tier, MCP without a manifest: a denylist of hook variables cannot
+  // be finished (GOAUTH, CGO_*, MAVEN_OPTS, ... keep appearing), so only
+  // names that read as credentials are injected.
+  if (credentialShapedOnly) {
+    const skipped = entries.filter((e) => !isCredentialShapedName(e.key)).map((e) => e.key);
+    entries = entries.filter((e) => isCredentialShapedName(e.key));
+    note = noManifestNote(skipped);
   }
 
   for (const entry of entries) {
@@ -247,7 +335,7 @@ export async function execCommand(opts: ExecOptions): Promise<ExecResult> {
     }
   }
 
-  return spawnRedacted({
+  const result = await spawnRedacted({
     profile,
     command: opts.command,
     args: opts.args,
@@ -256,6 +344,7 @@ export async function execCommand(opts: ExecOptions): Promise<ExecResult> {
     captureOutput: opts.captureOutput,
     projectPath: opts.projectPath,
   });
+  return note ? { ...result, note } : result;
 }
 
 export interface SpawnRedactedOptions {
@@ -277,7 +366,9 @@ export interface SpawnRedactedOptions {
  * secret values from its output.
  */
 export function spawnRedacted(opts: SpawnRedactedOptions): Promise<ExecResult> {
-  const { profile, secretsToRedact, envMap } = opts;
+  const { profile, secretsToRedact } = opts;
+  // q-ring's own master keys never reach a child (see child-env.ts).
+  const envMap = withoutQringCredentials(opts.envMap);
   const maxRuntime = profile.maxRuntimeSeconds ?? getExecMaxRuntime(opts.projectPath);
 
   return new Promise((resolve, reject) => {

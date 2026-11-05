@@ -174,7 +174,15 @@ export function registerSecretTools(server: McpServer): void {
       tags: z
         .array(z.string())
         .optional()
-        .describe("Tag list for filtering and hook matching. Example: ['production', 'payments']."),
+        .describe(
+          "Tag list for filtering and hook matching. Example: ['production', 'payments']. Replaces the existing tags; omit to keep them.",
+        ),
+      clearTags: z
+        .boolean()
+        .optional()
+        .describe(
+          "Remove the secret's existing tags. Without it (and without `tags`), existing tags and description are kept.",
+        ),
       rotationFormat: z
         .enum(["hex", "base64", "alphanumeric", "uuid", "api-key", "token", "password"])
         .optional()
@@ -204,6 +212,12 @@ export function registerSecretTools(server: McpServer): void {
       const toolBlock = enforceToolPolicy("set_secret", params.projectPath);
       if (toolBlock) return toolBlock;
 
+      // Same rule as `qring set`: replacing and clearing tags at once is
+      // ambiguous, so refuse it rather than silently let one win.
+      if (params.clearTags && params.tags !== undefined) {
+        return text("Use either `tags` or `clearTags`, not both", true);
+      }
+
       const o = opts(params);
 
       if (params.env) {
@@ -222,6 +236,7 @@ export function registerSecretTools(server: McpServer): void {
           ttlSeconds: params.ttlSeconds,
           description: params.description,
           tags: params.tags,
+          clearTags: params.clearTags,
           rotationFormat: params.rotationFormat,
           rotationPrefix: params.rotationPrefix,
           rotateEveryDays: params.rotateEveryDays,
@@ -235,6 +250,7 @@ export function registerSecretTools(server: McpServer): void {
         ttlSeconds: params.ttlSeconds,
         description: params.description,
         tags: params.tags,
+        clearTags: params.clearTags,
         rotationFormat: params.rotationFormat,
         rotationPrefix: params.rotationPrefix,
         rotateEveryDays: params.rotateEveryDays,
@@ -398,6 +414,9 @@ export function registerSecretTools(server: McpServer): void {
       }
       if (result.skipped.length > 0) {
         lines.push(`Skipped (existing): ${result.skipped.join(", ")}`);
+      }
+      for (const s of result.skippedByPolicy) {
+        lines.push(`Skipped (policy): ${s.key}: ${s.reason}`);
       }
 
       return text(lines.join("\n"));
@@ -564,8 +583,23 @@ export function registerSecretTools(server: McpServer): void {
       // i.e. it grants write access to targetKey. Gate BOTH keys with the same
       // key-level policy a direct read/write would face, so an agent can't link
       // a scratch key to a denied one and overwrite it via propagation (A2).
-      for (const key of [params.sourceKey, params.targetKey]) {
-        const decision = checkKeyReadPolicy(key, undefined, params.sourceProjectPath);
+      // The stored tags count too (deniedTags): a link FROM a tag-denied key
+      // would copy its value into a readable one on the next operator write.
+      const sides = [
+        { key: params.sourceKey, scope: params.sourceScope, path: params.sourceProjectPath },
+        { key: params.targetKey, scope: params.targetScope, path: params.targetProjectPath },
+      ];
+      for (const side of sides) {
+        const stored = getEnvelope(side.key, {
+          scope: (side.scope as Scope | undefined) ?? "global",
+          projectPath: side.path ?? process.cwd(),
+          source: "cli",
+        });
+        const decision = checkKeyReadPolicy(
+          side.key,
+          stored?.envelope.meta.tags,
+          params.sourceProjectPath,
+        );
         if (!decision.allowed) {
           return text(`Policy Denied: ${decision.reason} (source: ${decision.policySource})`, true);
         }

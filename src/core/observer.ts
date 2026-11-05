@@ -100,7 +100,15 @@ export type AuditAction =
   | "rotate"
   | "push"
   | "canary"
+  | "canary_alert"
   | "wrap";
+
+/**
+ * Actions no agent-facing surface may show: canary trips and canary alert
+ * delivery records (both name a canary). MCP audit_log, export_audit and the
+ * qring://sessions resources drop them; the operator's CLI keeps them.
+ */
+export const AGENT_HIDDEN_ACTIONS: readonly AuditAction[] = ["canary", "canary_alert"];
 
 export interface AuditEvent {
   timestamp: string;
@@ -418,7 +426,15 @@ export interface ExportOptions {
   since?: string;
   until?: string;
   format?: "jsonl" | "json" | "csv";
-  /** Drop events with these actions before rendering (e.g. MCP-facing exports hide canary trips) */
+  /**
+   * Drop events with these actions before rendering (e.g. MCP-facing exports
+   * hide canary trips). A filtered export also drops every event's
+   * `prevHash`: each one is the SHA-256 of the line before it, so the event
+   * after a removed line would name a hash that no exported line has, and
+   * re-hashing the export would point at exactly where a trip was cut out.
+   * A filtered export cannot be chain-verified anyway; `qring audit:export`
+   * (unfiltered) and `audit:verify` remain the integrity surfaces.
+   */
   excludeActions?: AuditAction[];
 }
 
@@ -453,7 +469,9 @@ export function exportAudit(opts: ExportOptions = {}): string {
   }
   if (opts.excludeActions?.length) {
     const excluded = new Set(opts.excludeActions);
-    events = events.filter((e) => !excluded.has(e.action));
+    events = events
+      .filter((e) => !excluded.has(e.action))
+      .map(({ prevHash: _prevHash, ...rest }) => rest);
   }
 
   if (opts.format === "json") {

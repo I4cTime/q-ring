@@ -3,7 +3,7 @@ import { toolAnnotations } from "../tool-annotations.js";
 import { z } from "zod";
 import { listSecrets } from "../../core/keyring.js";
 import { runHealthScan } from "../../core/agent.js";
-import { queryAudit } from "../../core/observer.js";
+import { queryAudit, AGENT_HIDDEN_ACTIONS } from "../../core/observer.js";
 import { execCommand } from "../../core/exec.js";
 import { scanCodebase } from "../../core/scan.js";
 import { lintFiles } from "../../core/linter.js";
@@ -19,6 +19,7 @@ export function registerToolingTools(server: McpServer): void {
       "[exec] Run a child shell command with project secrets injected as environment variables and any leaked secret values redacted from captured stdout/stderr before they return to the agent.",
       "Use to let an agent run a script that needs credentials (`npm run db:migrate`, `terraform plan`, `vercel deploy`) without ever putting plaintext values in the chat; prefer `env_generate` if you need to write a `.env` file to disk and `validate_secret` for upstream liveness checks.",
       "Spawns a real child process — has whatever side effects the command itself causes (writes, network, exec). Subject to BOTH tool policy and exec policy (allowlist/denylist). Returns a text body with `Exit code: N` then `STDOUT:` and `STDERR:` blocks; both streams are scrubbed against the secret values that were injected (verbatim; base64/hex/URL/JSON-encoded for values up to 256 chars; 16+ char slices of each credential part, skipping credential parts longer than 1024 chars, where a whole opaque value counts as one part). A scrubbed value reads `[QRING:REDACTED:<KEY_NAME>]`, naming the keyring key it came from.",
+      "Which secrets are injected: when the project's .q-ring.json declares a `secrets` manifest, only the declared keys (intersected with `keys`); without one, only credential-shaped names (…_KEY, …_TOKEN, …_SECRET, …_PASSWORD, …_URL, …_DSN, ...), and the result ends with a NOTE naming the skipped keys. On every path, keys named like process-control variables (NODE_OPTIONS, LD_PRELOAD, GIT_*, MAVEN_OPTS, ...) or that are not plain identifiers are never injected.",
     ].join(" "),
     {
       command: z
@@ -36,7 +37,7 @@ export function registerToolingTools(server: McpServer): void {
         .array(z.string())
         .optional()
         .describe(
-          "Whitelist of exact key names to inject. Omit to inject every secret in scope (subject to `tags`).",
+          "Whitelist of exact key names to inject. Omit to inject every allowed secret (the manifest's keys when the project declares one, else the credential-shaped names in scope; subject to `tags`).",
         ),
       tags: z
         .array(z.string())
@@ -83,6 +84,7 @@ export function registerToolingTools(server: McpServer): void {
         output.push(`Exit code: ${result.code}`);
         if (result.stdout) output.push(`STDOUT:\n${result.stdout}`);
         if (result.stderr) output.push(`STDERR:\n${result.stderr}`);
+        if (result.note) output.push(`NOTE: ${result.note}`);
 
         return text(output.join("\n\n"));
       } catch (err) {
@@ -155,6 +157,7 @@ export function registerToolingTools(server: McpServer): void {
           fix: params.fix,
           scope: params.scope as "global" | "project" | undefined,
           projectPath: params.projectPath,
+          source: "mcp",
         });
         if (results.length === 0) {
           return text("No hardcoded secrets found in the specified files.");
@@ -186,7 +189,10 @@ export function registerToolingTools(server: McpServer): void {
 
       const o = opts(params);
       const entries = listSecrets({ ...o, silent: true });
-      const audit = queryAudit({ limit: 500 });
+      // Agent-facing: never count canary trip or alert records.
+      const audit = queryAudit()
+        .filter((e) => !AGENT_HIDDEN_ACTIONS.includes(e.action))
+        .slice(0, 500);
 
       const accessMap = new Map<string, number>();
       for (const e of audit) {
@@ -243,7 +249,8 @@ export function registerToolingTools(server: McpServer): void {
       }
 
       const { startDashboardServer } = await import("../../core/dashboard.js");
-      dashboardInstance = startDashboardServer({ port: params.port });
+      // Started by an agent, so the agent can read it: hide canary records.
+      dashboardInstance = startDashboardServer({ port: params.port, agentView: true });
 
       return text(
         `Dashboard started at ${dashboardInstance.url}\nOpen this URL in a browser to see live quantum status. The token is required for access.`,
@@ -281,6 +288,8 @@ export function registerToolingTools(server: McpServer): void {
       const report = runHealthScan({
         autoRotate: params.autoRotate,
         projectPaths: params.projectPaths ?? [process.cwd()],
+        // Rotations are MCP writes: same key policy, same audit attribution.
+        writeSource: "mcp",
       });
       return text(JSON.stringify(report, null, 2));
     },

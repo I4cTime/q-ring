@@ -134,10 +134,13 @@ describe("buildSessions", () => {
 describe("canary visibility", () => {
   it("agentVisibleEvents strips canary trips and nothing else", () => {
     const events: AuditEvent[] = [
-      ev({ action: "canary", source: "mcp", agent: "a@1", key: "AWS_TRAP" }),
-      ev({ action: "read", source: "mcp", agent: "a@1", key: "REAL" }),
+      ev({ action: "canary", source: "mcp", agent: "a@1", key: "AWS_TRAP", prevHash: "h1" }),
+      ev({ action: "read", source: "mcp", agent: "a@1", key: "REAL", prevHash: "h2" }),
     ];
     expect(agentVisibleEvents(events).map((e) => e.action)).toEqual(["read"]);
+    // ...and the hash-chain links, which would otherwise expose where a
+    // trip line was cut out.
+    expect(agentVisibleEvents(events).every((e) => e.prevHash === undefined)).toBe(true);
   });
 
   it("the agent view never leaks a canary key name, the operator view keeps it", () => {
@@ -162,6 +165,36 @@ describe("canary visibility", () => {
     expect(agentView[0].countsByAction.canary).toBeUndefined();
     expect(agentView[0].eventCount).toBe(1);
     expect(JSON.stringify(agentView)).not.toContain("AWS_TRAP");
+  });
+});
+
+describe("blocked canary alert deliveries", () => {
+  it("are not trips: the operator's trip count is unchanged, and agents never see them", () => {
+    setAuditAgentLabel("cursor@9");
+    logAudit({ action: "read", key: "AWS_TRAP", scope: "q-ring:global", source: "mcp" });
+    logAudit({
+      action: "canary",
+      key: "AWS_TRAP",
+      scope: "q-ring:global",
+      source: "mcp",
+      detail: "CANARY TRIPPED",
+    });
+    logAudit({
+      action: "canary_alert",
+      key: "AWS_TRAP",
+      scope: "q-ring:global",
+      source: "mcp",
+      detail: "delivery blocked (http://10.0.0.5)",
+    });
+
+    const [operator] = listAgentSessions();
+    expect(operator.countsByAction.canary).toBe(1);
+    expect(operator.countsByAction.canary_alert).toBe(1);
+
+    const [agentView] = listAgentSessionsForAgents();
+    expect(agentView.countsByAction.canary_alert).toBeUndefined();
+    expect(agentView.eventCount).toBe(1);
+    expect(JSON.stringify(agentView)).not.toContain("delivery blocked");
   });
 });
 

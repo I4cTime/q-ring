@@ -19,6 +19,7 @@ import {
   type AuditEvent,
   type AccessAnomaly,
   type AuditAction,
+  AGENT_HIDDEN_ACTIONS,
 } from "./observer.js";
 import { collapseEnvironment, readProjectConfig, type CollapseResult } from "./collapse.js";
 import { listHooks, type HookEntry, type HookType } from "./hooks.js";
@@ -157,6 +158,36 @@ export interface AgentSessionSnapshot extends Omit<AgentSession, "events"> {
 
 const SESSION_RECENT_EVENTS = 10;
 
+/**
+ * An audit event as the dashboard ships it. The operator's dashboard sends
+ * whole events; an agent-view dashboard sends only the display fields, with
+ * no prevHash, pid or correlation id (see projectForAgent).
+ */
+export type DashboardAuditEvent = Pick<AuditEvent, "timestamp" | "action" | "source"> &
+  Partial<AuditEvent>;
+
+/** An anomaly whose sample events follow the same projection. */
+export type DashboardAnomaly = Omit<AccessAnomaly, "events"> & { events: DashboardAuditEvent[] };
+
+/**
+ * Agent-view projection of an audit event: what the dashboard renders and
+ * nothing that links events to the hash chain. With prevHash an agent could
+ * hash the visible lines and find the one whose predecessor was removed (a
+ * canary trip), the tell C5 closed for export_audit and sessions.
+ */
+function projectForAgent(e: AuditEvent): DashboardAuditEvent {
+  return {
+    timestamp: e.timestamp,
+    action: e.action,
+    source: e.source,
+    ...(e.key !== undefined ? { key: e.key } : {}),
+    ...(e.scope !== undefined ? { scope: e.scope } : {}),
+    ...(e.env !== undefined ? { env: e.env } : {}),
+    ...(e.agent !== undefined ? { agent: e.agent } : {}),
+    ...(e.detail !== undefined ? { detail: e.detail } : {}),
+  };
+}
+
 export interface DashboardSnapshot {
   /** Snapshot generation timestamp (ISO) */
   timestamp: string;
@@ -185,11 +216,11 @@ export interface DashboardSnapshot {
   /** In-memory tunnels */
   tunnels: TunnelSnapshot[];
   /** Recent audit events (most recent first; "list" filtered out) */
-  audit: AuditEvent[];
+  audit: DashboardAuditEvent[];
   /** Aggregate audit metrics (read counts, top keys, source breakdown) */
   auditMetrics: AuditMetrics;
   /** Detected access anomalies */
-  anomalies: AccessAnomaly[];
+  anomalies: DashboardAnomaly[];
   /** Agent sessions in the audit window (per-agent timelines, canary trips included — operator surface) */
   sessions: AgentSessionSnapshot[];
   /** Auto-detected environment & detection source */
@@ -374,7 +405,12 @@ function buildAuditMetrics(events: AuditEvent[]): AuditMetrics {
   };
 }
 
-export function collectSnapshot(): DashboardSnapshot {
+/**
+ * @param agentView drop the actions agents must never see (canary trips and
+ *   alert records). Set for a dashboard an MCP agent started: it holds the
+ *   URL and token, so it can read every snapshot.
+ */
+export function collectSnapshot(agentView = false): DashboardSnapshot {
   const projectPath = process.cwd();
   const entries = listSecrets({ source: "api", silent: true, projectPath });
 
@@ -403,9 +439,14 @@ export function collectSnapshot(): DashboardSnapshot {
 
   const auditWindow = queryAudit({
     since: new Date(Date.now() - AUDIT_WINDOW_SECONDS * 1000).toISOString(),
-  }).filter((e) => e.action !== "list");
+  }).filter((e) => e.action !== "list" && !(agentView && AGENT_HIDDEN_ACTIONS.includes(e.action)));
 
-  const recent = auditWindow.slice(0, 80);
+  const recent: DashboardAuditEvent[] = agentView
+    ? auditWindow.slice(0, 80).map(projectForAgent)
+    : auditWindow.slice(0, 80);
+  const anomalies: DashboardAnomaly[] = agentView
+    ? detectAnomalies().map((a) => ({ ...a, events: a.events.map(projectForAgent) }))
+    : detectAnomalies();
 
   const sessions = buildSessions(auditWindow, SESSION_RECENT_EVENTS).map<AgentSessionSnapshot>(
     ({ events, ...summary }) => ({
@@ -453,7 +494,7 @@ export function collectSnapshot(): DashboardSnapshot {
     tunnels: tunnelList(),
     audit: recent,
     auditMetrics: buildAuditMetrics(auditWindow),
-    anomalies: detectAnomalies(),
+    anomalies,
     sessions,
     environment: collapseEnvironment({ projectPath }),
     manifest: buildManifest(projectPath, secrets),
@@ -475,6 +516,8 @@ export function collectSnapshot(): DashboardSnapshot {
 
 export interface DashboardServerOptions {
   port?: number;
+  /** Started for an MCP agent: snapshots omit canary records (see collectSnapshot). */
+  agentView?: boolean;
 }
 
 // Enforced on every response. The page is fully self-contained (inline
@@ -516,7 +559,7 @@ export function startDashboardServer(options: DashboardServerOptions = {}): {
   const html = getDashboardHtml(token);
 
   function broadcast() {
-    const snapshot = collectSnapshot();
+    const snapshot = collectSnapshot(options.agentView);
     const data = `data: ${JSON.stringify(snapshot)}\n\n`;
     for (const res of clients) {
       if (res.writableEnded || res.destroyed) {
@@ -580,7 +623,7 @@ export function startDashboardServer(options: DashboardServerOptions = {}): {
         Connection: "keep-alive",
       });
 
-      const snapshot = collectSnapshot();
+      const snapshot = collectSnapshot(options.agentView);
       res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
 
       clients.add(res);
@@ -589,7 +632,7 @@ export function startDashboardServer(options: DashboardServerOptions = {}): {
     }
 
     if (pathname === "/api/status") {
-      const snapshot = collectSnapshot();
+      const snapshot = collectSnapshot(options.agentView);
       res.writeHead(200, {
         ...SECURITY_HEADERS,
         "Content-Type": "application/json",

@@ -70,6 +70,24 @@ describe("pushSecrets", () => {
     expect(pushCall![1]).not.toContain("secret-value-1");
   });
 
+  it("never hands q-ring's master-key env vars to the platform CLI", () => {
+    process.env.QRING_FILE_PASSPHRASE = "file-store-master-key";
+    process.env.QRING_MEMORY_PASSPHRASE = "memory-master-key";
+    try {
+      setSecret("K", "value-long", { scope: "project", projectPath: project, silent: true });
+      pushSecrets({ target: "github", keys: ["K"], projectPath: project, silent: true });
+      const pushCall = spawnSyncMock.mock.calls.find((c) => c[1]?.includes("set"));
+      const env = pushCall![2].env as Record<string, string>;
+      expect(env).toBeDefined();
+      expect(env.QRING_FILE_PASSPHRASE).toBeUndefined();
+      expect(env.QRING_MEMORY_PASSPHRASE).toBeUndefined();
+      expect(env.PATH).toBe(process.env.PATH);
+    } finally {
+      delete process.env.QRING_FILE_PASSPHRASE;
+      delete process.env.QRING_MEMORY_PASSPHRASE;
+    }
+  });
+
   it("passes --repo to gh when given", () => {
     setSecret("K", "value-long", { scope: "project", projectPath: project, silent: true });
     pushSecrets({ target: "github", keys: ["K"], repo: "I4cTime/q-ring", projectPath: project, silent: true });
@@ -166,6 +184,55 @@ describe("pushSecrets — fly", () => {
     const result = pushSecrets({ target: "fly", keys: ["K"], projectPath: project, dryRun: true, silent: true });
     expect(result.pushed).toEqual(["K"]);
     expect(spawnSyncMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("pushSecrets — values that would inject extra variables", () => {
+  it("fly: refuses a value that closes the triple quote, in a dry run too", () => {
+    const evil = 'x"""\nDATABASE_URL="""postgres://attacker.example/db';
+    setSecret("FLY_KEY", evil, { scope: "project", projectPath: project, silent: true });
+
+    for (const dryRun of [true, false]) {
+      spawnSyncMock.mockClear();
+      const result = pushSecrets({
+        target: "fly",
+        keys: ["FLY_KEY"],
+        projectPath: project,
+        silent: true,
+        dryRun,
+      });
+      expect(result.pushed).toEqual([]);
+      expect(result.failed[0].key).toBe("FLY_KEY");
+      expect(result.failed[0].error).toMatch(/cannot quote/);
+      expect(pushCalls()).toHaveLength(0);
+    }
+  });
+
+  it("netlify: refuses a value with a newline instead of writing it raw", () => {
+    const evil = "line1\nNODE_OPTIONS=--require /tmp/evil.js";
+    setSecret("NL_KEY", evil, { scope: "project", projectPath: project, silent: true });
+
+    const result = pushSecrets({
+      target: "netlify",
+      keys: ["NL_KEY"],
+      projectPath: project,
+      silent: true,
+    });
+
+    expect(result.pushed).toEqual([]);
+    expect(result.failed[0].error).toMatch(/no dotenv line holds it exactly/);
+    expect(pushCalls()).toHaveLength(0);
+  });
+
+  it("netlify: still pushes quotable values", () => {
+    setSecret("NL_KEY", "has'single", { scope: "project", projectPath: project, silent: true });
+    const result = pushSecrets({
+      target: "netlify",
+      keys: ["NL_KEY"],
+      projectPath: project,
+      silent: true,
+    });
+    expect(result.pushed).toEqual(["NL_KEY"]);
   });
 });
 

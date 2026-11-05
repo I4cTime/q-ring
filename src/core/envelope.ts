@@ -201,6 +201,19 @@ export function serializeEnvelope(envelope: QuantumEnvelope): string {
 }
 
 /**
+ * The state stored for `env`, by own property only. Environment names come
+ * from callers (MCP `env`, `--env`, `?env=`, branch names), and a plain index
+ * would resolve "constructor", "toString" or "__proto__" to an
+ * Object.prototype member instead of "no such state".
+ */
+export function ownState(
+  states: Record<Environment, string>,
+  env: Environment | undefined,
+): string | undefined {
+  return env !== undefined && Object.hasOwn(states, env) ? states[env] : undefined;
+}
+
+/**
  * Resolve the concrete value from a quantum envelope.
  * If in superposition, collapses based on the provided environment.
  */
@@ -210,12 +223,14 @@ export function collapseValue(
 ): string | null {
   if (envelope.states) {
     const targetEnv = env ?? envelope.defaultEnv;
-    if (targetEnv && envelope.states[targetEnv]) {
-      return envelope.states[targetEnv];
+    const target = ownState(envelope.states, targetEnv);
+    if (target) {
+      return target;
     }
     // If no env match, try default, then return null
-    if (envelope.defaultEnv && envelope.states[envelope.defaultEnv]) {
-      return envelope.states[envelope.defaultEnv];
+    const fallback = ownState(envelope.states, envelope.defaultEnv);
+    if (fallback) {
+      return fallback;
     }
     // Last resort: return the first state
     const keys = Object.keys(envelope.states);

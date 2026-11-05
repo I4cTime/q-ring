@@ -29,7 +29,13 @@ import { hasApproval } from "./approval.js";
 import { notifyApprovalRequested } from "./notify.js";
 import { recordCanaryTrip } from "./canary-alert.js";
 import { registry as jitRegistry } from "./provision.js";
-import { checkKeyReadPolicy, checkSecretLifecyclePolicy, getPolicyRoot } from "./policy.js";
+import {
+  checkKeyReadPolicy,
+  checkSecretLifecyclePolicy,
+  getPolicyRoot,
+  loadPolicy,
+  type PolicyDecision,
+} from "./policy.js";
 
 function withJitEnvelopeLock<T>(service: string, key: string, fn: () => T): T {
   return withFileLock(`${service}\0${key}`, fn, { dir: "jit-locks" });
@@ -69,8 +75,10 @@ export interface SetSecretOptions extends KeyringOptions {
   expiresAt?: string;
   /** Description */
   description?: string;
-  /** Tags */
+  /** Tags. Omitted: the existing secret's tags are kept. */
   tags?: string[];
+  /** Remove the existing tags instead of keeping them (`qring set --clear-tags`). */
+  clearTags?: boolean;
   /** Format for auto-rotation (e.g. "api-key", "password", "uuid") */
   rotationFormat?: string;
   /** Prefix for auto-rotation (e.g. "sk-") */
@@ -87,6 +95,13 @@ export interface SetSecretOptions extends KeyringOptions {
   canary?: boolean;
   /** Provider token shape the canary value imitates */
   canaryFormat?: string;
+  /**
+   * Start from fresh metadata instead of inheriting it from an envelope
+   * already at this key: no createdAt, access count, entanglement, rotation,
+   * provider, approval or JIT settings carry over. Used when a canary is
+   * planted over an existing secret, which is a new credential, not an update.
+   */
+  freshMeta?: boolean;
 }
 
 export const MAX_ROTATE_EVERY_DAYS = 3650;
@@ -152,6 +167,19 @@ export function resolveTemplatesOffline(value: string, rawValues: Map<string, st
 }
 
 /**
+ * Tag half of the MCP key policy. `policy.mcp.deniedTags` can only be judged
+ * once the envelope (and so its tags) is in hand; the key-name half runs
+ * before any read. Throws like the key-name check does.
+ */
+function assertMcpTagPolicy(key: string, envelope: QuantumEnvelope, opts: KeyringOptions): void {
+  if ((opts.source ?? "cli") !== "mcp" || !envelope.meta.tags?.length) return;
+  const decision = checkKeyReadPolicy(key, envelope.meta.tags, opts.projectPath);
+  if (!decision.allowed) {
+    throw new Error(`Policy Denied: ${decision.reason}`);
+  }
+}
+
+/**
  * Retrieve a secret by key, with scope resolution and superposition collapse.
  * Records the access in the audit log (observer effect).
  */
@@ -180,6 +208,7 @@ export function getSecret(
   for (const { service, scope } of scopes) {
     const envelope = readEnvelope(service, key);
     if (!envelope) continue;
+    assertMcpTagPolicy(key, envelope, opts);
 
     // Check decay
     const decay = checkDecay(envelope);
@@ -303,10 +332,100 @@ export function getEnvelope(
 
   for (const { service, scope } of scopes) {
     const envelope = readEnvelope(service, key);
-    if (envelope) return { envelope, scope };
+    if (envelope) {
+      assertMcpTagPolicy(key, envelope, opts);
+      return { envelope, scope };
+    }
   }
 
   return null;
+}
+
+/**
+ * An MCP write is held to the same key policy as an MCP read or delete: an
+ * agent that may not read or delete a key (deniedKeys, readableKeys,
+ * deniedTags on the stored secret) may not overwrite it either. CLI and
+ * other local writes are the operator's and stay unrestricted.
+ */
+function writeDecision(
+  key: string,
+  storedTags: string[] | undefined,
+  opts: KeyringOptions,
+): PolicyDecision {
+  if ((opts.source ?? "cli") !== "mcp") return { allowed: true, policySource: "local" };
+  return checkKeyReadPolicy(key, storedTags, opts.projectPath);
+}
+
+/**
+ * Would `setSecret(key, …, opts)` be allowed by key policy? Bulk writers
+ * (import_dotenv, teleport_unpack, lint_files --fix) call this for every key
+ * before writing any, so one protected key is reported and skipped instead
+ * of aborting the batch halfway with earlier keys already written. Judged
+ * against the tags of the secret currently stored at the write scope.
+ */
+export function checkKeyWritePolicy(key: string, opts: KeyringOptions = {}): PolicyDecision {
+  const source = opts.source ?? "cli";
+  // Local writes are the operator's: no policy, and no keyring reads.
+  if (source !== "mcp") return { allowed: true, policySource: "local" };
+
+  const refuse = (decision: PolicyDecision): PolicyDecision => {
+    logAudit({
+      action: "policy_deny",
+      key,
+      scope: opts.scope ?? "global",
+      source,
+      detail: `write refused: ${decision.reason ?? "denied by policy"}`,
+    });
+    return decision;
+  };
+
+  // deniedKeys / readableKeys judge the name alone: no read needed.
+  const byName = checkKeyReadPolicy(key, undefined, opts.projectPath);
+  if (!byName.allowed) return refuse(byName);
+  // Only deniedTags needs the stored envelopes; skip the reads without it.
+  if (!loadPolicy(opts.projectPath).mcp?.deniedTags?.length) return byName;
+
+  const { service } = resolveScope({ ...opts, scope: opts.scope ?? "global" })[0];
+  // Every copy the operator's scope-less resolution could land on, not only
+  // the write scope: an untagged project copy written over MCP would
+  // otherwise shadow a tag-denied global one (project wins resolution) and
+  // hand the agent's value to every `qring run` / `exec` in the project.
+  const services = new Set([
+    service,
+    ...resolveScope({ ...opts, scope: undefined }).map((s) => s.service),
+  ]);
+  for (const svc of services) {
+    const decision = writeDecision(key, readEnvelope(svc, key)?.meta.tags, opts);
+    if (!decision.allowed) return refuse(decision);
+  }
+  return byName;
+}
+
+/**
+ * Entangled partners share deny tags: the tags of `tags` that the governing
+ * policy lists in `policy.mcp.deniedTags`. Otherwise a key linked to a
+ * secret that is later tagged (say `prod`) keeps receiving its value on
+ * every write, untagged and readable by an agent. If the policy cannot be
+ * read, every tag is shared (fail closed).
+ */
+function sharedDenyTags(tags: string[] | undefined, projectPath?: string): string[] {
+  if (!tags?.length) return [];
+  let denied: string[] | undefined;
+  try {
+    denied = loadPolicy(projectPath).mcp?.deniedTags;
+  } catch {
+    return [...tags];
+  }
+  if (!denied?.length) return [];
+  return tags.filter((t) => denied.includes(t));
+}
+
+/** Add `extra` to an envelope's tags; returns the tags that were new. */
+function inheritTags(envelope: QuantumEnvelope, extra: string[]): string[] {
+  const current = envelope.meta.tags ?? [];
+  const added = extra.filter((t) => !current.includes(t));
+  if (added.length) envelope.meta.tags = [...current, ...added];
+  return added;
 }
 
 /**
@@ -322,8 +441,15 @@ export function setSecret(
   const { service } = scopes[0];
   const source = opts.source ?? "cli";
 
+  const current = readEnvelope(service, key);
+
+  const decision = checkKeyWritePolicy(key, { ...opts, scope });
+  if (!decision.allowed) {
+    throw new Error(`Policy Denied: ${decision.reason}`);
+  }
+
   // Check if there's an existing envelope to preserve metadata
-  const existing = readEnvelope(service, key);
+  const existing = opts.freshMeta ? null : current;
 
   let envelope: QuantumEnvelope;
 
@@ -351,7 +477,13 @@ export function setSecret(
   const canaryFlag = opts.canary ?? existing?.meta.canary;
   const canaryFmt = opts.canaryFormat ?? existing?.meta.canaryFormat;
 
-  const mergedTags = opts.tags ?? existing?.meta.tags;
+  // Tags and description carry over when the write passes none, like the
+  // rotation, approval and JIT settings above: re-setting or rotating a
+  // value must never silently drop a `prod` tag and with it the deniedTags
+  // protection. `--clear-tags` removes tags explicitly; passing tags
+  // replaces them.
+  const mergedTags = opts.clearTags ? undefined : (opts.tags ?? existing?.meta.tags);
+  const mergedDescription = opts.description ?? existing?.meta.description;
   const ttlForPolicy = opts.ttlSeconds ?? existing?.meta.ttlSeconds;
   const life = checkSecretLifecyclePolicy(
     {
@@ -370,8 +502,8 @@ export function setSecret(
     envelope = createEnvelope("", {
       states: opts.states,
       defaultEnv: opts.defaultEnv,
-      description: opts.description,
-      tags: opts.tags,
+      description: mergedDescription,
+      tags: mergedTags,
       ttlSeconds: opts.ttlSeconds,
       expiresAt: opts.expiresAt,
       entangled: existing?.meta.entangled,
@@ -387,8 +519,8 @@ export function setSecret(
     });
   } else {
     envelope = createEnvelope(value, {
-      description: opts.description,
-      tags: opts.tags,
+      description: mergedDescription,
+      tags: mergedTags,
       ttlSeconds: opts.ttlSeconds,
       expiresAt: opts.expiresAt,
       entangled: existing?.meta.entangled,
@@ -413,42 +545,53 @@ export function setSecret(
   writeEnvelope(service, key, envelope);
   logAudit({ action: "write", key, scope, source });
 
-  // Propagate to entangled secrets
-  const entangled = findEntangled({ service, key });
+  // Propagate to entangled secrets. A canary never propagates: copying its
+  // fake value into a partner would overwrite a real credential with noise.
+  const entangled = canaryFlag ? [] : findEntangled({ service, key });
+  const denyTagsToShare = sharedDenyTags(envelope.meta.tags, opts.projectPath);
   for (const target of entangled) {
     try {
       // An MCP-sourced write must not silently propagate into a key the
       // caller's policy forbids — otherwise entanglement is a write primitive
       // that bypasses deniedKeys/deniedTags (A2). CLI writes are unrestricted
       // by design (the local operator already has full access).
+      const targetEnvelope = readEnvelope(target.service, target.key);
       if (source === "mcp") {
-        const decision = checkKeyReadPolicy(target.key, undefined, opts.projectPath);
+        // The target's stored tags count too: a deniedTags key is as
+        // protected from a propagated write as a deniedKeys one.
+        const decision = checkKeyReadPolicy(
+          target.key,
+          targetEnvelope?.meta.tags,
+          opts.projectPath,
+        );
         if (!decision.allowed) {
           logAudit({
-            action: "entangle",
+            action: "policy_deny",
             key: target.key,
             scope: "global",
             source,
-            detail: `blocked propagation from ${key}: ${decision.reason}`,
+            detail: `blocked entangled propagation from ${key}: ${decision.reason}`,
           });
           continue;
         }
       }
-      const targetEnvelope = readEnvelope(target.service, target.key);
-      if (targetEnvelope) {
+      // Nor does a real value propagate INTO a canary: the honeytoken would
+      // start holding a live credential.
+      if (targetEnvelope && !targetEnvelope.meta.canary) {
         if (opts.states) {
           targetEnvelope.states = opts.states;
         } else {
           targetEnvelope.value = value;
         }
         targetEnvelope.meta.updatedAt = new Date().toISOString();
+        const inherited = inheritTags(targetEnvelope, denyTagsToShare);
         writeEnvelope(target.service, target.key, targetEnvelope);
         logAudit({
           action: "entangle",
           key: target.key,
           scope: "global",
           source,
-          detail: `propagated from ${key}`,
+          detail: `propagated from ${key}${inherited.length ? `; tag: ${inherited.join(",")}` : ""}`,
         });
       }
     } catch {
@@ -484,12 +627,24 @@ export function deleteSecret(
 
   let deleted = false;
 
-  for (const { service, scope } of scopes) {
+  // Read every copy and check policy on all of them before deleting any:
+  // checking scope by scope deleted an allowed project copy and only then
+  // refused a tag-denied global one. One read per copy serves both the tag
+  // check and the canary check, so they judge the same envelope.
+  const copies = scopes.map(({ service, scope }) => ({
+    service,
+    scope,
+    existing: readEnvelope(service, key),
+  }));
+  for (const { existing } of copies) {
+    if (existing) assertMcpTagPolicy(key, existing, opts);
+  }
+
+  for (const { service, scope, existing } of copies) {
     const entry = new Entry(service, key);
     try {
       // Deleting a canary is how an attacker removes the tripwire before a
       // sweep — treat it as a trip, not a routine delete (S8, v0.16.2).
-      const existing = readEnvelope(service, key);
       if (entry.deleteCredential()) {
         deleted = true;
         if (existing?.meta.canary) {
@@ -540,7 +695,12 @@ export function disarmCanary(key: string, opts: KeyringOptions = {}): boolean {
 }
 
 /**
- * Check whether a secret exists in any applicable scope.
+ * Visibility check: does a live secret exist that this caller may see? For
+ * an MCP caller a key hidden by key policy (deniedKeys, readableKeys,
+ * deniedTags) answers false, exactly as get/list hide it.
+ *
+ * Write paths must not use this to decide "absent, so write": hidden is not
+ * absent. They use `secretExists` (the truth) and `checkKeyWritePolicy`.
  */
 export function hasSecret(
   key: string,
@@ -558,11 +718,30 @@ export function hasSecret(
   for (const { service } of scopes) {
     const envelope = readEnvelope(service, key);
     if (envelope) {
+      if (source === "mcp" && envelope.meta.tags?.length) {
+        if (!checkKeyReadPolicy(key, envelope.meta.tags, opts.projectPath).allowed) return false;
+      }
       const decay = checkDecay(envelope);
       if (!decay.isExpired) return true;
     }
   }
 
+  return false;
+}
+
+/**
+ * Existence check for write paths: is there a live (non-expired) secret at
+ * this key, whatever the caller may see? `skipExisting` in import_dotenv
+ * and the existing-key check in lint --fix need the true answer, or a
+ * secret hidden from the caller would read as absent and be overwritten.
+ * Callers pair it with `checkKeyWritePolicy`, which runs first, so a key
+ * the caller may not touch is reported as a policy skip, not as existing.
+ */
+export function secretExists(key: string, opts: KeyringOptions = {}): boolean {
+  for (const { service } of resolveScope(opts)) {
+    const envelope = readEnvelope(service, key);
+    if (envelope && !checkDecay(envelope).isExpired) return true;
+  }
   return false;
 }
 
@@ -626,7 +805,7 @@ export function listSecrets(opts: KeyringOptions = {}): SecretEntry[] {
 
   if (source === "mcp") {
     return sorted.filter((e) => {
-      const decision = checkKeyReadPolicy(e.key, undefined, opts.projectPath);
+      const decision = checkKeyReadPolicy(e.key, e.envelope?.meta.tags, opts.projectPath);
       return decision.allowed;
     });
   }
@@ -762,11 +941,32 @@ export function entangleSecrets(
     source: sourceOpts.source ?? "cli",
     policyRoot: getPolicyRoot(),
   });
+
+  // The link is bidirectional, so each side takes the other's deny tags
+  // now, before any value moves between them.
+  const inherited: string[] = [];
+  const sourceEnv = readEnvelope(source.service, source.key);
+  const targetEnv = readEnvelope(target.service, target.key);
+  if (sourceEnv && targetEnv) {
+    const toTarget = sharedDenyTags(sourceEnv.meta.tags, sourceOpts.projectPath);
+    const toSource = sharedDenyTags(targetEnv.meta.tags, sourceOpts.projectPath);
+    const addedToTarget = inheritTags(targetEnv, toTarget);
+    const addedToSource = inheritTags(sourceEnv, toSource);
+    if (addedToTarget.length) {
+      writeEnvelope(target.service, target.key, targetEnv);
+      inherited.push(`${targetKey}+${addedToTarget.join(",")}`);
+    }
+    if (addedToSource.length) {
+      writeEnvelope(source.service, source.key, sourceEnv);
+      inherited.push(`${sourceKey}+${addedToSource.join(",")}`);
+    }
+  }
+
   logAudit({
     action: "entangle",
     key: sourceKey,
     source: sourceOpts.source ?? "cli",
-    detail: `entangled with ${targetKey}`,
+    detail: `entangled with ${targetKey}${inherited.length ? `; tag: ${inherited.join(" ")}` : ""}`,
   });
 }
 

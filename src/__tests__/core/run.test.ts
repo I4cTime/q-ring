@@ -12,6 +12,7 @@ import { resetFakeKeyring } from "../helpers/fake-keyring.js";
 import { setSecret } from "../../core/keyring.js";
 import { clearCollapseCache } from "../../core/collapse.js";
 import { buildRunPlan, runCommand } from "../../core/run.js";
+import { execCommand } from "../../core/exec.js";
 
 let project: string;
 
@@ -151,5 +152,62 @@ describe("runCommand", () => {
         projectPath: project, silent: true, profile: "restricted", captureOutput: true,
       }),
     ).rejects.toThrow(/denies command/);
+  });
+
+  it("refuses an unknown profile instead of running unrestricted", async () => {
+    writeManifest({ PROFILE_TOKEN: { required: true } });
+    setSecret("PROFILE_TOKEN", "profile-secret-value", {
+      scope: "project",
+      projectPath: project,
+      silent: true,
+    });
+    await expect(
+      runCommand({
+        command: process.execPath,
+        args: ["-e", "console.log(process.env.PROFILE_TOKEN)"],
+        projectPath: project,
+        silent: true,
+        profile: "restriced",
+        captureOutput: true,
+      }),
+    ).rejects.toThrow(/Unknown exec profile "restriced".*restricted/);
+  });
+});
+
+describe("execCommand with an unknown profile", () => {
+  it("rejects before reading any secret or spawning", async () => {
+    setSecret("EXEC_TOKEN", "exec-secret-value", { scope: "global", silent: true });
+    await expect(
+      execCommand({ command: "true", args: [], profile: "nope", silent: true }),
+    ).rejects.toThrow(/Unknown exec profile "nope"/);
+  });
+});
+
+describe("child environment hygiene", () => {
+  it("exec/run children never inherit q-ring's master-key env vars", async () => {
+    writeManifest({ CHILD_TOKEN: { required: true } });
+    setSecret("CHILD_TOKEN", "child-token-value", {
+      scope: "project",
+      projectPath: project,
+      silent: true,
+    });
+    process.env.QRING_FILE_PASSPHRASE = "file-store-master-key";
+    process.env.QRING_MEMORY_PASSPHRASE = "memory-master-key";
+    try {
+      const result = await runCommand({
+        command: process.execPath,
+        args: [
+          "-e",
+          "console.log(JSON.stringify([process.env.QRING_FILE_PASSPHRASE ?? null, process.env.QRING_MEMORY_PASSPHRASE ?? null, process.env.CHILD_TOKEN ? 'injected' : null]))",
+        ],
+        projectPath: project,
+        silent: true,
+        captureOutput: true,
+      });
+      expect(JSON.parse(result.stdout.trim())).toEqual([null, null, "injected"]);
+    } finally {
+      delete process.env.QRING_FILE_PASSPHRASE;
+      delete process.env.QRING_MEMORY_PASSPHRASE;
+    }
   });
 });

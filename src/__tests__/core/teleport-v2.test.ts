@@ -326,3 +326,44 @@ describe("teleport identity in the keyring", () => {
     expect(() => loadTeleportIdentity()).toThrow(/ERR_TELEPORT_BAD_IDENTITY/);
   });
 });
+
+describe("bundle strings that reach the terminal", () => {
+  const ESC = "\u001b";
+
+  it("refuses key names with control characters (ANSI could hide what an unpack writes)", () => {
+    const hiding = `HARMLESS${ESC}[1A${ESC}[2K`;
+    const v1 = teleportPack([{ key: hiding, value: "v" }], "pw");
+    expect(() => teleportUnpack(v1, "pw")).toThrow(/ERR_TELEPORT_CORRUPT/);
+
+    const { privateKey, publicKey } = generateKeyPairSync("x25519");
+    const v2 = teleportPackFor([{ key: hiding, value: "v" }], [formatRecipient(publicKey)]);
+    expect(() => teleportUnpackWith(v2, privateKey)).toThrow(/ERR_TELEPORT_CORRUPT/);
+
+    const badScope = teleportPack(
+      [{ key: "OK_KEY", value: "v", scope: `global${ESC}]52;c;` }],
+      "pw",
+    );
+    expect(() => teleportUnpack(badScope, "pw")).toThrow(/ERR_TELEPORT_CORRUPT/);
+    expect(() => teleportUnpack(teleportPack([{ key: "", value: "v" }], "pw"), "pw")).toThrow(
+      /ERR_TELEPORT_CORRUPT/,
+    );
+  });
+
+  it("refuses a recipient id that is not 8 hex chars (printed by --dry-run unauthenticated)", () => {
+    const { publicKey } = generateKeyPairSync("x25519");
+    const bundle = teleportPackFor([{ key: "K", value: "v" }], [formatRecipient(publicKey)]);
+    const raw = JSON.parse(Buffer.from(bundle, "base64").toString("utf8"));
+    raw.recipients[0].id = `${ESC}[32m(you)${ESC}[0m`;
+    const tampered = Buffer.from(JSON.stringify(raw)).toString("base64");
+    expect(() => inspectTeleportBundle(tampered)).toThrow(/ERR_TELEPORT_CORRUPT/);
+  });
+
+  it("still round-trips ordinary keys, including dots and dashes", () => {
+    const keys = ["API_KEY", "service.token", "my-key", "Ünïcode_KEY"];
+    const bundle = teleportPack(
+      keys.map((key) => ({ key, value: "v", scope: "project" })),
+      "pw",
+    );
+    expect(teleportUnpack(bundle, "pw").secrets.map((s) => s.key)).toEqual(keys);
+  });
+});

@@ -3,7 +3,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { setSecret, hasSecret, type SetSecretOptions } from "./keyring.js";
+import { setSecret, secretExists, checkKeyWritePolicy, type SetSecretOptions } from "./keyring.js";
 
 export interface ImportOptions {
   scope?: "global" | "project";
@@ -16,7 +16,10 @@ export interface ImportOptions {
 
 export interface ImportResult {
   imported: string[];
+  /** Keys left alone because they already exist (skipExisting). */
   skipped: string[];
+  /** Keys key policy does not let this caller write, with the reason. */
+  skippedByPolicy: { key: string; reason: string }[];
   total: number;
 }
 
@@ -94,11 +97,24 @@ export function importDotenv(
   const result: ImportResult = {
     imported: [],
     skipped: [],
+    skippedByPolicy: [],
     total: pairs.size,
   };
 
   for (const [key, value] of pairs) {
-    if (options.skipExisting && hasSecret(key, {
+    // Policy first, for every key: a protected key is reported and skipped,
+    // never thrown on halfway through the file after earlier keys landed.
+    const decision = checkKeyWritePolicy(key, {
+      scope: options.scope ?? "global",
+      projectPath: options.projectPath ?? process.cwd(),
+      source: options.source ?? "cli",
+    });
+    if (!decision.allowed) {
+      result.skippedByPolicy.push({ key, reason: decision.reason ?? "denied by policy" });
+      continue;
+    }
+
+    if (options.skipExisting && secretExists(key, {
       scope: options.scope,
       projectPath: options.projectPath,
       source: options.source ?? "cli",

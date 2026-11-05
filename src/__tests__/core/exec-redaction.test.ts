@@ -232,3 +232,23 @@ describe("restricted exec profile denies interpreters (A3)", () => {
     }
   });
 });
+
+describe("getProfile rejects unknown profile names", () => {
+  it("throws naming the known profiles for a typo", () => {
+    expect(() => getProfile("restriced")).toThrow(
+      /Unknown exec profile "restriced"\. Known profiles: unrestricted, restricted, ci/,
+    );
+  });
+
+  it("does not resolve Object.prototype members as profiles", () => {
+    for (const name of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
+      expect(() => getProfile(name)).toThrow(/Unknown exec profile/);
+    }
+  });
+
+  it("still resolves the built-ins and defaults to unrestricted", () => {
+    expect(getProfile().name).toBe("unrestricted");
+    expect(getProfile("ci").name).toBe("ci");
+    expect(getProfile("restricted").name).toBe("restricted");
+  });
+});

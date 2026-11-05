@@ -21,6 +21,7 @@ import {
   getEnvelope,
   deleteSecret,
   exportSecrets,
+  entangleSecrets,
 } from "../../core/keyring.js";
 import { queryAudit } from "../../core/observer.js";
 import { notifyUser, notificationsEnabled } from "../../core/notify.js";
@@ -120,6 +121,61 @@ describe("plantCanary", () => {
 
     // Replanting over an existing canary never needs force.
     expect(() => plantCanary("REAL_KEY", { format: "github" })).not.toThrow();
+  });
+
+  it("a forced plant over a real secret starts fresh: plantedAt now, tripCount 0", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      setSecret("OLD_REAL", "real-value-123", {
+        scope: "global",
+        source: "cli",
+        rotateEveryDays: 30,
+        requiresApproval: true,
+      });
+      for (let i = 0; i < 3; i++) getSecret("OLD_REAL", { scope: "global", source: "cli" });
+
+      vi.setSystemTime(new Date("2026-06-01T00:00:00Z"));
+      plantCanary("OLD_REAL", { force: true });
+
+      const [status] = listCanaries({ scope: "global" }).filter((c) => c.key === "OLD_REAL");
+      expect(status.plantedAt).toBe("2026-06-01T00:00:00.000Z");
+      expect(status.tripCount).toBe(0);
+      expect(status.lastTrippedAt).toBeUndefined();
+
+      // None of the replaced secret's settings ride along on the canary.
+      const meta = getEnvelope("OLD_REAL", { scope: "global" })!.envelope.meta;
+      expect(meta.rotateEveryDays).toBeUndefined();
+      expect(meta.requiresApproval).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a forced plant never propagates the fake value into entangled real secrets", () => {
+    setSecret("LINKED_SRC", "real-shared-value", { scope: "global", source: "cli" });
+    setSecret("LINKED_DST", "real-shared-value", { scope: "global", source: "cli" });
+    entangleSecrets("LINKED_SRC", { scope: "global" }, "LINKED_DST", { scope: "global" });
+
+    plantCanary("LINKED_SRC", { force: true });
+
+    expect(getSecret("LINKED_DST", { scope: "global", silent: true })).toBe("real-shared-value");
+  });
+
+  it("a real write to an entangled partner never lands in a canary", () => {
+    plantCanary("TRAP", { format: "github" });
+    const trapValue = getSecret("TRAP", { scope: "global", silent: true });
+    setSecret("PARTNER", "first", { scope: "global", source: "cli" });
+    entangleSecrets("PARTNER", { scope: "global" }, "TRAP", { scope: "global" });
+
+    setSecret("PARTNER", "a-real-credential", { scope: "global", source: "cli" });
+
+    expect(getSecret("TRAP", { scope: "global", silent: true })).toBe(trapValue);
+    expect(getEnvelope("TRAP", { scope: "global" })?.envelope.meta.canary).toBe(true);
+  });
+
+  it("does not resolve Object.prototype members as formats", () => {
+    expect(() => plantCanary("PROTO", { format: "constructor" })).toThrow(/Unknown canary format/);
   });
 
   it("a real secret in another scope does not block the plant", () => {

@@ -36,7 +36,7 @@ import {
 import { plantCanary } from "../../core/canary.js";
 import { resetCanaryAlertThrottle } from "../../core/canary-alert.js";
 import { getSecret } from "../../core/keyring.js";
-import { queryAudit } from "../../core/observer.js";
+import { queryAudit, AGENT_HIDDEN_ACTIONS } from "../../core/observer.js";
 import { resetFakeKeyring } from "../helpers/fake-keyring.js";
 import { resetDeprecationWarnings, SILENCE_DEPRECATIONS_ENV } from "../../core/deprecation.js";
 
@@ -183,8 +183,18 @@ describe("sendCanaryAlerts", () => {
     const results = await sendCanaryAlerts(EVENT);
     expect(results[0].success).toBe(false);
     expect(httpRequestMock).not.toHaveBeenCalled();
-    const denies = queryAudit({ action: "policy_deny" });
-    expect(denies.some((e) => e.detail?.includes("canary alert SSRF blocked"))).toBe(true);
+    // Operator-only record under its own action: not a trip, so it never
+    // counts as one, and scheme + host only (the path is a credential).
+    expect(queryAudit({ action: "canary" })).toHaveLength(0);
+    const blocked = queryAudit({ action: "canary_alert" });
+    expect(blocked).toHaveLength(1);
+    expect(blocked[0].key).toBe(EVENT.key);
+    expect(blocked[0].detail).toBe("delivery blocked (https://internal.example)");
+    // Nothing an agent can see (MCP audit views drop AGENT_HIDDEN_ACTIONS)
+    // names the tripped key or mentions the alert.
+    const agentVisible = queryAudit().filter((e) => !AGENT_HIDDEN_ACTIONS.includes(e.action));
+    expect(agentVisible.some((e) => e.key === EVENT.key)).toBe(false);
+    expect(agentVisible.some((e) => e.detail?.includes("canary"))).toBe(false);
   });
 
   it("never sends the canary value", async () => {

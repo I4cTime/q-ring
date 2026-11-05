@@ -7,7 +7,7 @@
 
 import { listSecrets } from "./keyring.js";
 import { collapseEnvironment, readProjectConfig } from "./collapse.js";
-import { queryAudit } from "./observer.js";
+import { queryAudit, AGENT_HIDDEN_ACTIONS } from "./observer.js";
 import { listHooks } from "./hooks.js";
 import { registry as providerRegistry } from "./validate.js";
 import { registry as jitRegistry } from "./provision.js";
@@ -106,8 +106,12 @@ export function getProjectContext(opts: KeyringOptions = {}): ProjectContext {
     manifest = { declared: declaredKeys.length, missing };
   }
 
-  // Recent audit activity (last 20 events, redacted)
-  const recentEvents = queryAudit({ limit: 20 });
+  // Recent audit activity (last 20 agent-visible events, redacted). This
+  // context is served to agents (get_project_context): canary trips and
+  // canary alert records would name the honeytokens.
+  const recentEvents = queryAudit()
+    .filter((e) => !AGENT_HIDDEN_ACTIONS.includes(e.action))
+    .slice(0, 20);
   const recentActions = recentEvents.map((e) => ({
     action: e.action,
     key: e.key,

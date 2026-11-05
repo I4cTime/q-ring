@@ -18,7 +18,15 @@
  */
 
 import { Entry as NapiEntry, findCredentials as napiFindCredentials } from "@napi-rs/keyring";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  chmodSync,
+  renameSync,
+  rmSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { createCipheriv, createDecipheriv, randomBytes, pbkdf2Sync } from "node:crypto";
@@ -148,11 +156,27 @@ function saveStore(map: StoreMap, salt: string): void {
     ct.toString("base64"),
   ].join(":");
 
-  writeFileSync(path, blob + "\n", { mode: 0o600 });
+  // Write a fresh 0600 file beside the store, then rename it over the store.
+  // writeFileSync(path) truncated the one file holding every secret before
+  // writing it back, so a crash or a full disk mid-write lost the whole
+  // store, a concurrent reader (an MCP server) could read a half-written
+  // file, and a symlink at `path` was followed. rename is atomic on the same
+  // filesystem and replaces a symlink at `path` with a regular file instead
+  // of writing through it: the link's target is never modified. (The read
+  // before every write still follows the link, so a link to something that
+  // is not a q-ring store is refused by loadStore before anything is written.)
+  const tmp = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   try {
-    chmodSync(path, 0o600);
-  } catch {
-    /* best-effort */
+    writeFileSync(tmp, blob + "\n", { mode: 0o600, flag: "wx" });
+    try {
+      chmodSync(tmp, 0o600);
+    } catch {
+      /* best-effort */
+    }
+    renameSync(tmp, path);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
   }
 }
 

@@ -75,12 +75,28 @@ export const TeleportBundleSchema = z.object({
   iter: z.number().optional(),
 });
 
+/**
+ * Strings from a bundle are printed (dry-run listing, overwrite prompt,
+ * MCP output) and become keyring account names. A bundle comes from
+ * whoever holds a passphrase or, for v2, anyone who knows the recipient's
+ * public string, so control characters are refused: ANSI escapes in a key
+ * name could rewrite the terminal and hide which keys an unpack touches.
+ */
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/;
+const printable = (max: number) =>
+  z
+    .string()
+    .min(1)
+    .max(max)
+    .refine((s) => !CONTROL_CHARS.test(s), "must not contain control characters");
+
 export const TeleportPayloadSchema = z.object({
   secrets: z.array(
     z.object({
-      key: z.string(),
+      key: printable(256),
       value: z.string(),
-      scope: z.string().optional(),
+      scope: printable(64).optional(),
     }),
   ),
   exportedAt: z.string(),
@@ -259,7 +275,9 @@ export const TeleportBundleV2Schema = z.object({
   recipients: z
     .array(
       z.object({
-        id: z.string(),
+        // recipientId(): 8 lowercase hex chars. Printed by --dry-run before
+        // anything is authenticated, so nothing else is accepted.
+        id: z.string().regex(/^[0-9a-f]{8}$/),
         wrap: z.string(),
         iv: z.string(),
         tag: z.string(),

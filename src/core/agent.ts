@@ -10,7 +10,7 @@
  * Designed to run as `qring agent` or be invoked by the MCP server.
  */
 
-import { listSecrets, setSecret } from "./keyring.js";
+import { listSecrets, setSecret, checkKeyWritePolicy } from "./keyring.js";
 import { checkDecay } from "./envelope.js";
 import { detectAnomalies, logAudit } from "./observer.js";
 import { generateSecret } from "./noise.js";
@@ -26,6 +26,12 @@ export interface AgentConfig {
   projectPaths: string[];
   /** Verbose output */
   verbose: boolean;
+  /**
+   * Who the auto-rotation writes are attributed to and judged as. The MCP
+   * agent_scan tool passes "mcp" so its rotations face the same key policy
+   * as any other MCP write; the local daemon keeps "agent".
+   */
+  writeSource?: "agent" | "mcp";
 }
 
 export interface AgentReport {
@@ -36,6 +42,8 @@ export interface AgentReport {
   expired: number;
   anomalies: number;
   rotated: string[];
+  /** Expired keys auto-rotation left alone because key policy denies the write. */
+  rotationSkipped: { key: string; reason: string }[];
   warnings: string[];
 }
 
@@ -59,8 +67,10 @@ export function runHealthScan(config: Partial<AgentConfig> = {}): AgentReport {
     expired: 0,
     anomalies: 0,
     rotated: [],
+    rotationSkipped: [],
     warnings: [],
   };
+  const writeSource = cfg.writeSource ?? "agent";
 
   // Scan global scope
   const globalEntries = listSecrets({ scope: "global", source: "agent" });
@@ -84,21 +94,28 @@ export function runHealthScan(config: Partial<AgentConfig> = {}): AgentReport {
         `EXPIRED: ${entry.key} [${entry.scope}] — expired ${decay.timeRemaining}`,
       );
 
-      if (cfg.autoRotate) {
+      const writeOpts = {
+        scope: entry.scope,
+        projectPath: cfg.projectPaths[0],
+        source: writeSource,
+      };
+      const decision = cfg.autoRotate ? checkKeyWritePolicy(entry.key, writeOpts) : null;
+      if (decision && !decision.allowed) {
+        report.rotationSkipped.push({
+          key: entry.key,
+          reason: decision.reason ?? "denied by policy",
+        });
+      } else if (cfg.autoRotate) {
         const fmt = (entry.envelope?.meta.rotationFormat ?? "api-key") as import("./noise.js").NoiseFormat;
         const prefix = entry.envelope?.meta.rotationPrefix;
         const newValue = generateSecret({ format: fmt, prefix });
-        setSecret(entry.key, newValue, {
-          scope: entry.scope,
-          projectPath: cfg.projectPaths[0],
-          source: "agent",
-        });
+        setSecret(entry.key, newValue, writeOpts);
         report.rotated.push(entry.key);
         logAudit({
           action: "write",
           key: entry.key,
           scope: entry.scope,
-          source: "agent",
+          source: writeSource,
           detail: "auto-rotated by agent (expired)",
         });
         fireHooks({
@@ -106,7 +123,7 @@ export function runHealthScan(config: Partial<AgentConfig> = {}): AgentReport {
           key: entry.key,
           scope: entry.scope,
           timestamp: new Date().toISOString(),
-          source: "agent",
+          source: writeSource,
         }, entry.envelope?.meta.tags).catch(() => {});
       }
     } else if (decay.isStale) {

@@ -23,6 +23,7 @@ import { resolveRef } from "./refs.js";
 import { readProjectConfig } from "./collapse.js";
 import { logAudit } from "./observer.js";
 import type { KeyringOptions } from "./keyring.js";
+import { withoutQringCredentials } from "./child-env.js";
 
 export type PushTarget = "github" | "vercel" | "cloudflare" | "fly" | "railway" | "netlify";
 
@@ -91,12 +92,39 @@ interface TargetCommand {
 }
 
 /**
+ * Thrown by a line encoder when a key or value cannot be written so that
+ * the platform's parser reads back exactly one variable with exactly that
+ * value. Pushing it anyway would let a value smuggle extra variables into
+ * the deployment (`"""` or a newline ends the line early), so the key is
+ * reported as failed instead.
+ */
+class UnencodableError extends Error {}
+
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function assertLineKey(key: string, target: string): void {
+  if (!ENV_NAME.test(key)) {
+    throw new UnencodableError(
+      `"${key}" is not a plain variable name, so it cannot be written into a ${target} import line`,
+    );
+  }
+}
+
+/**
  * fly's `secrets import` parser (internal/command/secrets/parser.go) cuts an
  * unquoted value at the first `#` and strips surrounding quotes; a
  * triple-quoted value is taken verbatim, newlines included. Random secrets
- * contain `#` often enough that quoting is not optional.
+ * contain `#` often enough that quoting is not optional. A value containing
+ * `"""` (or ending in `"`) would close the quote early and the rest of it
+ * would be parsed as further NAME=VALUE lines, so it is refused.
  */
 function flyImportLine(key: string, value: string): string {
+  assertLineKey(key, "fly");
+  if (value.includes('"""') || value.endsWith('"')) {
+    throw new UnencodableError(
+      `the value contains """ or ends with ", which fly's import format cannot quote; set it with flyctl directly`,
+    );
+  }
   return `${key}="""${value}"""\n`;
 }
 
@@ -104,13 +132,17 @@ function flyImportLine(key: string, value: string): string {
  * One line the `dotenv` parser (which `netlify env:import` uses) reads back
  * exactly. Single quotes are literal in dotenv, so they are the default; a
  * value that itself contains `'` falls back to double quotes (where only the
- * escapes `\n`/`\r` expand), and only a value that has both quote kinds or a
- * newline goes out raw (where `#` starts a comment).
+ * escapes `\n`/`\r` expand). Anything else has no exact dotenv spelling: an
+ * unquoted line ends at a newline (the rest of the value would be read as
+ * further variables) and loses everything after a `#`, so it is refused.
  */
 function dotenvLine(key: string, value: string): string {
+  assertLineKey(key, "dotenv");
   if (!/['\r\n]/.test(value)) return `${key}='${value}'\n`;
   if (!/["\r\n]/.test(value) && !/\\[nr]/.test(value)) return `${key}="${value}"\n`;
-  return `${key}=${value}\n`;
+  throw new UnencodableError(
+    "the value has a newline, or both quote kinds, so no dotenv line holds it exactly; set it with the netlify CLI directly",
+  );
 }
 
 const TARGETS: Record<PushTarget, TargetCommand> = {
@@ -239,18 +271,32 @@ export function pushSecrets(opts: PushOptions): PushResult {
       continue;
     }
 
+    // Encode first, so a value that cannot be written exactly fails the key
+    // (in a dry run too) instead of injecting extra variables.
+    let input: string;
+    let fileContent: string | undefined;
+    try {
+      // File-fed CLIs get nothing on stdin; the value lives only in the temp file.
+      fileContent = target.file?.(key, value);
+      input = target.file ? "" : (target.stdin?.(key, value) ?? value);
+    } catch (err) {
+      if (!(err instanceof UnencodableError)) throw err;
+      result.failed.push({ key, error: err.message });
+      continue;
+    }
+
     if (opts.dryRun) {
       result.pushed.push(key);
       continue;
     }
 
-    // File-fed CLIs get nothing on stdin; the value lives only in the temp file.
-    const input = target.file ? "" : (target.stdin?.(key, value) ?? value);
     const invoke = (secretFile?: string): string | null => {
       for (const args of target.args(key, opts, secretFile)) {
         const child = spawnSync(target.binary, args, {
           input,
           cwd: opts.projectPath,
+          // Third-party platform CLIs never get q-ring's master keys.
+          env: withoutQringCredentials(process.env),
           encoding: "utf8",
           shell: false,
         });
@@ -260,9 +306,8 @@ export function pushSecrets(opts: PushOptions): PushResult {
       }
       return null;
     };
-    const failedInvocation = target.file
-      ? withSecretFile(target.file(key, value), invoke)
-      : invoke();
+    const failedInvocation =
+      fileContent !== undefined ? withSecretFile(fileContent, invoke) : invoke();
 
     if (failedInvocation) {
       result.failed.push({ key, error: failedInvocation });

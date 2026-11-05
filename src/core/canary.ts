@@ -168,7 +168,7 @@ export interface PlantOptions extends KeyringOptions {
  */
 export function plantCanary(key: string, opts: PlantOptions = {}): PlantResult {
   const formatName = opts.format ?? DEFAULT_CANARY_FORMAT;
-  const format = CANARY_FORMATS[formatName];
+  const format = Object.hasOwn(CANARY_FORMATS, formatName) ? CANARY_FORMATS[formatName] : undefined;
   if (!format) {
     throw new Error(
       `Unknown canary format "${formatName}". Available: ${Object.keys(CANARY_FORMATS).join(", ")}`,
@@ -186,12 +186,18 @@ export function plantCanary(key: string, opts: PlantOptions = {}): PlantResult {
       `"${key}" already holds a real secret in ${scope} scope. Use --force to replace it with a canary.`,
     );
   }
+  // A plant is a new credential, not an update of whatever was there: fresh
+  // metadata, so plantedAt is now and tripCount starts at 0 (inheriting the
+  // replaced secret's createdAt and access count made a forced plant read as
+  // already tripped), and no entanglement, rotation, approval or JIT settings
+  // of the replaced secret carry over.
   setSecret(key, value, {
     ...opts,
     scope,
     canary: true,
     canaryFormat: formatName,
     description: opts.description,
+    freshMeta: true,
   });
 
   return { key, value, format: formatName, scope };

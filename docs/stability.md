@@ -54,7 +54,7 @@ frozen; help text is not.
 
 | Command | Arguments | Aliases | Options |
 | --- | --- | --- | --- |
-| `qring set` | `<key>` `[value]` | - | `-g, --global`<br>`-p, --project`<br>`--team <id>`<br>`--org <id>`<br>`--project-path <path>`<br>`-e, --env <env>`<br>`--ttl <seconds>`<br>`--expires <iso>`<br>`--description <desc>`<br>`--tags <tags>`<br>`--rotation-format <format>`<br>`--rotation-prefix <prefix>`<br>`--rotate-every <days>`<br>`--requires-approval`<br>`--jit-provider <provider>` |
+| `qring set` | `<key>` `[value]` | - | `-g, --global`<br>`-p, --project`<br>`--team <id>`<br>`--org <id>`<br>`--project-path <path>`<br>`-e, --env <env>`<br>`--ttl <seconds>`<br>`--expires <iso>`<br>`--description <desc>`<br>`--tags <tags>`<br>`--clear-tags`<br>`--rotation-format <format>`<br>`--rotation-prefix <prefix>`<br>`--rotate-every <days>`<br>`--requires-approval`<br>`--jit-provider <provider>` |
 | `qring get` | `<key>` | - | `-g, --global`<br>`-p, --project`<br>`--team <id>`<br>`--org <id>`<br>`--project-path <path>`<br>`-e, --env <env>`<br>`--raw` |
 | `qring has` | `<key>` | - | `-g, --global`<br>`-p, --project`<br>`--team <id>`<br>`--org <id>`<br>`--project-path <path>`<br>`-q, --quiet` |
 | `qring delete` | `<key>` | `rm` | `-g, --global`<br>`-p, --project`<br>`--project-path <path>`<br>`-y, --yes`<br>`--json` |
@@ -146,7 +146,7 @@ tool is what `tools/list` returns; `src/mcp/tools/*.ts` is the source.
 | --- | --- | --- | --- |
 | 1 | `get_secret` | `key` | `scope`, `projectPath`, `env`, `teamId`, `orgId` |
 | 2 | `list_secrets` | - | `scope`, `projectPath`, `tag`, `expired`, `stale`, `filter`, `teamId`, `orgId` |
-| 3 | `set_secret` | `key`, `value` | `scope`, `projectPath`, `env`, `ttlSeconds`, `description`, `tags`, `rotationFormat`, `rotationPrefix`, `rotateEveryDays`, `teamId`, `orgId` |
+| 3 | `set_secret` | `key`, `value` | `scope`, `projectPath`, `env`, `ttlSeconds`, `description`, `tags`, `clearTags`, `rotationFormat`, `rotationPrefix`, `rotateEveryDays`, `teamId`, `orgId` |
 | 4 | `delete_secret` | `key` | `scope`, `projectPath`, `teamId`, `orgId` |
 | 5 | `has_secret` | `key` | `scope`, `projectPath`, `teamId`, `orgId` |
 | 6 | `export_secrets` | - | `format`, `keys`, `tags`, `scope`, `projectPath`, `env`, `teamId`, `orgId` |
