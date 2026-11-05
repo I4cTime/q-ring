@@ -559,12 +559,13 @@ export function deleteSecret(
 
   for (const { service, scope } of scopes) {
     const entry = new Entry(service, key);
-    const tagged = readEnvelope(service, key);
-    if (tagged) assertMcpTagPolicy(key, tagged, opts);
+    // One read serves both the tag-policy check and the canary check, so
+    // they judge the same envelope.
+    const existing = readEnvelope(service, key);
+    if (existing) assertMcpTagPolicy(key, existing, opts);
     try {
       // Deleting a canary is how an attacker removes the tripwire before a
       // sweep — treat it as a trip, not a routine delete (S8, v0.16.2).
-      const existing = readEnvelope(service, key);
       if (entry.deleteCredential()) {
         deleted = true;
         if (existing?.meta.canary) {
