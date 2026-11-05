@@ -52,7 +52,14 @@ export interface Redactor {
 export interface CollectStats {
   /** Entries whose value could not be read (and so are not in the set). */
   skipped: number;
+  /** When present, filled with the id (scope + key) of each entry that could not be read. */
+  failed?: string[];
+  /** When present, filled with id -> { key, value } for each entry that was read. */
+  read?: Map<string, { key: string; value: string }>;
 }
+
+/** Stable id of a keyring entry across rebuilds: scope plus key name. */
+const entryId = (scope: string, key: string) => `${scope}\u0000${key}`;
 
 /**
  * Gather every non-expired secret value in the resolvable scopes, with its
@@ -78,7 +85,11 @@ export function collectSecretValues(
       });
     } catch {
       stats.skipped++;
+      stats.failed?.push(entryId(entry.scope, entry.key));
       continue;
+    }
+    if (value && value.length >= MIN_REDACT_LENGTH) {
+      stats.read?.set(entryId(entry.scope, entry.key), { key: entry.key, value });
     }
     // The first key that supplies a value names it.
     if (value && value.length >= MIN_REDACT_LENGTH && !values.has(value)) {
@@ -123,12 +134,16 @@ export function createRedactor(opts: KeyringOptions = {}): Redactor {
   let failed = false;
   let builtAt = 0;
   let skipNoted = false;
+  // Last value read for each entry (scope + key). A key whose read fails on a
+  // refresh (D-Bus timeout, JIT provider error, template dependency) keeps
+  // its last good value in the set rather than silently leaving it.
+  let lastGood = new Map<string, { key: string; value: string }>();
 
   const ensure = () => {
     const now = Date.now();
     if (!failed && now - builtAt < REFRESH_MS) return;
     let entries: RedactionEntry[];
-    const stats: CollectStats = { skipped: 0 };
+    const stats: CollectStats = { skipped: 0, failed: [], read: new Map() };
     try {
       entries = collectSecretValues(opts, stats);
     } catch {
@@ -142,11 +157,22 @@ export function createRedactor(opts: KeyringOptions = {}): Redactor {
       }
       return;
     }
+    // Keep the previous value of every entry that failed to read this time.
+    // An entry that has never been read has nothing to keep and is skipped.
+    const nextGood = new Map(stats.read);
+    for (const id of stats.failed ?? []) {
+      const prev = lastGood.get(id);
+      if (!prev) continue;
+      nextGood.set(id, prev);
+      entries.push({ name: prev.key, value: prev.value });
+    }
+    lastGood = nextGood;
     if (stats.skipped > 0 && !skipNoted) {
       skipNoted = true;
       // Counts only: never a value or a key name.
       process.stderr.write(
-        `[QRING] airlock redaction: ${stats.skipped} secret(s) could not be read and are not redacted\n`,
+        `[QRING] airlock redaction: ${stats.skipped} secret(s) could not be read ` +
+          `(their last read values stay redacted; one never read is not)\n`,
       );
     }
     try {

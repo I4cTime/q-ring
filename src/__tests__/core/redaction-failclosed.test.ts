@@ -9,7 +9,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-const mode = vi.hoisted(() => ({ failFull: false, failVerbatim: false, failList: false }));
+const mode = vi.hoisted(() => ({
+  failFull: false,
+  failVerbatim: false,
+  failList: false,
+  failGetKey: null as string | null,
+}));
 
 vi.mock("../../core/redaction.js", async (importOriginal) => {
   const real = await importOriginal<typeof import("../../core/redaction.js")>();
@@ -39,6 +44,10 @@ vi.mock("../../core/keyring.js", async (importOriginal) => {
     listSecrets: (...args: Parameters<typeof real.listSecrets>) => {
       if (mode.failList) throw new Error("simulated keyring listing failure");
       return real.listSecrets(...args);
+    },
+    getSecret: (...args: Parameters<typeof real.getSecret>) => {
+      if (mode.failGetKey === args[0]) throw new Error("simulated transient read failure");
+      return real.getSecret(...args);
     },
   };
 });
@@ -71,6 +80,7 @@ beforeEach(() => {
   mode.failFull = false;
   mode.failVerbatim = false;
   mode.failList = false;
+  mode.failGetKey = null;
   vi.mocked(spawn).mockClear();
   resetFakeKeyring();
   auditDir = mkdtempSync(join(tmpdir(), "qring-failclosed-audit-"));
@@ -224,6 +234,52 @@ describe("airlock collection never fails open", () => {
     } finally {
       rmSync(projectDir, { recursive: true, force: true });
       clearPolicyCache();
+    }
+  });
+
+  it("a key whose read fails on a refresh keeps its last value in the set", () => {
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const other = "Other-Secret-Value-9876543210";
+      setSecret("STRIPE_KEY", SECRET, { scope: "global", silent: true });
+      setSecret("OTHER_KEY", other, { scope: "global", silent: true });
+      const r = createRedactor();
+      expect(r.text(`a ${SECRET} b ${other}`)).toBe(
+        "a [QRING:REDACTED:STRIPE_KEY] b [QRING:REDACTED:OTHER_KEY]",
+      );
+
+      // Refresh with STRIPE_KEY failing to read: it is skipped and counted,
+      // but its last good value stays in the set.
+      mode.failGetKey = "STRIPE_KEY";
+      vi.setSystemTime(Date.now() + 61_000);
+      expect(r.text(`a ${SECRET} b ${other}`)).toBe(
+        "a [QRING:REDACTED:STRIPE_KEY] b [QRING:REDACTED:OTHER_KEY]",
+      );
+      const notes = write.mock.calls
+        .map((c) => String(c[0]))
+        .filter((m) => m.includes("could not be read"));
+      expect(notes).toHaveLength(1);
+      expect(notes[0]).toContain("1 secret(s)");
+      expect(notes[0]).not.toContain("STRIPE_KEY");
+
+      // Still kept across a second failing refresh.
+      vi.setSystemTime(Date.now() + 61_000);
+      expect(r.text(SECRET)).toBe("[QRING:REDACTED:STRIPE_KEY]");
+    } finally {
+      vi.useRealTimers();
+      write.mockRestore();
+    }
+  });
+
+  it("a key that fails on the very first build is skipped (nothing to keep)", () => {
+    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      setSecret("STRIPE_KEY", SECRET, { scope: "global", silent: true });
+      mode.failGetKey = "STRIPE_KEY";
+      expect(createRedactor().text(SECRET)).toBe(SECRET);
+    } finally {
+      write.mockRestore();
     }
   });
 
