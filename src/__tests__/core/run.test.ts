@@ -12,6 +12,7 @@ import { resetFakeKeyring } from "../helpers/fake-keyring.js";
 import { setSecret } from "../../core/keyring.js";
 import { clearCollapseCache } from "../../core/collapse.js";
 import { buildRunPlan, runCommand } from "../../core/run.js";
+import { execCommand } from "../../core/exec.js";
 
 let project: string;
 
@@ -152,4 +153,33 @@ describe("runCommand", () => {
       }),
     ).rejects.toThrow(/denies command/);
   });
+
+  it("refuses an unknown profile instead of running unrestricted", async () => {
+    writeManifest({ PROFILE_TOKEN: { required: true } });
+    setSecret("PROFILE_TOKEN", "profile-secret-value", {
+      scope: "project",
+      projectPath: project,
+      silent: true,
+    });
+    await expect(
+      runCommand({
+        command: process.execPath,
+        args: ["-e", "console.log(process.env.PROFILE_TOKEN)"],
+        projectPath: project,
+        silent: true,
+        profile: "restriced",
+        captureOutput: true,
+      }),
+    ).rejects.toThrow(/Unknown exec profile "restriced".*restricted/);
+  });
 });
+
+describe("execCommand with an unknown profile", () => {
+  it("rejects before reading any secret or spawning", async () => {
+    setSecret("EXEC_TOKEN", "exec-secret-value", { scope: "global", silent: true });
+    await expect(
+      execCommand({ command: "true", args: [], profile: "nope", silent: true }),
+    ).rejects.toThrow(/Unknown exec profile "nope"/);
+  });
+});
+

@@ -60,9 +60,20 @@ const BUILTIN_PROFILES: Record<string, ExecProfile> = {
   },
 };
 
+/**
+ * Resolve an exec profile by name. An unknown name is an error: falling back
+ * to an empty profile would silently run a typo (`--profile restriced`) with
+ * no restrictions at all. Own-property lookup so `constructor`/`__proto__`
+ * cannot resolve to an Object.prototype member.
+ */
 export function getProfile(name?: string): ExecProfile {
   if (!name) return BUILTIN_PROFILES.unrestricted;
-  return BUILTIN_PROFILES[name] ?? { name };
+  if (!Object.hasOwn(BUILTIN_PROFILES, name)) {
+    throw new Error(
+      `Unknown exec profile "${name}". Known profiles: ${Object.keys(BUILTIN_PROFILES).join(", ")}`,
+    );
+  }
+  return BUILTIN_PROFILES[name];
 }
 
 export function listProfiles(): ExecProfile[] {
