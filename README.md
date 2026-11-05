@@ -1233,6 +1233,7 @@ Optional per-project configuration:
 - [Troubleshooting](docs/troubleshooting.md) — keyring backends, MCP connection, approval gate, policy pinning
 - [CLI ↔ MCP parity](docs/cli-mcp-parity.md) — every command mapped to its MCP tool
 - [Releasing](docs/releasing.md) — tag-driven release flow
+- [Stability](docs/stability.md) — the 1.0 contract: what is frozen, experimental, deprecated, and supported
 
 ## Contributing
 
@@ -1246,6 +1247,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide (dev environment, conv
   - **Kiro:** `pnpm run plugin:sync:kiro` copies `kiro-plugin/mcp.json` → `~/.kiro/settings/mcp.json`, plus `steering/` and `hooks/` (or pass a project `.kiro` path). Prefer adding `kiro-plugin/` as a [Power](https://kiro.dev/docs/powers/create/) from the Powers panel instead.
   - **Claude Code:** `pnpm run plugin:sync:claude` copies `claude-code-plugin/` into the current directory (or pass a project path; add `--user` to install at `~/.claude/`).
 - See also [docs/cli-mcp-parity.md](docs/cli-mcp-parity.md).
+
+## Stability
+
+0.19 is the release candidate for 1.0. The CLI commands and flags, the MCP tool names and input schemas, the MCP resource URIs, the `.q-ring.json` format, the keyring record format, the environment variables, the exit codes and the `[QRING:REDACTED]` token are frozen; from 1.0 they change only as semver allows, and anything removed is deprecated with a warning for at least one minor first. [docs/stability.md](docs/stability.md) lists exactly what is frozen, what stays experimental, what is deprecated in 0.19, and which versions receive fixes.
 
 ## 🔒 Security
 
