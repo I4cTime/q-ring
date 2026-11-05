@@ -19,6 +19,7 @@ import {
   type AuditEvent,
   type AccessAnomaly,
   type AuditAction,
+  AGENT_HIDDEN_ACTIONS,
 } from "./observer.js";
 import { collapseEnvironment, readProjectConfig, type CollapseResult } from "./collapse.js";
 import { listHooks, type HookEntry, type HookType } from "./hooks.js";
@@ -374,7 +375,12 @@ function buildAuditMetrics(events: AuditEvent[]): AuditMetrics {
   };
 }
 
-export function collectSnapshot(): DashboardSnapshot {
+/**
+ * @param agentView drop the actions agents must never see (canary trips and
+ *   alert records). Set for a dashboard an MCP agent started: it holds the
+ *   URL and token, so it can read every snapshot.
+ */
+export function collectSnapshot(agentView = false): DashboardSnapshot {
   const projectPath = process.cwd();
   const entries = listSecrets({ source: "api", silent: true, projectPath });
 
@@ -403,7 +409,7 @@ export function collectSnapshot(): DashboardSnapshot {
 
   const auditWindow = queryAudit({
     since: new Date(Date.now() - AUDIT_WINDOW_SECONDS * 1000).toISOString(),
-  }).filter((e) => e.action !== "list");
+  }).filter((e) => e.action !== "list" && !(agentView && AGENT_HIDDEN_ACTIONS.includes(e.action)));
 
   const recent = auditWindow.slice(0, 80);
 
@@ -475,6 +481,8 @@ export function collectSnapshot(): DashboardSnapshot {
 
 export interface DashboardServerOptions {
   port?: number;
+  /** Started for an MCP agent: snapshots omit canary records (see collectSnapshot). */
+  agentView?: boolean;
 }
 
 // Enforced on every response. The page is fully self-contained (inline
@@ -516,7 +524,7 @@ export function startDashboardServer(options: DashboardServerOptions = {}): {
   const html = getDashboardHtml(token);
 
   function broadcast() {
-    const snapshot = collectSnapshot();
+    const snapshot = collectSnapshot(options.agentView);
     const data = `data: ${JSON.stringify(snapshot)}\n\n`;
     for (const res of clients) {
       if (res.writableEnded || res.destroyed) {
@@ -580,7 +588,7 @@ export function startDashboardServer(options: DashboardServerOptions = {}): {
         Connection: "keep-alive",
       });
 
-      const snapshot = collectSnapshot();
+      const snapshot = collectSnapshot(options.agentView);
       res.write(`data: ${JSON.stringify(snapshot)}\n\n`);
 
       clients.add(res);
@@ -589,7 +597,7 @@ export function startDashboardServer(options: DashboardServerOptions = {}): {
     }
 
     if (pathname === "/api/status") {
-      const snapshot = collectSnapshot();
+      const snapshot = collectSnapshot(options.agentView);
       res.writeHead(200, {
         ...SECURITY_HEADERS,
         "Content-Type": "application/json",

@@ -3,7 +3,7 @@ import { toolAnnotations } from "../tool-annotations.js";
 import { z } from "zod";
 import { listSecrets } from "../../core/keyring.js";
 import { runHealthScan } from "../../core/agent.js";
-import { queryAudit } from "../../core/observer.js";
+import { queryAudit, AGENT_HIDDEN_ACTIONS } from "../../core/observer.js";
 import { execCommand } from "../../core/exec.js";
 import { scanCodebase } from "../../core/scan.js";
 import { lintFiles } from "../../core/linter.js";
@@ -187,7 +187,10 @@ export function registerToolingTools(server: McpServer): void {
 
       const o = opts(params);
       const entries = listSecrets({ ...o, silent: true });
-      const audit = queryAudit({ limit: 500 });
+      // Agent-facing: never count canary trip or alert records.
+      const audit = queryAudit()
+        .filter((e) => !AGENT_HIDDEN_ACTIONS.includes(e.action))
+        .slice(0, 500);
 
       const accessMap = new Map<string, number>();
       for (const e of audit) {
@@ -244,7 +247,8 @@ export function registerToolingTools(server: McpServer): void {
       }
 
       const { startDashboardServer } = await import("../../core/dashboard.js");
-      dashboardInstance = startDashboardServer({ port: params.port });
+      // Started by an agent, so the agent can read it: hide canary records.
+      dashboardInstance = startDashboardServer({ port: params.port, agentView: true });
 
       return text(
         `Dashboard started at ${dashboardInstance.url}\nOpen this URL in a browser to see live quantum status. The token is required for access.`,
