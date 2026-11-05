@@ -159,6 +159,19 @@ export function resolveTemplatesOffline(value: string, rawValues: Map<string, st
 }
 
 /**
+ * Tag half of the MCP key policy. `policy.mcp.deniedTags` can only be judged
+ * once the envelope (and so its tags) is in hand; the key-name half runs
+ * before any read. Throws like the key-name check does.
+ */
+function assertMcpTagPolicy(key: string, envelope: QuantumEnvelope, opts: KeyringOptions): void {
+  if ((opts.source ?? "cli") !== "mcp" || !envelope.meta.tags?.length) return;
+  const decision = checkKeyReadPolicy(key, envelope.meta.tags, opts.projectPath);
+  if (!decision.allowed) {
+    throw new Error(`Policy Denied: ${decision.reason}`);
+  }
+}
+
+/**
  * Retrieve a secret by key, with scope resolution and superposition collapse.
  * Records the access in the audit log (observer effect).
  */
@@ -187,6 +200,7 @@ export function getSecret(
   for (const { service, scope } of scopes) {
     const envelope = readEnvelope(service, key);
     if (!envelope) continue;
+    assertMcpTagPolicy(key, envelope, opts);
 
     // Check decay
     const decay = checkDecay(envelope);
@@ -310,7 +324,10 @@ export function getEnvelope(
 
   for (const { service, scope } of scopes) {
     const envelope = readEnvelope(service, key);
-    if (envelope) return { envelope, scope };
+    if (envelope) {
+      assertMcpTagPolicy(key, envelope, opts);
+      return { envelope, scope };
+    }
   }
 
   return null;
@@ -496,6 +513,8 @@ export function deleteSecret(
 
   for (const { service, scope } of scopes) {
     const entry = new Entry(service, key);
+    const tagged = readEnvelope(service, key);
+    if (tagged) assertMcpTagPolicy(key, tagged, opts);
     try {
       // Deleting a canary is how an attacker removes the tripwire before a
       // sweep — treat it as a trip, not a routine delete (S8, v0.16.2).
@@ -568,6 +587,9 @@ export function hasSecret(
   for (const { service } of scopes) {
     const envelope = readEnvelope(service, key);
     if (envelope) {
+      if (source === "mcp" && envelope.meta.tags?.length) {
+        if (!checkKeyReadPolicy(key, envelope.meta.tags, opts.projectPath).allowed) return false;
+      }
       const decay = checkDecay(envelope);
       if (!decay.isExpired) return true;
     }
@@ -636,7 +658,7 @@ export function listSecrets(opts: KeyringOptions = {}): SecretEntry[] {
 
   if (source === "mcp") {
     return sorted.filter((e) => {
-      const decision = checkKeyReadPolicy(e.key, undefined, opts.projectPath);
+      const decision = checkKeyReadPolicy(e.key, e.envelope?.meta.tags, opts.projectPath);
       return decision.allowed;
     });
   }
