@@ -10,7 +10,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { withoutQringCredentials } from "./child-env.js";
+import { withoutQringCredentials, isProcessControlEnvName } from "./child-env.js";
 import { StringDecoder } from "node:string_decoder";
 import { Transform } from "node:stream";
 import { listSecrets, getSecret, type KeyringOptions } from "./keyring.js";
@@ -236,6 +236,22 @@ export async function execCommand(opts: ExecOptions): Promise<ExecResult> {
       opts.tags!.some((t) => e.envelope?.meta.tags?.includes(t)),
     );
   }
+
+  // A secret named NODE_OPTIONS, LD_PRELOAD, PATH, BASH_ENV, ... is code
+  // that runs inside whatever command is allowed (`--import=data:...` needs
+  // no file). Anyone who can write a key (an MCP agent, a teleport bundle)
+  // could otherwise turn policy.exec.allowCommands into arbitrary
+  // execution. Only the local operator may inject one, by naming it in --keys.
+  entries = entries.filter((e) => {
+    if (!isProcessControlEnvName(e.key)) return true;
+    if ((opts.source ?? "cli") !== "mcp" && opts.keys?.includes(e.key)) return true;
+    if ((opts.source ?? "cli") !== "mcp") {
+      process.stderr.write(
+        `[QRING] not injecting "${e.key}": it controls process start-up; pass --keys ${e.key} to inject it deliberately\n`,
+      );
+    }
+    return false;
+  });
 
   for (const entry of entries) {
     if (entry.envelope) {

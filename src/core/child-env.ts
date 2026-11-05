@@ -25,3 +25,49 @@ export function withoutQringCredentials(
   }
   return out;
 }
+
+/**
+ * Variables that change what a process loads or runs before its own code:
+ * dynamic-linker preloads, interpreter start-up hooks, the command search
+ * path, shell start-up files, git's ssh command, npm's script shell. A
+ * secret with one of these names is not a credential; injected into a
+ * child, it is code execution inside an allowlisted command.
+ */
+const PROCESS_CONTROL_NAMES = new Set([
+  "PATH",
+  "NODE_OPTIONS",
+  "NODE_PATH",
+  "BASH_ENV",
+  "ENV",
+  "SHELLOPTS",
+  "BASHOPTS",
+  "PS4",
+  "PROMPT_COMMAND",
+  "IFS",
+  "PYTHONSTARTUP",
+  "PYTHONPATH",
+  "PYTHONHOME",
+  "PYTHONINSPECT",
+  "PERL5OPT",
+  "PERL5LIB",
+  "PERLLIB",
+  "RUBYOPT",
+  "RUBYLIB",
+  "JAVA_TOOL_OPTIONS",
+  "_JAVA_OPTIONS",
+  "JDK_JAVA_OPTIONS",
+  "GIT_SSH",
+  "GIT_SSH_COMMAND",
+  "GIT_EXEC_PATH",
+  "GIT_CONFIG_GLOBAL",
+  "GCONV_PATH",
+]);
+const PROCESS_CONTROL_PREFIXES = ["LD_", "DYLD_", "NPM_CONFIG_", "GIT_CONFIG_"];
+
+/** True for an env var name that steers process start-up rather than holding a value. */
+export function isProcessControlEnvName(name: string): boolean {
+  const upper = name.toUpperCase();
+  return (
+    PROCESS_CONTROL_NAMES.has(upper) || PROCESS_CONTROL_PREFIXES.some((p) => upper.startsWith(p))
+  );
+}
