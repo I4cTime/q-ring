@@ -67,7 +67,7 @@ export function clearCollapseCache(): void {
 
 /** Reset only the `.q-ring.json` cache (clearPolicyCache calls this too). */
 export function clearConfigCache(): void {
-  configCache = null;
+  configCache.clear();
 }
 
 export interface ManifestEntry {
@@ -101,12 +101,29 @@ export interface ProjectConfig {
 // what the cache saves is the JSON parse and, in loadPolicy, the schema check.
 // Callers get the same state object back while the text is unchanged, which is
 // what loadPolicy keys its own cache on.
+//
+// One slot per path, a few paths at most: the MCP server pins the policy root
+// to its cwd while agents pass their own projectPath for env detection, and a
+// single shared slot made those two evict each other, so every get_secret
+// re-parsed the file and re-ran the policy schema check.
 export type ProjectConfigState =
   | { state: "absent"; path: string; config: null; raw: null }
   | { state: "invalid"; path: string; config: null; raw: string | null; reason: string }
   | { state: "ok"; path: string; config: ProjectConfig; raw: string };
 
-let configCache: ProjectConfigState | null = null;
+const CONFIG_CACHE_MAX = 8;
+const configCache = new Map<string, ProjectConfigState>();
+
+/** Remember `state` for its path as the most recently used; drop the least recent past the cap. */
+function remember(state: ProjectConfigState): ProjectConfigState {
+  configCache.delete(state.path);
+  configCache.set(state.path, state);
+  if (configCache.size > CONFIG_CACHE_MAX) {
+    const oldest = configCache.keys().next().value;
+    if (oldest !== undefined) configCache.delete(oldest);
+  }
+  return state;
+}
 
 /**
  * Read `.q-ring.json` and say whether it is absent, present but unusable, or
@@ -115,33 +132,25 @@ let configCache: ProjectConfigState | null = null;
  */
 export function readProjectConfigState(projectPath?: string): ProjectConfigState {
   const path = join(projectPath ?? process.cwd(), ".q-ring.json");
+  const cached = configCache.get(path);
   let raw: string;
   try {
     raw = readFileSync(path, "utf8");
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ENOENT" || code === "ENOTDIR") {
-      if (configCache?.path === path && configCache.state === "absent") return configCache;
-      configCache = { state: "absent", path, config: null, raw: null };
-      return configCache;
+      if (cached?.state === "absent") return remember(cached);
+      return remember({ state: "absent", path, config: null, raw: null });
     }
     // Present but unreadable (EACCES, EISDIR, ...): unusable, so invalid. The
     // read is retried on every call, so this clears as soon as it succeeds.
     const reason = `cannot be read (${code ?? String(err)})`;
-    if (
-      configCache?.path === path &&
-      configCache.state === "invalid" &&
-      configCache.raw === null &&
-      configCache.reason === reason
-    ) {
-      return configCache;
+    if (cached?.state === "invalid" && cached.raw === null && cached.reason === reason) {
+      return remember(cached);
     }
-    configCache = { state: "invalid", path, config: null, raw: null, reason };
-    return configCache;
+    return remember({ state: "invalid", path, config: null, raw: null, reason });
   }
-  if (configCache && configCache.path === path && configCache.raw === raw) {
-    return configCache;
-  }
+  if (cached && cached.raw === raw) return remember(cached);
   let parsed: unknown;
   let reason: string | null = null;
   try {
@@ -152,11 +161,11 @@ export function readProjectConfigState(projectPath?: string): ProjectConfigState
   } catch (err) {
     reason = `is not valid JSON (${(err as Error).message})`;
   }
-  configCache =
+  return remember(
     reason === null
       ? { state: "ok", path, config: parsed as ProjectConfig, raw }
-      : { state: "invalid", path, config: null, raw, reason };
-  return configCache;
+      : { state: "invalid", path, config: null, raw, reason },
+  );
 }
 
 /**

@@ -94,11 +94,12 @@ export interface PolicyDecision {
 
 // Keyed on the state object readProjectConfigState returns. That object is reused
 // exactly while the file's text is unchanged and replaced when it changes, so
-// this cache can never outlive an edit (an mtime key could, #132).
-let cachedPolicy:
-  | { path: string; state: ProjectConfigState; policy: PolicyConfig; error?: undefined }
-  | { path: string; state: ProjectConfigState; error: PolicyConfigError; policy?: undefined }
-  | null = null;
+// this cache can never outlive an edit (an mtime key could, #132). A WeakMap
+// gives every cached path its own entry and lets an entry go when the config
+// cache drops its state.
+type CachedPolicy =
+  { policy: PolicyConfig; error?: undefined } | { error: PolicyConfigError; policy?: undefined };
+let cachedPolicy = new WeakMap<ProjectConfigState, CachedPolicy>();
 
 /**
  * Trusted policy root. When set (by the MCP server at startup), all policy
@@ -110,7 +111,7 @@ let policyRoot: string | null = null;
 
 export function setPolicyRoot(root: string): void {
   policyRoot = root;
-  cachedPolicy = null;
+  cachedPolicy = new WeakMap();
 }
 
 /** The pinned policy root, if the MCP server set one (else null). */
@@ -125,9 +126,10 @@ function resolvePolicyPath(projectPath?: string): string {
 export function loadPolicy(projectPath?: string): PolicyConfig {
   const pp = resolvePolicyPath(projectPath);
   const state = readProjectConfigState(pp);
-  if (cachedPolicy && cachedPolicy.path === pp && cachedPolicy.state === state) {
-    if (cachedPolicy.error) throw cachedPolicy.error;
-    return cachedPolicy.policy;
+  const hit = cachedPolicy.get(state);
+  if (hit) {
+    if (hit.error) throw hit.error;
+    return hit.policy;
   }
 
   if (state.state === "invalid") {
@@ -138,7 +140,7 @@ export function loadPolicy(projectPath?: string): PolicyConfig {
         `unparseable security policy (fail closed). Fix the file and retry.`,
     );
     console.error(`q-ring: ${error.message}`);
-    cachedPolicy = { path: pp, state, error };
+    cachedPolicy.set(state, { error });
     throw error;
   }
 
@@ -147,7 +149,7 @@ export function loadPolicy(projectPath?: string): PolicyConfig {
 
   if (rawPolicy === undefined || rawPolicy === null) {
     const policy: PolicyConfig = {};
-    cachedPolicy = { path: pp, state, policy };
+    cachedPolicy.set(state, { policy });
     return policy;
   }
 
@@ -163,17 +165,17 @@ export function loadPolicy(projectPath?: string): PolicyConfig {
     // Loud, and cached so it keeps throwing on every call until the file's
     // content changes (a dropped deny rule must never silently allow access).
     console.error(`q-ring: ${error.message}`);
-    cachedPolicy = { path: pp, state, error };
+    cachedPolicy.set(state, { error });
     throw error;
   }
 
-  cachedPolicy = { path: pp, state, policy: parsed.data };
+  cachedPolicy.set(state, { policy: parsed.data });
   return parsed.data;
 }
 
 /** Reset the policy cache and the `.q-ring.json` cache it reads through. */
 export function clearPolicyCache(): void {
-  cachedPolicy = null;
+  cachedPolicy = new WeakMap();
   clearConfigCache();
 }
 

@@ -413,3 +413,44 @@ describe("qring://canaries", () => {
     expect(c).toMatchObject({ key: "UNTOUCHED_TRAP", tripCount: 0, state: "quiet" });
   });
 });
+
+describe("introspection resources under a .q-ring.json that is not valid JSON", () => {
+  // Written after any setup that itself goes through the policy (setSecret,
+  // plantCanary); every read below must answer with data, never throw.
+  function corruptConfig() {
+    writeFileSync(join(projectDir, ".q-ring.json"), "{ not json");
+    clearPolicyCache();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("qring://policy reports the file as invalid", async () => {
+    corruptConfig();
+    const { json } = await read("qring://policy");
+    expect(json).toMatchObject({ valid: false, hasPolicy: true });
+    expect(json.file).toMatch(/\.q-ring\.json$/);
+    expect(json.error).toMatch(/not valid JSON/);
+  });
+
+  it("qring://rotation is hidden with a policyError and no key names", async () => {
+    setAged("STALE_KEY", "value-stale-bbbbbbbb", 100, 30);
+    corruptConfig();
+    const { json, text } = await read("qring://rotation");
+    expect(json).toMatchObject({ hidden: true, entries: [], dueCount: 0, scheduledCount: 0 });
+    expect(json.policyError).toMatch(/not valid JSON/);
+    expect(text).not.toContain("STALE_KEY");
+  });
+
+  it("qring://canaries is not exposed, with a policyError, even with the opt-in", async () => {
+    plantCanary("CORRUPT_TRAP", { format: "generic" });
+    process.env[CANARY_RESOURCE_ENV] = "1";
+    corruptConfig();
+    const { json, text } = await read("qring://canaries");
+    expect(json).toMatchObject({ exposed: false, canaries: [], alerts: [] });
+    expect(json.policyError).toMatch(/not valid JSON/);
+    expect(text).not.toContain("CORRUPT_TRAP");
+  });
+});

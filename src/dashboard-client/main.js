@@ -291,6 +291,12 @@ function PolicyCard({ snap, delay }) {
   const p = snap.policy || { counts: {} };
   const c = p.counts || {};
   const has = p.hasMcpPolicy || p.hasExecPolicy || p.hasSecretPolicy;
+  if (p.policyError) {
+    return html`<${Card} delay=${delay}>
+      <${CardTitle} icon=${icons.policy} title="Policy" />
+      <${Empty} cta=${html`fix <code>.q-ring.json</code>; every policy gate refuses until then`}>${p.policyError}<//>
+    <//>`;
+  }
   if (!has) {
     return html`<${Card} delay=${delay}>
       <${CardTitle} icon=${icons.policy} title="Policy" />

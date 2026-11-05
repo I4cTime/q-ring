@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -144,5 +144,118 @@ describe("a .q-ring.json that is not valid JSON fails closed", () => {
     expect(readProjectConfig(dir)).toBeNull();
     expect(readProjectConfigState(dir).state).toBe("invalid");
     expect(() => collapseEnvironment({ projectPath: dir })).not.toThrow();
+  });
+});
+
+describe("a .q-ring.json that exists but cannot be read fails closed", () => {
+  let errSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+    clearPolicyCache();
+    errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    errSpy.mockRestore();
+    clearPolicyCache();
+    try {
+      chmodSync(cfg, 0o644);
+    } catch {
+      /* not there, or a directory */
+    }
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("a directory named .q-ring.json throws, is cached, and clears when replaced", () => {
+    mkdirSync(cfg);
+    expect(() => loadPolicy(dir)).toThrow(PolicyConfigError);
+    expect(() => loadPolicy(dir)).toThrow(/cannot be read/);
+    expect(() => loadPolicy(dir)).toThrow(cfg);
+    expect(errSpy).toHaveBeenCalledTimes(1);
+
+    // Replace the directory with a valid file; no cache reset.
+    rmSync(cfg, { recursive: true, force: true });
+    writeFileSync(cfg, JSON.stringify({ policy: { mcp: { denyTools: ["x"] } } }), "utf8");
+    expect(loadPolicy(dir).mcp?.denyTools).toEqual(["x"]);
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "an unreadable file (mode 000) throws EACCES and clears once readable",
+    () => {
+      writeFileSync(cfg, JSON.stringify({ policy: { mcp: { denyTools: ["x"] } } }), "utf8");
+      chmodSync(cfg, 0o000);
+      expect(() => loadPolicy(dir)).toThrow(/cannot be read \(EACCES\)/);
+      expect(() => loadPolicy(dir)).toThrow(PolicyConfigError);
+      expect(errSpy).toHaveBeenCalledTimes(1);
+
+      chmodSync(cfg, 0o644);
+      expect(loadPolicy(dir).mcp?.denyTools).toEqual(["x"]);
+    },
+  );
+});
+
+describe("config cache keeps one entry per path (#132 follow-up)", () => {
+  const dirA = join(tmpdir(), `qring-config-cache-a-${process.pid}`);
+  const dirB = join(tmpdir(), `qring-config-cache-b-${process.pid}`);
+
+  beforeEach(() => {
+    for (const [d, tool] of [
+      [dirA, "a_tool"],
+      [dirB, "b_tool"],
+    ] as const) {
+      mkdirSync(d, { recursive: true });
+      writeFileSync(
+        join(d, ".q-ring.json"),
+        JSON.stringify({ policy: { mcp: { denyTools: [tool] } } }),
+      );
+    }
+    clearPolicyCache();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    clearPolicyCache();
+    rmSync(dirA, { recursive: true, force: true });
+    rmSync(dirB, { recursive: true, force: true });
+  });
+
+  it("alternating two paths re-uses state and policy with no re-parse", () => {
+    // Round 1 fills the cache: the MCP policy root and an agent projectPath.
+    const stateA = readProjectConfigState(dirA);
+    const stateB = readProjectConfigState(dirB);
+    const policyA = loadPolicy(dirA);
+    const policyB = loadPolicy(dirB);
+    expect(policyA.mcp?.denyTools).toEqual(["a_tool"]);
+    expect(policyB.mcp?.denyTools).toEqual(["b_tool"]);
+
+    const parse = vi.spyOn(JSON, "parse");
+    for (let i = 0; i < 3; i++) {
+      expect(readProjectConfigState(dirA)).toBe(stateA);
+      expect(readProjectConfig(dirB)).toBe(stateB.config);
+      expect(loadPolicy(dirA)).toBe(policyA); // same object: no schema re-check
+      expect(readProjectConfigState(dirB)).toBe(stateB);
+      expect(loadPolicy(dirB)).toBe(policyB);
+    }
+    expect(parse).not.toHaveBeenCalled();
+  });
+
+  it("drops the oldest path once more than 8 are cached", () => {
+    const first = readProjectConfigState(dirA);
+    for (let i = 0; i < 8; i++) readProjectConfigState(join(dirB, `missing-${i}`));
+    expect(readProjectConfigState(dirA)).not.toBe(first); // evicted, re-read
+    expect(readProjectConfigState(dirA)).toEqual(first);
+  });
+
+  it("keeps a recently used path when an older one is evicted", () => {
+    const a = readProjectConfigState(dirA);
+    const b = readProjectConfigState(dirB);
+    for (let i = 0; i < 6; i++) readProjectConfigState(join(dirB, `missing-${i}`));
+    expect(readProjectConfigState(dirA)).toBe(a); // touched: now most recent
+    readProjectConfigState(join(dirB, "missing-6"));
+    readProjectConfigState(join(dirB, "missing-7")); // 10 seen, cap 8
+    expect(readProjectConfigState(dirA)).toBe(a);
+    expect(readProjectConfigState(dirB)).not.toBe(b);
   });
 });

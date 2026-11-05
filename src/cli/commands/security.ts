@@ -5,7 +5,7 @@ import {
   listApprovals,
 } from "../../core/approval.js";
 import { serviceForScope } from "../../core/scope.js";
-import { getPolicySummary } from "../../core/policy.js";
+import { getPolicySummary, PolicyConfigError } from "../../core/policy.js";
 import { c, SYMBOLS } from "../../utils/colors.js";
 import { wantsJsonOutput, emitJson } from "../helpers.js";
 import { buildOpts } from "../options.js";
@@ -123,7 +123,21 @@ export function registerSecurityCommands(program: Command): void {
     .description("Show project governance policy summary")
     .option("--json", "Output as JSON")
     .action((cmd) => {
-      const summary = getPolicySummary();
+      let summary: ReturnType<typeof getPolicySummary>;
+      try {
+        summary = getPolicySummary();
+      } catch (err) {
+        // Report a corrupt .q-ring.json as the answer, not as a crash.
+        if (!(err instanceof PolicyConfigError)) throw err;
+        process.exitCode = 1;
+        if (wantsJsonOutput(program, cmd)) {
+          console.log(JSON.stringify({ policyError: err.message }, null, 2));
+        } else {
+          console.log(c.bold("\n⚖  Governance Policy\n"));
+          console.log(c.red(`  ${err.message}\n`));
+        }
+        return;
+      }
       if (wantsJsonOutput(program, cmd)) {
         warnDeprecated(
           "policy --json shape",

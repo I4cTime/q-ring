@@ -24,7 +24,7 @@ import { collapseEnvironment, readProjectConfig, type CollapseResult } from "./c
 import { listHooks, type HookEntry, type HookType } from "./hooks.js";
 import { listApprovals } from "./approval.js";
 import { listMemory } from "./memory.js";
-import { getPolicySummary } from "./policy.js";
+import { getPolicySummary, PolicyConfigError } from "./policy.js";
 import { buildSessions, type AgentSession } from "./sessions.js";
 import { getDashboardHtml } from "./dashboard-html.js";
 import { PACKAGE_VERSION } from "../version.js";
@@ -119,6 +119,11 @@ export interface PolicySnapshot {
   };
   maxTtlSeconds?: number;
   maxRuntimeSeconds?: number;
+  /**
+   * Set when `.q-ring.json` cannot be loaded as a policy. Every policy gate
+   * refuses while this is set; the dashboard reports it instead of failing.
+   */
+  policyError?: string;
 }
 
 export interface AuditMetrics {
@@ -296,7 +301,30 @@ function buildManifest(projectPath: string, secrets: SecretSnapshot[]): Manifest
 }
 
 function buildPolicySnapshot(projectPath: string): PolicySnapshot {
-  const summary = getPolicySummary(projectPath);
+  let summary: ReturnType<typeof getPolicySummary>;
+  try {
+    summary = getPolicySummary(projectPath);
+  } catch (err) {
+    // The dashboard is long-running (SSE every 5s): a corrupt .q-ring.json
+    // must show up as data, not crash /api/status, the stream or the process.
+    if (!(err instanceof PolicyConfigError)) throw err;
+    return {
+      hasMcpPolicy: false,
+      hasExecPolicy: false,
+      hasSecretPolicy: false,
+      counts: {
+        allowTools: 0,
+        denyTools: 0,
+        deniedKeys: 0,
+        deniedTags: 0,
+        allowCommands: 0,
+        denyCommands: 0,
+        requireApprovalForTags: 0,
+        requireRotationFormatForTags: 0,
+      },
+      policyError: err.message,
+    };
+  }
   const mcp = summary.details.mcp ?? {};
   const exec = summary.details.exec ?? {};
   const sec = summary.details.secrets ?? {};

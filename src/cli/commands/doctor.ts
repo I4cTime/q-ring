@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import { existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join, delimiter } from "node:path";
 import { verifyAuditChain } from "../../core/observer.js";
-import { getPolicySummary } from "../../core/policy.js";
+import { getPolicySummary, PolicyConfigError } from "../../core/policy.js";
 import { countLegacyApprovals } from "../../core/approval.js";
 import { c, SYMBOLS } from "../../utils/colors.js";
 import { emitJson } from "../helpers.js";
@@ -120,8 +120,16 @@ function checkManifest(projectPath: string): CheckResult {
   }
 }
 
-function checkPolicy(): CheckResult {
-  const summary = getPolicySummary();
+function checkPolicy(projectPath: string): CheckResult {
+  let summary: ReturnType<typeof getPolicySummary>;
+  try {
+    summary = getPolicySummary(projectPath);
+  } catch (err) {
+    // A corrupt .q-ring.json makes every policy gate refuse (fail closed);
+    // doctor's job is to say so, not to die before printing the report.
+    if (!(err instanceof PolicyConfigError)) throw err;
+    return { name: "governance policy", status: "fail", detail: err.message };
+  }
   const active = [
     summary.hasMcpPolicy && "mcp",
     summary.hasExecPolicy && "exec",
@@ -188,7 +196,7 @@ export function registerDoctorCommand(program: Command): void {
         await checkKeyringBackend(),
         checkAuditLog(),
         checkManifest(projectPath),
-        checkPolicy(),
+        checkPolicy(projectPath),
         checkLegacyApprovals(),
         checkMcpBinary(),
       ];

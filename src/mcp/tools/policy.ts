@@ -6,6 +6,8 @@ import {
   checkKeyReadPolicy,
   checkExecPolicy,
   getPolicySummary,
+  PolicyConfigError,
+  type PolicyDecision,
 } from "../../core/policy.js";
 import { text, enforceToolPolicy, commonSchemas } from "./_shared.js";
 
@@ -43,17 +45,29 @@ export function registerPolicyTools(server: McpServer): void {
     },
     toolAnnotations("check_policy"),
     async (params) => {
-      if (params.action === "tool" && params.toolName) {
-        const d = checkToolPolicy(params.toolName, params.projectPath);
+      // check_policy is diagnostic: a policy that cannot be loaded is reported
+      // as a denial verdict (which is what every real gate does with it).
+      const verdict = (decide: () => PolicyDecision) => {
+        let d: PolicyDecision;
+        try {
+          d = decide();
+        } catch (err) {
+          if (!(err instanceof PolicyConfigError)) throw err;
+          d = { allowed: false, reason: err.message, policySource: "invalid .q-ring.json" };
+        }
         return text(JSON.stringify(d, null, 2));
+      };
+      if (params.action === "tool" && params.toolName) {
+        const toolName = params.toolName;
+        return verdict(() => checkToolPolicy(toolName, params.projectPath));
       }
       if (params.action === "key_read" && params.key) {
-        const d = checkKeyReadPolicy(params.key, undefined, params.projectPath);
-        return text(JSON.stringify(d, null, 2));
+        const key = params.key;
+        return verdict(() => checkKeyReadPolicy(key, undefined, params.projectPath));
       }
       if (params.action === "exec" && params.command) {
-        const d = checkExecPolicy(params.command, params.projectPath);
-        return text(JSON.stringify(d, null, 2));
+        const command = params.command;
+        return verdict(() => checkExecPolicy(command, params.projectPath));
       }
       return text("Missing required parameter for the selected action type", true);
     },
