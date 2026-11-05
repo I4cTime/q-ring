@@ -33,6 +33,7 @@ import {
   checkKeyReadPolicy,
   checkSecretLifecyclePolicy,
   getPolicyRoot,
+  loadPolicy,
   type PolicyDecision,
 } from "./policy.js";
 
@@ -362,6 +363,26 @@ function writeDecision(
  */
 export function checkKeyWritePolicy(key: string, opts: KeyringOptions = {}): PolicyDecision {
   const source = opts.source ?? "cli";
+  // Local writes are the operator's: no policy, and no keyring reads.
+  if (source !== "mcp") return { allowed: true, policySource: "local" };
+
+  const refuse = (decision: PolicyDecision): PolicyDecision => {
+    logAudit({
+      action: "policy_deny",
+      key,
+      scope: opts.scope ?? "global",
+      source,
+      detail: `write refused: ${decision.reason ?? "denied by policy"}`,
+    });
+    return decision;
+  };
+
+  // deniedKeys / readableKeys judge the name alone: no read needed.
+  const byName = checkKeyReadPolicy(key, undefined, opts.projectPath);
+  if (!byName.allowed) return refuse(byName);
+  // Only deniedTags needs the stored envelopes; skip the reads without it.
+  if (!loadPolicy(opts.projectPath).mcp?.deniedTags?.length) return byName;
+
   const { service } = resolveScope({ ...opts, scope: opts.scope ?? "global" })[0];
   // Every copy the operator's scope-less resolution could land on, not only
   // the write scope: an untagged project copy written over MCP would
@@ -373,20 +394,9 @@ export function checkKeyWritePolicy(key: string, opts: KeyringOptions = {}): Pol
   ]);
   for (const svc of services) {
     const decision = writeDecision(key, readEnvelope(svc, key)?.meta.tags, opts);
-    if (!decision.allowed) {
-      if (source === "mcp") {
-        logAudit({
-          action: "policy_deny",
-          key,
-          scope: opts.scope ?? "global",
-          source,
-          detail: `write refused: ${decision.reason ?? "denied by policy"}`,
-        });
-      }
-      return decision;
-    }
+    if (!decision.allowed) return refuse(decision);
   }
-  return { allowed: true, policySource: source === "mcp" ? ".q-ring.json" : "local" };
+  return byName;
 }
 
 /**
