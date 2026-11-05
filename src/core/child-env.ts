@@ -81,6 +81,19 @@ const PROCESS_CONTROL_NAMES = new Set([
   "CPP",
   "LD",
   "AR",
+  // Network hijack: proxies and trust stores redirect or intercept a
+  // child's TLS traffic (credentials included). Compared upper-cased, so
+  // the lowercase http_proxy spellings are covered too.
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "NO_PROXY",
+  "FTP_PROXY",
+  "SSL_CERT_FILE",
+  "SSL_CERT_DIR",
+  "CURL_CA_BUNDLE",
+  "REQUESTS_CA_BUNDLE",
+  "AWS_CA_BUNDLE",
   // Go toolchain (exact names: a GO prefix would catch GOOGLE_API_KEY).
   "GOFLAGS",
   "GOPATH",
@@ -114,7 +127,37 @@ const PROCESS_CONTROL_PREFIXES = [
   "PNPM_",
   "BUN_",
   "DENO_",
+  // bash imports BASH_FUNC_<name>%% as a function definition (exported
+  // functions), even in posix mode and as /bin/sh: a planted `ls` runs
+  // inside any bash script or `npm run`. Lua runs LUA_INIT* at start-up.
+  "BASH_FUNC_",
+  "LUA_INIT",
+  // Package managers and runtimes whose config redirects downloads or
+  // loads code: pip, composer, rubygems, bundler, nix, dotnet, OpenSSL.
+  "PIP_",
+  "COMPOSER_",
+  "GEM_",
+  "BUNDLE_",
+  "NIX_",
+  "DOTNET_",
+  "OPENSSL_",
 ];
+
+/** Prefixes whose members are never exempt as credentials, whatever the suffix. */
+const NEVER_EXEMPT_PREFIXES = ["GIT_CONFIG_", "BASH_FUNC_", "LUA_INIT"];
+
+/**
+ * The only names q-ring will put into a child's environment from the
+ * keyring: a portable identifier. Anything else is not a variable a program
+ * reads by name but something a shell interprets: `BASH_FUNC_ls%%`
+ * (an exported function), names with dots, dashes or `() {`. Checked before
+ * the family denylist and never overridable.
+ */
+const ENV_NAME_SHAPE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+export function hasEnvNameShape(name: string): boolean {
+  return ENV_NAME_SHAPE.test(name);
+}
 
 /**
  * Credentials that live inside a denied family. Their value is a token, not
@@ -133,6 +176,8 @@ export function isProcessControlEnvName(name: string): boolean {
   if (!PROCESS_CONTROL_PREFIXES.some((p) => upper.startsWith(p))) return false;
   if (ALLOWED_IN_FAMILY.has(upper)) return false;
   const last = upper.split("_").pop() ?? "";
-  if (CREDENTIAL_SUFFIXES.has(last) && !upper.startsWith("GIT_CONFIG_")) return false;
+  if (CREDENTIAL_SUFFIXES.has(last) && !NEVER_EXEMPT_PREFIXES.some((p) => upper.startsWith(p))) {
+    return false;
+  }
   return true;
 }

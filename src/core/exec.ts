@@ -10,7 +10,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { withoutQringCredentials, isProcessControlEnvName } from "./child-env.js";
+import { withoutQringCredentials, isProcessControlEnvName, hasEnvNameShape } from "./child-env.js";
 import { StringDecoder } from "node:string_decoder";
 import { Transform } from "node:stream";
 import { listSecrets, getSecret, type KeyringOptions } from "./keyring.js";
@@ -243,6 +243,16 @@ export async function execCommand(opts: ExecOptions): Promise<ExecResult> {
   // could otherwise turn policy.exec.allowCommands into arbitrary
   // execution. Only the local operator may inject one, by naming it in --keys.
   entries = entries.filter((e) => {
+    // Shape first, never overridable: `BASH_FUNC_ls%%` is a bash function
+    // definition, not a variable.
+    if (!hasEnvNameShape(e.key)) {
+      if ((opts.source ?? "cli") !== "mcp") {
+        process.stderr.write(
+          `[QRING] not injecting "${e.key}": not a plain environment variable name\n`,
+        );
+      }
+      return false;
+    }
     if (!isProcessControlEnvName(e.key)) return true;
     if ((opts.source ?? "cli") !== "mcp" && opts.keys?.includes(e.key)) return true;
     if ((opts.source ?? "cli") !== "mcp") {

@@ -182,9 +182,11 @@ keychain the same way q-ring does; no local tool changes that.
   this deliberately; custom profiles live in `.q-ring.json`.
 - Secrets whose *names* steer what a program runs (`NODE_OPTIONS`,
   `LD_PRELOAD`, `PATH`, the `GIT_*`, `SSH_*`, `MAKE*`, `CARGO_*`,
-  `PYTHON*` and similar families, `PAGER`, `EDITOR`, `HOME`, ...) are
-  never injected over MCP, and from the CLI only when named with
-  `--keys`. Credentials inside those families (`NPM_TOKEN`,
+  `PYTHON*` and similar families, `PAGER`, `EDITOR`, `HOME`, proxies and
+  TLS trust stores, ...) are never injected over MCP, and from the CLI
+  only when named with `--keys`. A key that is not a plain identifier
+  (`BASH_FUNC_ls%%`, which bash imports as a function) is never injected
+  at all. Credentials inside those families (`NPM_TOKEN`,
   `CARGO_REGISTRY_TOKEN`, ...) are still injected.
 - **This is not a sandbox, `restricted` included.** An allowed binary can
   still do anything an allowed binary can do, and a caller who controls
