@@ -90,6 +90,9 @@ const POLICY_SECTIONS = [
 ] as const satisfies readonly (keyof PolicyConfig)[];
 
 function readPolicyResource() {
+  // The path as loadPolicy resolves it (pinned root, else CWD) and names it in
+  // its own error message, so `file` and `error` always agree. Not realpath'd:
+  // it is the path the operator launched the server in.
   const file = join(getPolicyRoot() ?? process.cwd(), ".q-ring.json");
   try {
     if (!toolVisible("get_policy_summary")) {

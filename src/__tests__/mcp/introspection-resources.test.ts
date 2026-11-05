@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -138,7 +138,13 @@ describe("qring://policy", () => {
       details: {},
     });
     expect(json.message).toMatch(/No policy/);
-    expect(json.file).toBe(join(projectDir, ".q-ring.json"));
+    // The resource reports the path loadPolicy resolves (the pinned policy
+    // root, i.e. the server's launch CWD). process.cwd() is already a realpath
+    // while tmpdir() may be a symlink (macOS /var -> /private/var), so compare
+    // normalised directories; the file itself does not exist here.
+    const file = String(json.file);
+    expect(basename(file)).toBe(".q-ring.json");
+    expect(realpathSync.native(dirname(file))).toBe(realpathSync.native(projectDir));
   });
 
   it("returns each section's rules", async () => {
