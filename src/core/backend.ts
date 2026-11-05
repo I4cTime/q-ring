@@ -161,7 +161,10 @@ function saveStore(map: StoreMap, salt: string): void {
   // writing it back, so a crash or a full disk mid-write lost the whole
   // store, a concurrent reader (an MCP server) could read a half-written
   // file, and a symlink at `path` was followed. rename is atomic on the same
-  // filesystem and replaces a symlink rather than writing through it.
+  // filesystem and replaces a symlink at `path` with a regular file instead
+  // of writing through it: the link's target is never modified. (The read
+  // before every write still follows the link, so a link to something that
+  // is not a q-ring store is refused by loadStore before anything is written.)
   const tmp = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   try {
     writeFileSync(tmp, blob + "\n", { mode: 0o600, flag: "wx" });
