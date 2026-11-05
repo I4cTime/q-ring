@@ -15,11 +15,13 @@ import { execCommand, noManifestNote } from "../../core/exec.js";
 import { clearPolicyCache, setPolicyRoot } from "../../core/policy.js";
 import { clearCollapseCache } from "../../core/collapse.js";
 import { registerToolingTools } from "../../mcp/tools/tooling.js";
+import { plantedValue, printPlantedScript } from "../helpers/planted-env.js";
 
 let dir: string;
 let elsewhere: string;
-const PRINT_ENV =
-  "console.log(JSON.stringify(['A_KEY','B_KEY','C_KEY','TAR_OPTIONS'].filter((k) => process.env[k] !== undefined)))";
+// Which names the child received with the value this test planted; a
+// runner-provided variable of the same name does not count.
+const PRINT_ENV = printPlantedScript(["A_KEY", "B_KEY", "C_KEY", "TAR_OPTIONS"]);
 
 function writeConfig(withManifest: boolean): void {
   writeFileSync(
@@ -39,10 +41,10 @@ beforeEach(() => {
   elsewhere = mkdtempSync(join(tmpdir(), "qring-exec-elsewhere-"));
   setPolicyRoot(dir);
   for (const k of ["A_KEY", "B_KEY", "C_KEY"]) {
-    setSecret(k, `${k.toLowerCase()}-value`, { scope: "global", source: "cli" });
+    setSecret(k, plantedValue(k), { scope: "global", source: "cli" });
   }
   // What an agent plants: a tar inline-code gadget.
-  setSecret("TAR_OPTIONS", "--checkpoint=1 --checkpoint-action=exec=id", {
+  setSecret("TAR_OPTIONS", plantedValue("TAR_OPTIONS"), {
     scope: "global",
     source: "mcp",
     projectPath: dir,

@@ -14,10 +14,10 @@ import { execCommand } from "../../core/exec.js";
 import { runCommand } from "../../core/run.js";
 import { clearPolicyCache, setPolicyRoot } from "../../core/policy.js";
 import { clearCollapseCache } from "../../core/collapse.js";
+import { plantedValue, printPlantedScript } from "../helpers/planted-env.js";
 
 const NOTE = '[QRING] not injecting "stripe-key": not a plain environment variable name\n';
-const PRINT =
-  "console.log(JSON.stringify([process.env['stripe-key'] ? 'set' : null, process.env.VALID_KEY ? 'set' : null]))";
+const PRINT = printPlantedScript(["stripe-key", "VALID_KEY"]);
 
 let dir: string;
 let stderr: string[];
@@ -28,8 +28,8 @@ beforeEach(() => {
   clearCollapseCache();
   dir = mkdtempSync(join(tmpdir(), "qring-name-shape-"));
   setPolicyRoot(dir);
-  setSecret("stripe-key", "sk-dashed-name-value", { scope: "global", source: "cli" });
-  setSecret("VALID_KEY", "valid-value-123", { scope: "global", source: "cli" });
+  setSecret("stripe-key", plantedValue("stripe-key"), { scope: "global", source: "cli" });
+  setSecret("VALID_KEY", plantedValue("VALID_KEY"), { scope: "global", source: "cli" });
   stderr = [];
   const realWrite = process.stderr.write.bind(process.stderr);
   vi.spyOn(process.stderr, "write").mockImplementation(((chunk: unknown, ...rest: unknown[]) => {
@@ -60,13 +60,13 @@ const execCli = (keys?: string[]) =>
 describe("the name-shape rule on the CLI path", () => {
   it("qring exec skips a dashed key with the exact note, valid keys still inject", async () => {
     const result = await execCli();
-    expect(JSON.parse(result.stdout.trim())).toEqual([null, "set"]);
+    expect(JSON.parse(result.stdout.trim())).toEqual(["VALID_KEY"]);
     expect(stderr).toContain(NOTE);
   });
 
   it("--keys cannot override the shape rule", async () => {
     const result = await execCli(["stripe-key", "VALID_KEY"]);
-    expect(JSON.parse(result.stdout.trim())).toEqual([null, "set"]);
+    expect(JSON.parse(result.stdout.trim())).toEqual(["VALID_KEY"]);
     expect(stderr).toContain(NOTE);
   });
 
@@ -82,7 +82,7 @@ describe("the name-shape rule on the CLI path", () => {
       projectPath: dir,
       captureOutput: true,
     });
-    expect(JSON.parse(result.stdout.trim())).toEqual([null, "set"]);
+    expect(JSON.parse(result.stdout.trim())).toEqual(["VALID_KEY"]);
     expect(stderr).toContain(NOTE);
   });
 });

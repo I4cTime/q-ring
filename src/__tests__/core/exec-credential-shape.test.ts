@@ -14,6 +14,7 @@ import { execCommand } from "../../core/exec.js";
 import { isCredentialShapedName, isProcessControlEnvName } from "../../core/child-env.js";
 import { clearPolicyCache, setPolicyRoot } from "../../core/policy.js";
 import { clearCollapseCache } from "../../core/collapse.js";
+import { plantedValue, printPlantedScript } from "../helpers/planted-env.js";
 
 const NAMES = [
   "GOAUTH",
@@ -24,8 +25,9 @@ const NAMES = [
   "SENTRY_DSN",
   "MY_CONFIG",
 ];
-// Prints which names reached the child (never their values, which redaction would mask).
-const PRINT = `console.log(JSON.stringify(${JSON.stringify(NAMES)}.filter((k) => process.env[k] !== undefined)))`;
+// Which names the child received with the value this test planted. A name
+// the runner itself sets (windows-latest has MAVEN_OPTS) does not count.
+const PRINT = printPlantedScript(NAMES);
 
 let dir: string;
 
@@ -41,20 +43,11 @@ beforeEach(() => {
   );
   setPolicyRoot(dir);
   // Planted by an agent: a Go auth helper and a JVM option hook.
-  setSecret("GOAUTH", "command /tmp/evil.sh", { scope: "global", source: "mcp", projectPath: dir });
-  setSecret("MAVEN_OPTS", "-XX:OnOutOfMemoryError=/tmp/evil.sh", {
-    scope: "global",
-    source: "mcp",
-    projectPath: dir,
-  });
-  for (const [k, v] of [
-    ["DATABASE_URL", "postgres://u:p@db/app"],
-    ["STRIPE_KEY", "sk_live_abcdef123456"],
-    ["OPENAI_API_KEY", "sk-openai-abcdef123456"],
-    ["SENTRY_DSN", "https://abc@sentry.io/1"],
-    ["MY_CONFIG", "config-value-123"],
-  ]) {
-    setSecret(k, v, { scope: "global", source: "cli" });
+  for (const k of ["GOAUTH", "MAVEN_OPTS"]) {
+    setSecret(k, plantedValue(k), { scope: "global", source: "mcp", projectPath: dir });
+  }
+  for (const k of ["DATABASE_URL", "STRIPE_KEY", "OPENAI_API_KEY", "SENTRY_DSN", "MY_CONFIG"]) {
+    setSecret(k, plantedValue(k), { scope: "global", source: "cli" });
   }
 });
 
@@ -89,7 +82,7 @@ describe("exec_with_secrets without a manifest injects only credential-shaped na
     expect(result.note).toContain("skipped: MY_CONFIG");
     expect(result.note).toContain("declare secrets there to lift this rule");
     // Names only: no value appears in the note.
-    expect(result.note).not.toContain("config-value-123");
+    expect(result.note).not.toContain(plantedValue("MY_CONFIG"));
     // Denylisted names are not "skipped by shape"; they are never candidates.
     expect(result.note).not.toContain("GOAUTH");
   });
