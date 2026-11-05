@@ -15,6 +15,7 @@ import { c, scopeColor, envBadge, SYMBOLS } from "../../utils/colors.js";
 import { wantsJsonOutput, emitJson } from "../helpers.js";
 import { confirm } from "../../utils/prompt.js";
 import { buildOpts } from "../options.js";
+import { warnDeprecated } from "../../core/deprecation.js";
 
 export function registerProjectCommands(program: Command): void {
   program
@@ -32,6 +33,10 @@ export function registerProjectCommands(program: Command): void {
       const context = getProjectContext(opts);
 
       if (wantsJsonOutput(program, cmd)) {
+        warnDeprecated(
+          "context --json shape",
+          "`qring context --json` prints a bare payload; 1.0 switches it to the { ok, data } wrapper. Removed in 1.0.",
+        );
         console.log(JSON.stringify(context, null, 2));
         return;
       }

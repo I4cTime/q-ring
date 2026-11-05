@@ -21,6 +21,7 @@ import {
 import { c, SYMBOLS, scopeColor } from "../../utils/colors.js";
 import { wantsJsonOutput, emitJson, safeStr } from "../helpers.js";
 import { buildOpts } from "../options.js";
+import { warnDeprecated } from "../../core/deprecation.js";
 import { rotationBadge } from "./secrets.js";
 
 export function registerValidationCommands(program: Command): void {
@@ -343,6 +344,10 @@ export function registerValidationCommands(program: Command): void {
       const report = await ciValidateBatch(secrets);
 
       if (wantsJsonOutput(program, cmd)) {
+        warnDeprecated(
+          "ci:validate --json shape",
+          "`qring ci:validate --json` prints a bare payload; 1.0 switches it to the { ok, data } wrapper. Removed in 1.0.",
+        );
         console.log(JSON.stringify(report, null, 2));
         // Same CI-gate contract as the human output: exit 1 on failure.
         if (!report.allValid) process.exitCode = 1;

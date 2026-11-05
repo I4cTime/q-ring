@@ -27,6 +27,7 @@ import {
 } from "node:crypto";
 import { z } from "zod";
 import { Entry } from "./backend.js";
+import { warnDeprecated } from "./deprecation.js";
 
 const ALGORITHM = "aes-256-gcm";
 const KEY_LENGTH = 32;
@@ -186,6 +187,12 @@ export function teleportUnpack(
   const iv = Buffer.from(bundle.iv, "base64");
   const tag = Buffer.from(bundle.tag, "base64");
   const encrypted = Buffer.from(bundle.data, "base64");
+  if (bundle.iter === undefined) {
+    warnDeprecated(
+      "teleport v1 bundle without iter",
+      "this teleport bundle predates 0.12.0 (no `iter`, PBKDF2 at 100 000 iterations); ask the sender to re-pack it with current q-ring or use `qring teleport pack --to`. Removed in 1.0.",
+    );
+  }
   const key = deriveKey(passphrase, salt, bundle.iter ?? LEGACY_PBKDF2_ITERATIONS);
 
   const decipher = createDecipheriv(ALGORITHM, key, iv);

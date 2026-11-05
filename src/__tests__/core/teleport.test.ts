@@ -1,6 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { createCipheriv, pbkdf2Sync, randomBytes } from "node:crypto";
 import { teleportPack, teleportUnpack } from "../../core/teleport.js";
+import {
+  resetDeprecationWarnings,
+  SILENCE_DEPRECATIONS_ENV,
+} from "../../core/deprecation.js";
 
 /** Build a pre-bump bundle (PBKDF2 100k, no `iter` field) the old code produced. */
 function legacyBundle(
@@ -98,5 +102,40 @@ describe("teleport pack/unpack", () => {
     const payload = teleportUnpack(bundle, passphrase);
     expect(payload.secrets[0].value).toBe("sk-abc123");
     expect(payload.secrets[1].value).toBe("p@ssw0rd");
+  });
+});
+
+describe("teleport v1 bundles without iter (Deprecated in 0.19)", () => {
+  const secrets = [{ key: "API_KEY", value: "sk-abc123" }];
+  const passphrase = "test-passphrase-42";
+  let stderr: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    resetDeprecationWarnings();
+    delete process.env[SILENCE_DEPRECATIONS_ENV];
+    stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  });
+  afterEach(() => {
+    stderr.mockRestore();
+    delete process.env[SILENCE_DEPRECATIONS_ENV];
+  });
+
+  it("warns once on unpack of an iter-less bundle, not twice", () => {
+    expect(teleportUnpack(legacyBundle(secrets, passphrase), passphrase).secrets).toEqual(secrets);
+    teleportUnpack(legacyBundle(secrets, passphrase), passphrase);
+    expect(stderr).toHaveBeenCalledTimes(1);
+    const line = String(stderr.mock.calls[0][0]);
+    expect(line).toMatch(/^q-ring: deprecated: .*predates 0\.12\.0.*Removed in 1\.0\.\n$/);
+  });
+
+  it("does not warn for a current bundle", () => {
+    teleportUnpack(teleportPack(secrets, passphrase), passphrase);
+    expect(stderr).not.toHaveBeenCalled();
+  });
+
+  it("is silent with QRING_SILENCE_DEPRECATIONS=1", () => {
+    process.env[SILENCE_DEPRECATIONS_ENV] = "1";
+    teleportUnpack(legacyBundle(secrets, passphrase), passphrase);
+    expect(stderr).not.toHaveBeenCalled();
   });
 });
