@@ -41,6 +41,11 @@ import {
  *     default and lists nothing unless the operator launched the server with
  *     QRING_MCP_EXPOSE_CANARIES=1; denying `audit_log` hides it regardless.
  * None of them ever reads or returns a secret value.
+ *
+ * A policy that cannot be loaded (a corrupt `.q-ring.json`) fails closed here
+ * too: every gated resource answers with its hidden shape plus a
+ * `policyError` field, never a thrown read. `qring://policy` instead reports
+ * the file as `valid: false`, since saying what is wrong is its whole job.
  */
 
 const MIME = "application/json";
@@ -59,12 +64,17 @@ const RESOURCE_QUERY: SessionQuery = {
   maxEvents: 200,
 };
 
-function toolVisible(toolName: string): boolean {
-  return checkToolPolicy(toolName).allowed;
+/** Whether policy lets agents see what `toolName` exposes; a load failure hides it. */
+function toolVisibility(toolName: string): { visible: boolean; policyError?: string } {
+  try {
+    return { visible: checkToolPolicy(toolName).allowed };
+  } catch (err) {
+    return { visible: false, policyError: err instanceof Error ? err.message : String(err) };
+  }
 }
 
-function auditVisible(): boolean {
-  return toolVisible("audit_log");
+function auditVisibility(): { visible: boolean; policyError?: string } {
+  return toolVisibility("audit_log");
 }
 
 function hiddenBy(toolName: string): string {
@@ -95,7 +105,8 @@ function readPolicyResource() {
   // it is the path the operator launched the server in.
   const file = join(getPolicyRoot() ?? process.cwd(), ".q-ring.json");
   try {
-    if (!toolVisible("get_policy_summary")) {
+    // Throws PolicyConfigError on a corrupt file: reported below as valid:false.
+    if (!checkToolPolicy("get_policy_summary").allowed) {
       return { hidden: true, reason: hiddenBy("get_policy_summary") };
     }
     const summary = getPolicySummary();
@@ -124,13 +135,15 @@ function readPolicyResource() {
 }
 
 function readRotationResource() {
-  if (!toolVisible("list_secrets")) {
+  const { visible, policyError } = toolVisibility("list_secrets");
+  if (!visible) {
     return {
       hidden: true,
-      reason: hiddenBy("list_secrets"),
+      reason: policyError ? "Hidden: .q-ring.json cannot be loaded." : hiddenBy("list_secrets"),
       entries: [],
       dueCount: 0,
       scheduledCount: 0,
+      ...(policyError ? { policyError } : {}),
     };
   }
   const { scheduled, due } = buildRotationSchedule(listSecrets(mcpListOpts()));
@@ -176,8 +189,15 @@ function readCanariesResource() {
       alerts: [],
     };
   }
-  if (!auditVisible()) {
-    return { exposed: false, reason: hiddenBy("audit_log"), canaries: [], alerts: [] };
+  const { visible, policyError } = auditVisibility();
+  if (!visible) {
+    return {
+      exposed: false,
+      reason: policyError ? "Hidden: .q-ring.json cannot be loaded." : hiddenBy("audit_log"),
+      canaries: [],
+      alerts: [],
+      ...(policyError ? { policyError } : {}),
+    };
   }
 
   // One audit pass for every canary, newest first.
@@ -243,12 +263,11 @@ export function registerMcpResources(server: McpServer): void {
       mimeType: MIME,
     },
     async (uri) => {
-      const sessions = auditVisible()
+      const { visible, policyError } = auditVisibility();
+      const sessions = visible
         ? listAgentSessionsForAgents(RESOURCE_QUERY).map(summariseSession)
         : [];
-      return {
-        contents: [{ uri: uri.href, mimeType: MIME, text: JSON.stringify({ sessions }, null, 2) }],
-      };
+      return jsonContents(uri, policyError ? { sessions, policyError } : { sessions });
     },
   );
 
@@ -256,7 +275,7 @@ export function registerMcpResources(server: McpServer): void {
     "agent-session",
     new ResourceTemplate("qring://sessions/{id}", {
       list: async () => {
-        if (!auditVisible()) return { resources: [] };
+        if (!auditVisibility().visible) return { resources: [] };
         return {
           resources: listAgentSessionsForAgents(RESOURCE_QUERY).map((s) => ({
             uri: `${LIST_URI}/${s.id}`,
@@ -275,7 +294,9 @@ export function registerMcpResources(server: McpServer): void {
     },
     async (uri, variables) => {
       const id = String(variables.id ?? "");
-      const session = auditVisible()
+      const { visible, policyError } = auditVisibility();
+      if (policyError) return jsonContents(uri, { id, policyError });
+      const session = visible
         ? listAgentSessionsForAgents({ ...RESOURCE_QUERY, limit: undefined }).find(
             (s) => s.id === id,
           )
