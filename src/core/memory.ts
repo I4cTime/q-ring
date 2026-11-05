@@ -24,6 +24,7 @@ import {
   pbkdf2Sync,
 } from "node:crypto";
 import { Entry } from "./backend.js";
+import { warnDeprecated } from "./deprecation.js";
 import { configDir } from "../utils/config-dir.js";
 
 const MEMORY_FILE = "agent-memory.enc";
@@ -169,6 +170,12 @@ function decrypt(blob: string): string {
   }
 
   const plain = decryptWith(blob, deriveLegacyKey());
+  warnDeprecated(
+    "agent memory legacy key",
+    kk
+      ? "agent memory was encrypted under the pre-0.14 machine-derived key; it is being re-encrypted under the OS keyring key. Reading the old key is removed in 1.0."
+      : `agent memory is encrypted under the pre-0.14 machine-derived key; run on a host with an OS keyring once, or set ${PASSPHRASE_ENV} and re-save it. Removed in 1.0.`,
+  );
   // Re-encrypt under the keyring key if one is now available — but never persist
   // under the derivable legacy key. Without a secure key, read but don't rewrite.
   if (kk) {

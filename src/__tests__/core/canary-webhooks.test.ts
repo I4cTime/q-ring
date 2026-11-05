@@ -38,6 +38,7 @@ import { resetCanaryAlertThrottle } from "../../core/canary-alert.js";
 import { getSecret } from "../../core/keyring.js";
 import { queryAudit } from "../../core/observer.js";
 import { resetFakeKeyring } from "../helpers/fake-keyring.js";
+import { resetDeprecationWarnings, SILENCE_DEPRECATIONS_ENV } from "../../core/deprecation.js";
 
 let dir: string;
 
@@ -55,7 +56,7 @@ beforeEach(() => {
   resetFakeKeyring();
   resetCanaryAlertThrottle();
   dir = mkdtempSync(join(tmpdir(), "qring-canary-alerts-"));
-  process.env.QRING_CANARY_ALERTS_PATH = join(dir, "canary-alerts.json");
+  process.env.QRING_CONFIG_DIR = dir;
   process.env.QRING_AUDIT_DIR = dir;
   httpRequestMock.mockReset();
   httpRequestMock.mockResolvedValue({ statusCode: 204, body: "", truncated: false });
@@ -64,7 +65,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  delete process.env.QRING_CANARY_ALERTS_PATH;
+  delete process.env.QRING_CONFIG_DIR;
   delete process.env.QRING_AUDIT_DIR;
   rmSync(dir, { recursive: true, force: true });
 });
@@ -77,7 +78,7 @@ describe("canary alert registry", () => {
     expect(listCanaryAlerts().map((c) => c.id)).toEqual([ch.id]);
     if (process.platform !== "win32") {
       // chmod is a no-op on Windows (mode reads back 0666)
-      expect(statSync(process.env.QRING_CANARY_ALERTS_PATH!).mode & 0o777).toBe(0o600);
+      expect(statSync(join(dir, "canary-alerts.json")).mode & 0o777).toBe(0o600);
     }
 
     expect(setCanaryAlertEnabled(ch.id, false)).toBe(true);
@@ -208,5 +209,44 @@ describe("trip wiring", () => {
     await vi.waitFor(() => expect(httpRequestMock).toHaveBeenCalledTimes(1));
     // Both reads are audited even though only one alert went out.
     expect(queryAudit({ action: "canary", key: "TRIPWIRE" })).toHaveLength(2);
+  });
+});
+
+describe("QRING_CANARY_ALERTS_PATH (Deprecated in 0.19)", () => {
+  let stderr: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    resetDeprecationWarnings();
+    delete process.env[SILENCE_DEPRECATIONS_ENV];
+    stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  });
+  afterEach(() => {
+    stderr.mockRestore();
+    delete process.env.QRING_CANARY_ALERTS_PATH;
+    delete process.env[SILENCE_DEPRECATIONS_ENV];
+  });
+
+  it("is still honoured, and warns once, not twice", () => {
+    const path = join(dir, "custom-alerts.json");
+    process.env.QRING_CANARY_ALERTS_PATH = path;
+    addCanaryAlert({ type: "discord", url: "https://discord.com/api/webhooks/1/abc" });
+    expect(listCanaryAlerts()).toHaveLength(1);
+    expect(statSync(path).isFile()).toBe(true);
+    expect(stderr).toHaveBeenCalledTimes(1);
+    expect(String(stderr.mock.calls[0][0])).toMatch(
+      /^q-ring: deprecated: QRING_CANARY_ALERTS_PATH .*QRING_CONFIG_DIR.*Removed in 1\.0\.\n$/,
+    );
+  });
+
+  it("does not warn when only QRING_CONFIG_DIR is used", () => {
+    addCanaryAlert({ type: "discord", url: "https://discord.com/api/webhooks/1/abc" });
+    listCanaryAlerts();
+    expect(stderr).not.toHaveBeenCalled();
+  });
+
+  it("is silent with QRING_SILENCE_DEPRECATIONS=1", () => {
+    process.env[SILENCE_DEPRECATIONS_ENV] = "1";
+    process.env.QRING_CANARY_ALERTS_PATH = join(dir, "custom-alerts.json");
+    listCanaryAlerts();
+    expect(stderr).not.toHaveBeenCalled();
   });
 });

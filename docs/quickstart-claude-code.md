@@ -42,7 +42,7 @@ Then drive everything from chat:
 
 ## 4. Guardrails you get automatically
 
-- The **SessionStart hook** points the agent at `get_project_context` when a `.q-ring.json` exists.
+- The **SessionStart hook** injects the always-on rules (never hardcode secrets, use q-ring for every secret operation) into every session and points the agent at `get_project_context` (and `check_project` when a `.q-ring.json` exists). It needs `jq` on `PATH`.
 - The **PreToolUse hook** asks for confirmation before shell commands that would print or commit `.env` files.
 - Secrets stored with `--requires-approval` refuse agent reads until you run `qring approve KEY --for 3600 --reason "…"`.
 

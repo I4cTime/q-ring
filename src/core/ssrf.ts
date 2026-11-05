@@ -2,7 +2,9 @@
  * SSRF Protection — shared guard for HTTP requests to user-controlled URLs.
  *
  * Blocks requests to private/loopback/link-local addresses unless
- * Q_RING_ALLOW_PRIVATE_HOOKS=1 is set.
+ * QRING_ALLOW_PRIVATE_HOOKS=1 is set (the pre-0.19 spelling
+ * Q_RING_ALLOW_PRIVATE_HOOKS=1 still works, with a deprecation warning,
+ * until 1.0).
  */
 
 import { lookup } from "node:dns/promises";
@@ -10,6 +12,28 @@ import * as dns from "node:dns";
 import { lookup as dnsLookup, type LookupAddress } from "node:dns";
 import { isIPv4, isIPv6 } from "node:net";
 import ipaddr from "ipaddr.js";
+import { warnDeprecated } from "./deprecation.js";
+
+/** Canonical opt-out for the private-address guard. */
+export const ALLOW_PRIVATE_ENV = "QRING_ALLOW_PRIVATE_HOOKS";
+/** Pre-0.19 spelling, deprecated in 0.19 and removed in 1.0. */
+export const LEGACY_ALLOW_PRIVATE_ENV = "Q_RING_ALLOW_PRIVATE_HOOKS";
+
+/**
+ * True when the operator opted out of the private-address guard. Either
+ * spelling enables it; the old one alone also prints a deprecation notice.
+ */
+export function privateTargetsAllowed(): boolean {
+  if (process.env[ALLOW_PRIVATE_ENV] === "1") return true;
+  if (process.env[LEGACY_ALLOW_PRIVATE_ENV] === "1") {
+    warnDeprecated(
+      LEGACY_ALLOW_PRIVATE_ENV,
+      "Q_RING_ALLOW_PRIVATE_HOOKS is deprecated; set QRING_ALLOW_PRIVATE_HOOKS=1 instead. Removed in 1.0.",
+    );
+    return true;
+  }
+  return false;
+}
 
 /** `lookupSync` exists at runtime (Node 18+); some @types/node versions omit it from typings. */
 function lookupAddressesSync(hostname: string): { address: string; family: number }[] {
@@ -95,20 +119,20 @@ function isBlockedIPv4(addr: ipaddr.IPv4): boolean {
  * Returns null if safe, or a human-readable block message.
  */
 export async function checkSSRF(url: string): Promise<string | null> {
-  if (process.env.Q_RING_ALLOW_PRIVATE_HOOKS === "1") return null;
+  if (privateTargetsAllowed()) return null;
 
   try {
     const parsed = new URL(url);
     const hostname = parsed.hostname.replace(/^\[|\]$/g, "");
 
     if (isPrivateIP(hostname)) {
-      return `Blocked: URL resolves to private address (${hostname}). Set Q_RING_ALLOW_PRIVATE_HOOKS=1 to override.`;
+      return `Blocked: URL resolves to private address (${hostname}). Set QRING_ALLOW_PRIVATE_HOOKS=1 to override.`;
     }
 
     const results = await lookup(hostname, { all: true });
     for (const { address } of results) {
       if (isPrivateIP(address)) {
-        return `Blocked: URL "${hostname}" resolves to private address ${address}. Set Q_RING_ALLOW_PRIVATE_HOOKS=1 to override.`;
+        return `Blocked: URL "${hostname}" resolves to private address ${address}. Set QRING_ALLOW_PRIVATE_HOOKS=1 to override.`;
       }
     }
   } catch {
@@ -134,7 +158,7 @@ export function guardedLookup(
   options: dns.LookupOptions,
   callback: GuardedLookupCallback,
 ): void {
-  if (process.env.Q_RING_ALLOW_PRIVATE_HOOKS === "1") {
+  if (privateTargetsAllowed()) {
     (dnsLookup as (h: string, o: dns.LookupOptions, cb: GuardedLookupCallback) => void)(
       hostname,
       options,
@@ -172,14 +196,14 @@ export function guardedLookup(
  * Suitable for sync contexts where async DNS lookup isn't possible.
  */
 export function checkSSRFSync(url: string): string | null {
-  if (process.env.Q_RING_ALLOW_PRIVATE_HOOKS === "1") return null;
+  if (privateTargetsAllowed()) return null;
 
   try {
     const parsed = new URL(url);
     const hostname = parsed.hostname.replace(/^\[|\]$/g, "");
 
     if (isPrivateIP(hostname)) {
-      return `Blocked: URL resolves to private address (${hostname}). Set Q_RING_ALLOW_PRIVATE_HOOKS=1 to override.`;
+      return `Blocked: URL resolves to private address (${hostname}). Set QRING_ALLOW_PRIVATE_HOOKS=1 to override.`;
     }
   } catch {
     // malformed URL — will fail downstream
@@ -193,7 +217,7 @@ export function checkSSRFSync(url: string): string | null {
  * by resolving to loopback/private only at request time. Fails closed on DNS errors.
  */
 export function checkJitHttpProvisionUrl(url: string): string | null {
-  if (process.env.Q_RING_ALLOW_PRIVATE_HOOKS === "1") return null;
+  if (privateTargetsAllowed()) return null;
 
   try {
     const parsed = new URL(url);
@@ -206,7 +230,7 @@ export function checkJitHttpProvisionUrl(url: string): string | null {
     }
 
     if (isPrivateIP(hostname)) {
-      return `Blocked: URL resolves to private address (${hostname}). Set Q_RING_ALLOW_PRIVATE_HOOKS=1 to override.`;
+      return `Blocked: URL resolves to private address (${hostname}). Set QRING_ALLOW_PRIVATE_HOOKS=1 to override.`;
     }
 
     if (isHostnameIpLiteral(hostname)) {
@@ -226,7 +250,7 @@ export function checkJitHttpProvisionUrl(url: string): string | null {
 
     for (const { address } of results) {
       if (isPrivateIP(address)) {
-        return `Blocked: URL "${hostname}" resolves to private address ${address}. Set Q_RING_ALLOW_PRIVATE_HOOKS=1 to override.`;
+        return `Blocked: URL "${hostname}" resolves to private address ${address}. Set QRING_ALLOW_PRIVATE_HOOKS=1 to override.`;
       }
     }
   } catch {

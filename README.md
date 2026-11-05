@@ -458,7 +458,7 @@ qring hook test <id>
 
 Hooks are fire-and-forget: a failing hook never blocks secret operations. The hook registry is stored at `~/.config/q-ring/hooks.json`.
 
-**SSRF protection:** HTTP hook URLs targeting private/loopback IP ranges (`127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `::1`, `fc00::/7`) are blocked by default. DNS is checked up front *and* re-validated at connect time, so a hostname can't pass the check then rebind to a private address before the socket opens. To allow hooks targeting local services (e.g. during development), set the environment variable `Q_RING_ALLOW_PRIVATE_HOOKS=1`.
+**SSRF protection:** HTTP hook URLs targeting private/loopback IP ranges (`127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `::1`, `fc00::/7`) are blocked by default. DNS is checked up front *and* re-validated at connect time, so a hostname can't pass the check then rebind to a private address before the socket opens. To allow hooks targeting local services (e.g. during development), set the environment variable `QRING_ALLOW_PRIVATE_HOOKS=1` (the older spelling `Q_RING_ALLOW_PRIVATE_HOOKS=1` still works until 1.0, with a deprecation warning).
 
 ### Configurable Rotation
 
@@ -1042,6 +1042,18 @@ q-ring includes a full MCP server with 46 tools for AI agent integration.
 | `rotate_secret` | Ask the upstream provider to issue a new credential and store it back in the keyring |
 | `ci_validate_secrets` | Batch-validate every accessible secret in scope and return a structured pass/fail report |
 
+### Resources
+
+State an agent should look at ships as read-only MCP **resources**, not tools, so the tool count stays at 46. Every resource is JSON, never contains secret values, and goes dark when `.q-ring.json` policy denies the tool that exposes the same information.
+
+| Resource | Description |
+|----------|-------------|
+| `qring://sessions` | Per-agent session summaries from the audit chain, last 7 days (canary trips stripped; hidden when `audit_log` is denied) |
+| `qring://sessions/{id}` | One session's event timeline, key names and actions only |
+| `qring://policy` | The active `.q-ring.json` policy: which sections exist and their tool, key, exec and airlock rules; says so when there is none or it is malformed (hidden when `get_policy_summary` is denied) |
+| `qring://rotation` | The `qring rotate:due --all` list: scheduled secrets with state, interval and due date, most overdue first (hidden when `list_secrets` is denied) |
+| `qring://canaries` | Planted canaries with trip count, last trip time and client, and alert channels by type and host. **Off by default** — canary identity is the secret, so it lists nothing unless the operator starts the server with `QRING_MCP_EXPOSE_CANARIES=1` (and `audit_log` is not denied) |
+
 ### Cursor / Kiro Configuration
 
 Add to `.cursor/mcp.json` or `.kiro/settings/mcp.json` (or let `qring setup cursor` / `qring setup kiro` write it):
@@ -1251,6 +1263,7 @@ Optional per-project configuration:
 - [Troubleshooting](docs/troubleshooting.md) — keyring backends, MCP connection, approval gate, policy pinning
 - [CLI ↔ MCP parity](docs/cli-mcp-parity.md) — every command mapped to its MCP tool
 - [Releasing](docs/releasing.md) — tag-driven release flow
+- [Stability](docs/stability.md) — the 1.0 contract: what is frozen, experimental, deprecated, and supported
 
 ## Contributing
 
@@ -1264,6 +1277,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide (dev environment, conv
   - **Kiro:** `pnpm run plugin:sync:kiro` copies `kiro-plugin/mcp.json` → `~/.kiro/settings/mcp.json`, plus `steering/` and `hooks/` (or pass a project `.kiro` path). Prefer adding `kiro-plugin/` as a [Power](https://kiro.dev/docs/powers/create/) from the Powers panel instead.
   - **Claude Code:** `pnpm run plugin:sync:claude` copies `claude-code-plugin/` into the current directory (or pass a project path; add `--user` to install at `~/.claude/`).
 - See also [docs/cli-mcp-parity.md](docs/cli-mcp-parity.md).
+
+## Stability
+
+0.19 is the release candidate for 1.0. The CLI commands and flags, the MCP tool names and input schemas, the MCP resource URIs, the `.q-ring.json` format, the keyring record format, the environment variables, the exit codes and the `[QRING:REDACTED]` / `[QRING:REDACTED:<KEY>]` tokens are frozen; from 1.0 they change only as semver allows, and anything removed is deprecated with a warning for at least one minor first (silence the warnings with `QRING_SILENCE_DEPRECATIONS=1`). [docs/stability.md](docs/stability.md) lists exactly what is frozen, what stays experimental, what is deprecated in 0.19, and which versions receive fixes.
 
 ## 🔒 Security
 

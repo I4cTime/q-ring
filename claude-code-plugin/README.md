@@ -27,9 +27,23 @@ qring-mcp --help
 
 ## What's Included
 
-### Always-on rules (`skills/secret-hygiene-rules/` and `memory/CLAUDE.md`)
+### Always-on rules (SessionStart hook, `rules/`, and `memory/CLAUDE.md`)
 
-The always-on rules — never hardcode secrets, use q-ring for all operations, and warn about `.env` files — are the equivalent of `cursor-plugin/rules/*.mdc` and ship two ways. Plugin installs get them as the `secret-hygiene-rules` skill (a plugin cannot ship a loaded `CLAUDE.md`, so the skill is generated from the Cursor rules by `pnpm run plugin:gen-skills`). The project-copy path (`pnpm run plugin:sync:claude`) additionally writes `memory/CLAUDE.md` to the project root, where Claude Code loads it into every conversation.
+The always-on rules are the equivalent of `cursor-plugin/rules/*.mdc`: never hardcode secrets, and use q-ring for every secret operation. Claude Code plugins have no rules component and a plugin-root `CLAUDE.md` is not loaded, so the plugin delivers them through its one always-on channel, the **`SessionStart` hook**: `hooks/scripts/qring-session-start.sh` injects `hooks/qring-session-rules.md` into the session's context, next to the `get_project_context` note, when a session starts, is cleared (`/clear`), or is compacted (a compaction summary may drop them). On `resume` it injects only the note, since the resumed transcript already carries the rules from startup. That file holds the two `alwaysApply` Cursor rules (secret hygiene, q-ring workflow) and is generated from them by `pnpm run plugin:gen-skills`, so the plugins cannot drift (CI fails if it does).
+
+The `.env` file-safety rule is path-scoped in Cursor (`globs: "**/.env*"`) and a session hook cannot scope by path, so it is not injected. Plugin installs get it from the `secret-hygiene-rules` skill (all three rules, loaded when relevant) and the `PreToolUse` guard that asks before a shell command prints or commits a `.env` file.
+
+**File-scoped rules in `~/.claude/rules/`.** `rules/` ships ready-made Claude Code rule files, generated from the same Cursor rules: `secret-hygiene.md` and `qring-workflow.md` (no frontmatter, so they load in every session) and `env-file-safety.md` (`paths: ["**/.env*"]`, so it loads only when Claude works with a `.env*` file). Claude Code does **not** load rules from a plugin, so they do nothing until you copy them into a rules directory yourself:
+
+```bash
+mkdir -p ~/.claude/rules/qring
+cp claude-code-plugin/rules/*.md ~/.claude/rules/qring/
+# or per project: <project>/.claude/rules/qring/
+```
+
+When the copied rules are found (`secret-hygiene.md` in `~/.claude/rules/qring/` or `<project>/.claude/rules/qring/`), or the project `CLAUDE.md` already carries them, the session hook skips its copy of the rules so they are not loaded twice.
+
+The project-copy path (`pnpm run plugin:sync:claude`) also writes `memory/CLAUDE.md` to the project root, where Claude Code loads it into every conversation.
 
 ### MCP server (`.mcp.json`)
 
@@ -61,7 +75,7 @@ Invoke explicitly with `> Use the secret-ops subagent to store my OpenAI key` or
 
 | Skill | Triggers On |
 |-------|-------------|
-| `secret-hygiene-rules` | Any code touching credentials, tokens, connection strings, or `.env` files — the always-on rules for plugin installs |
+| `secret-hygiene-rules` | Any code touching credentials, tokens, connection strings, or `.env` files — all three rules, including the `.env` rule the session hook leaves out |
 | `secret-management` | Mentions of secrets, API keys, tokens, credentials, `.env` files |
 | `secret-scanning` | Requests to scan, lint, audit, or find leaked credentials |
 | `secret-rotation` | Expired keys, rotation, validation, CI checks |
@@ -76,9 +90,9 @@ Skills are progressively disclosed — Claude Code reads only the metadata until
 |-------|----------|
 | `PostToolUse` (`Write\|Edit\|MultiEdit`) | Log a reminder to lint the edited file with `lint_files` MCP tool |
 | `PreToolUse` (`Bash`) | Block commands that look like they would commit / print `.env` files; warn about secret leakage |
-| `SessionStart` | Print a one-line reminder to call `get_project_context` if a `.q-ring.json` is detected |
+| `SessionStart` | Inject the always-on rules (`hooks/qring-session-rules.md`; not on `resume`) and a reminder to call `get_project_context`; when a `.q-ring.json` is detected, also nudge the agent to call `check_project` |
 
-> Hook scripts live in `hooks/scripts/`. They are pure Bash with no runtime dependencies — safe to read before installing. Plugin installs wire them via `hooks/hooks.json` (`${CLAUDE_PLUGIN_ROOT}` paths); the project-scoped sync wires them via `.claude/settings.json` instead.
+> Hook scripts live in `hooks/scripts/`. They are plain Bash that needs only `jq` (without it they exit silently and do nothing) — safe to read before installing. Plugin installs wire them via `hooks/hooks.json` (`${CLAUDE_PLUGIN_ROOT}` paths); the project-scoped sync wires them via `.claude/settings.json` instead.
 
 ## Installation
 

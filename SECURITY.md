@@ -7,6 +7,11 @@
 | 0.18.x   | Yes       |
 | < 0.18   | No        |
 
+The table shows the line that receives every fix. The full support window,
+including security-only fixes for the release candidate and for the
+previous minor from 1.0 on, is in
+[docs/stability.md](docs/stability.md#support-window).
+
 ## Reporting a Vulnerability
 
 **Do not open a public GitHub issue for security vulnerabilities.**

@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { c, SYMBOLS } from "../../utils/colors.js";
 import { runWrap, WRAP_APPROVAL_SCOPE, wrapApprovalService } from "../../core/wrap.js";
 import { grantApproval, revokeApproval, listApprovals } from "../../core/approval.js";
+import { wantsJsonOutput } from "../helpers.js";
 
 const collect = (value: string, previous: string[] = []) => [...previous, value];
 
@@ -114,7 +115,7 @@ export function registerMcpCommands(program: Command): void {
       const entries = listApprovals().filter(
         (a) => a.scope === WRAP_APPROVAL_SCOPE && a.service === service,
       );
-      if (cmd.json) {
+      if (wantsJsonOutput(program, cmd)) {
         console.log(JSON.stringify({ approvals: entries }, null, 2));
         return;
       }
