@@ -346,8 +346,23 @@ export function setSecret(
   const { service } = scopes[0];
   const source = opts.source ?? "cli";
 
+  const current = readEnvelope(service, key);
+
+  // An MCP write is held to the same key policy as an MCP read or delete:
+  // an agent that may not read or delete a key (deniedKeys, readableKeys,
+  // deniedTags on the stored secret) may not overwrite it either. Without
+  // this, set_secret, teleport_unpack, import_dotenv, generate_secret
+  // saveAs, promote_secret and rotate_secret could all replace a protected
+  // value. CLI writes are the local operator's and stay unrestricted.
+  if (source === "mcp") {
+    const decision = checkKeyReadPolicy(key, current?.meta.tags, opts.projectPath);
+    if (!decision.allowed) {
+      throw new Error(`Policy Denied: ${decision.reason}`);
+    }
+  }
+
   // Check if there's an existing envelope to preserve metadata
-  const existing = opts.freshMeta ? null : readEnvelope(service, key);
+  const existing = opts.freshMeta ? null : current;
 
   let envelope: QuantumEnvelope;
 

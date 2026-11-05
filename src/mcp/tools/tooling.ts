@@ -155,6 +155,7 @@ export function registerToolingTools(server: McpServer): void {
           fix: params.fix,
           scope: params.scope as "global" | "project" | undefined,
           projectPath: params.projectPath,
+          source: "mcp",
         });
         if (results.length === 0) {
           return text("No hardcoded secrets found in the specified files.");

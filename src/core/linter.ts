@@ -20,6 +20,8 @@ export interface LintOptions {
   fix?: boolean;
   scope?: import("./scope.js").Scope;
   projectPath?: string;
+  /** Who is fixing: an MCP caller's writes are held to key policy. Default "cli". */
+  source?: "cli" | "mcp";
 }
 
 const ENV_REF_BY_EXT: Record<string, (key: string) => string> = {
@@ -111,11 +113,17 @@ export function lintFiles(
           fixLines[lineIdx] = fixLines[lineIdx].replace(fix.original, fix.replacement);
         }
 
-        if (!hasSecret(fix.keyName, { scope: opts.scope, projectPath: opts.projectPath })) {
+        if (
+          !hasSecret(fix.keyName, {
+            scope: opts.scope,
+            projectPath: opts.projectPath,
+            source: opts.source,
+          })
+        ) {
           setSecret(fix.keyName, fix.value, {
             scope: opts.scope ?? "global",
             projectPath: opts.projectPath,
-            source: "cli",
+            source: opts.source ?? "cli",
             description: `Auto-imported from ${basename(file)}:${fix.line + 1}`,
           });
         }
