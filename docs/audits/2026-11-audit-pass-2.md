@@ -18,7 +18,9 @@ CVE.
 The CHANGELOG has never numbered audit findings. Code comments do: the
 0.14.0 audit appears as A2 to A6 and B1 to B4, and the 0.16.2 canary fixes
 as S2 and S8. To avoid colliding with those, this pass uses a C series:
-C1 to C17, in commit order. No code comment cites these ids.
+C1 to C26, in commit order. No code comment cites these ids. C18 to C26
+came from the adversarial review of PR #143 (each upheld by three of three
+reviewers) and are fixed on the same branch.
 
 Id mapping from the first draft of this report: B1 to B14 became C1 to C14
 (same order); C15 to C17 were draft items N13 to N15, fixed on this branch.
@@ -43,8 +45,9 @@ in error messages or logs.
 
 ## How findings were verified
 
-Every finding below has a regression test that **fails on `cdac34d` and
-passes with the fix**. Each was checked by running the test both ways (the
+Every finding below has a regression test that **fails without the fix
+and passes with it**: on `cdac34d` for C1 to C17, and on the commit just
+before the fix for C18 to C26. Each was checked by running the test both ways (the
 fix's source files reverted to the base, then restored). Where the test
 demonstrates the attack itself rather than only the corrected behaviour,
 the table says "attack reproduced". Items in "Examined and sound" and
@@ -71,6 +74,15 @@ the table says "attack reproduced". Items in "Examined and sound" and
 | C15 | Low | airlock | tool-name globs stopped at a newline, and the rate limiter grew without bound |
 | C16 | Low | hooks | an SSRF-blocked HTTP hook logged its full URL (path and query) |
 | C17 | Low | environments | environment names resolved to `Object.prototype` members |
+| C18 | High | exec | the C12 denylist missed whole families (`GIT_EXTERNAL_DIFF`, `MAKEFLAGS`, `PAGER`, ...) |
+| C19 | High | entanglement | entanglement checks ignored `deniedTags` in both directions |
+| C20 | Medium | bulk MCP writers | import_dotenv and teleport_unpack aborted halfway on a protected key |
+| C21 | Medium | keyring | write paths used the policy-filtered `hasSecret` as an existence check |
+| C22 | Medium | lint | lint_files --fix aborted halfway on a protected key and lost a rewrite |
+| C23 | Low | agent_scan | MCP auto-rotation wrote as "agent" and ignored the MCP write policy |
+| C24 | Low | canary alerts | a blocked alert delivery counted as a canary trip |
+| C25 | Low | keyring | deleteSecret read each envelope twice |
+| C26 | Low | keyring | a delete across scopes deleted allowed copies before refusing a denied one |
 
 ### C1: unknown exec profile ran unrestricted (Medium)
 
@@ -331,6 +343,7 @@ the table says "attack reproduced". Items in "Examined and sound" and
 - **Test:** `src/__tests__/core/exec-env-injection.test.ts`. Attack
   reproduced: on the base an allowlisted MCP exec printed `PWNED` from a
   planted `NODE_OPTIONS`.
+- **Follow-up:** the list was incomplete; C18 widens it to whole families.
 - **Commit:** `fix(exec): never sweep process-control variables like NODE_OPTIONS into a child`.
 
 ### C13: teleport bundle strings with control characters (Low)
@@ -424,6 +437,167 @@ the table says "attack reproduced". Items in "Examined and sound" and
 - **Test:** `src/__tests__/core/env-own-property.test.ts` (collapse,
   promote, diff, and a real repository on a branch named `constructor`).
 - **Commit:** `fix(env): look environment names up by own property`.
+
+### C18: process-control denylist missed whole families (High)
+
+- **Surface:** `isProcessControlEnvName` (`src/core/child-env.ts`), used by
+  exec (C12).
+- **Attack:** C12 listed a handful of loader and interpreter variables, but
+  git, ssh, make, cargo, pagers and editors obey many more. A key planted
+  as `GIT_EXTERNAL_DIFF`, `GIT_ASKPASS`, `GIT_PROXY_COMMAND`, `GIT_PAGER`,
+  `SSH_ASKPASS`, `MAKEFLAGS`, `MAKEFILES`, `RUSTC_WRAPPER`, `CARGO_*`,
+  `GLIBC_TUNABLES`, `PAGER`, `EDITOR`, `HOME` or `KUBECONFIG` still ran code
+  inside an allowlisted `git diff` or `make`.
+- **Fix:** whole families are denied by prefix (`GIT_`, `SSH_`, `CARGO_`,
+  `RUSTC`, `RUSTFLAGS`, `MAKE`, `PYTHON`, `PERL`, `RUBY`, `JAVA`, `JDK_`,
+  `NODE_`, `NPM_`, `YARN_`, `PNPM_`, `BUN_`, `DENO_`, `LD_`, `DYLD_`,
+  `GCONV_`, `GLIBC_`), plus exact shell, home, config-path, pager and
+  editor, compiler and Go toolchain names. Two deliberate exemptions:
+  credentials inside a family (last `_` segment `TOKEN`, `KEY`, `SECRET`,
+  `PASSWORD` or `PAT`, so `NPM_TOKEN`, `NODE_AUTH_TOKEN`,
+  `CARGO_REGISTRY_TOKEN` and `SSH_PRIVATE_KEY` still inject; never
+  `GIT_CONFIG_*`), and `NODE_ENV`. A token value cannot run code, and
+  denying these would break `npm publish` and deploy keys. The CLI
+  `--keys NAME` override is unchanged.
+- **Not a sandbox.** The `restricted` profile and this denylist do not
+  confine a child. A caller who controls the arguments of an allowed binary
+  can still run code through the binary itself (`git -c core.pager=…`,
+  `make -f …`, `npm run …`). The denylist closes the environment-variable
+  route only. `docs/threat-model.md` now says so.
+- **Test:** `src/__tests__/core/exec-env-gadgets.test.ts`: allowlisted
+  `git diff --no-index` with `GIT_EXTERNAL_DIFF`, and `make -f` with
+  `MAKEFILES` and with `MAKEFLAGS=--eval=$(shell …)`, plus the family
+  classification. Attack reproduced: on the parent commit all three
+  gadgets ran the payload and created the marker.
+- **Commit:** `fix(exec): deny whole families of process-control env vars`.
+
+### C19: entanglement ignored deniedTags (High)
+
+- **Surface:** the MCP `entangle_secrets` gate (`src/mcp/tools/secrets.ts`)
+  and the propagation loop in `setSecret` (`src/core/keyring.ts`).
+- **Attack:** both checks passed `undefined` for the tags. With deniedTags
+  enforced on direct reads and writes (C3, C4), entanglement was the way
+  around it, in both directions:
+  - **write:** an MCP write to a scratch key propagated into a tag-denied
+    entangled partner;
+  - **read:** a link *from* a tag-denied key to a readable one copied its
+    value across on the next operator write.
+- **Fix:** both checks read the envelope and pass its tags. A blocked MCP
+  propagation is audited as `policy_deny` (key name only, never the value).
+- **Test:** `src/__tests__/core/entanglement-tags.test.ts` (the write path:
+  set_secret SCRATCH leaves PROD unchanged; the read path: the link from
+  PROD is refused over MCP). Attack reproduced.
+- **Commit:** `fix(entangle): judge entanglement by the stored tags as well as the key name`.
+
+### C20: bulk MCP writers aborted halfway (Medium)
+
+- **Surface:** `importDotenv` (`src/core/import.ts`), MCP `import_dotenv`
+  and `teleport_unpack`.
+- **Attack (integrity):** both called `setSecret` in a loop. After C4 the
+  first protected key threw after the keys before it had been written,
+  leaving a half-applied import, an error, and no list of what landed.
+- **Fix:** `checkKeyWritePolicy(key, opts)` in `keyring.ts` makes the same
+  decision as `setSecret`, judged against the stored secret's tags, and
+  runs for every key before anything is written. Allowed keys are written;
+  protected ones are skipped. `importDotenv` returns them in the additive
+  `skippedByPolicy: [{ key, reason }]` field, and both tools list them as
+  `Skipped (policy): KEY: reason`. A policy skip is not an error.
+- **Test:** `src/__tests__/mcp/bulk-write-policy.test.ts` (importDotenv,
+  the import_dotenv tool and teleport_unpack, each under deniedKeys and
+  deniedTags, with the protected keys between allowed ones). Attack
+  reproduced: on the parent commit, keys after the first protected one
+  were never written.
+- **Commit:** `fix(policy): bulk MCP writers skip protected keys instead of aborting midway`.
+
+### C21: write paths used the policy-filtered existence check (Medium)
+
+- **Surface:** `hasSecret` and its write-path callers (`src/core/keyring.ts`,
+  `src/core/import.ts`).
+- **Attack:** over MCP, `hasSecret` reports a policy-hidden key as absent,
+  which is correct for has_secret, get and list. `skipExisting` used it as
+  an existence check, so a hidden existing key looked absent and the import
+  went on to overwrite it.
+- **Fix:** a new `secretExists` returns true, decay-aware existence for write
+  paths. `hasSecret` stays the visibility answer, and both comments state
+  the distinction. Write paths run `checkKeyWritePolicy` first, so a
+  protected key is a policy skip, never mistaken for an absent one.
+- **Test:** `src/__tests__/core/secret-exists.test.ts`.
+- **Commit:** `fix(keyring): write paths use true existence, not the policy-filtered view`.
+
+### C22: lint_files --fix aborted halfway (Medium)
+
+- **Surface:** `lintFiles` (`src/core/linter.ts`).
+- **Attack (integrity):** each fix rewrote the literal, then called
+  `setSecret`. A protected key threw midway: earlier files were already
+  rewritten and stored, later files were never processed, and the throwing
+  file's rewrite was lost.
+- **Fix:** each fix runs `checkKeyWritePolicy` first. A protected key is
+  reported on its result (`fixed: false`, `skipped: <reason>`) and its
+  literal is left in place, since rewriting it without storing the value
+  would lose it. The other fixes still run. The existing-key check uses
+  `secretExists`.
+- **Test:** `src/__tests__/core/linter.test.ts` ("lintFiles --fix from an
+  MCP caller"): file1 fixed, file2's denied key skipped with a reason,
+  file3 still processed. Attack reproduced.
+- **Commit:** `fix(lint): lint_files --fix skips protected keys instead of aborting`.
+
+### C23: agent_scan auto-rotation bypassed the MCP write policy (Low)
+
+- **Surface:** `runHealthScan` (`src/core/agent.ts`), MCP `agent_scan`.
+- **Attack:** auto-rotation wrote with `source: "agent"`, so
+  `agent_scan { autoRotate: true }` from an agent overwrote any expired
+  secret, protected ones included, with a generated value (breaking the
+  credential). The writes were attributed to the local daemon.
+- **Fix:** `runHealthScan` takes a `writeSource`, and the MCP tool passes
+  `"mcp"`. Each rotation runs `checkKeyWritePolicy`; protected keys are
+  never rotated and are listed in the additive `rotationSkipped` report
+  field.
+- **Test:** `src/__tests__/mcp/agent-scan-policy.test.ts`. Attack
+  reproduced.
+- **Residual:** agent_scan's warnings still name expired keys that MCP
+  key policy hides (as before this pass). Listing through the MCP view
+  would fix that; it is left for the 0.20 issues alongside N1 to N12.
+- **Commit:** `fix(agent): agent_scan auto-rotation over MCP honours the MCP write policy`.
+
+### C24: blocked alert delivery counted as a trip (Low)
+
+- **Surface:** `sendOne` (`src/core/canary-webhooks.ts`) and every
+  agent-facing audit filter.
+- **Attack (integrity of the trip record):** C6 logged a blocked delivery
+  with action `canary`. Each trip on a LAN-only channel therefore counted
+  twice in trip and session counts.
+- **Fix:** a new action, `canary_alert`, with the key and the detail
+  `delivery blocked (scheme://host)`. Trip counts read `canary` only. A
+  shared `AGENT_HIDDEN_ACTIONS` list (`canary`, `canary_alert`) drives MCP
+  audit_log, export_audit and the qring://sessions resources.
+- **Test:** `src/__tests__/core/canary-webhooks.test.ts`,
+  `src/__tests__/core/sessions.test.ts` ("blocked canary alert
+  deliveries"), `src/__tests__/core/audit-hardening.test.ts` ("audit_log
+  and export_audit hide blocked canary alert deliveries").
+- **Commit:** `fix(canary): record blocked alert deliveries as canary_alert, not as trips`.
+
+### C25: deleteSecret read each envelope twice (Low)
+
+- **Surface:** `deleteSecret` (`src/core/keyring.ts`).
+- **Issue:** the deniedTags check (C3) and the canary-trip check each read
+  the envelope. That is two keyring round trips, and the two checks could
+  judge different copies if the secret changed in between.
+- **Fix:** one read serves both.
+- **Test:** `src/__tests__/core/delete-secret.test.ts` (one read of the
+  key's entry).
+- **Commit:** `fix(keyring): deleteSecret reads each envelope once`.
+
+### C26: delete across scopes deleted before refusing (Low)
+
+- **Surface:** `deleteSecret` (`src/core/keyring.ts`).
+- **Attack (integrity):** with no scope, delete walks project then global
+  and checked the tag policy inside the loop. An MCP delete of a key whose
+  project copy is untagged and whose global copy is tagged `prod` deleted
+  the project copy, then threw.
+- **Fix:** every copy is read and checked first; a denial deletes nothing.
+- **Test:** `src/__tests__/core/delete-secret.test.ts` ("checks policy on
+  every scope's copy before deleting any of them"). Attack reproduced.
+- **Commit:** `fix(keyring): a delete across scopes checks every copy before deleting any`.
 
 ## Examined and sound
 
@@ -675,11 +849,17 @@ the 0.14.0 house style.
 - **MCP shell and signal hooks start disabled.** `register_hook` could plant
   a persistent shell command outside exec policy. Arm a reviewed hook with
   `qring hook enable <id>`.
-- **Exec never injects process-control variables.** A secret named
-  `NODE_OPTIONS`, `LD_PRELOAD`, `PATH`, `BASH_ENV` and similar turned an
-  allowlisted command into arbitrary code execution. These keys are skipped
-  unless the local operator names them with `--keys`, and are never
-  injected over MCP.
+- **Exec never injects process-control variables.** A secret named after a
+  variable that steers what a program runs turned an allowlisted command
+  into arbitrary code execution: `NODE_OPTIONS`, `LD_PRELOAD`, `PATH`,
+  `GIT_EXTERNAL_DIFF` inside `git diff`, `MAKEFLAGS` inside `make`, and so
+  on. Whole families are now denied (`GIT_*`, `SSH_*`, `MAKE*`,
+  `CARGO_*`/`RUSTC*`, interpreter, `LD_*`/`DYLD_*`, package manager), as
+  are `PAGER`, `EDITOR`, `HOME`, `KUBECONFIG` and similar. These keys are
+  never injected over MCP, and from the CLI only when named with `--keys`.
+  Credentials inside a family (`NPM_TOKEN`, `CARGO_REGISTRY_TOKEN`, ...)
+  still inject. Exec profiles are not a sandbox: a caller who controls an
+  allowed binary's arguments can still run code through it.
 - **Canary identity no longer leaks** through `prevHash` gaps in MCP
   `export_audit` and `qring://sessions/{id}`, through `policy_deny` events
   when an alert channel is SSRF-blocked, or through silent reads in
@@ -708,3 +888,16 @@ the 0.14.0 house style.
 - **SSRF-blocked hook URLs are logged as scheme and host only.**
 - **Environment names are looked up by own property**, so `constructor` and
   similar names never resolve to prototype members.
+- **Entanglement honours `deniedTags`** in both directions: MCP writes do
+  not propagate into a tag-denied key, and `entangle_secrets` refuses links
+  that touch one.
+- **Bulk MCP writers no longer abort halfway.** `import_dotenv`,
+  `teleport_unpack` and `lint_files --fix` check every key first, write
+  the allowed ones and list the protected ones as skipped with a reason
+  (`importDotenv` gains `skippedByPolicy`).
+- **`agent_scan` auto-rotation over MCP honours the MCP write policy.**
+  Protected keys are never rotated and are reported in `rotationSkipped`.
+- **Blocked canary alert deliveries are no longer counted as trips.** They
+  are recorded as `canary_alert` and hidden from agents.
+- **A delete across scopes checks every copy first**, so a policy denial
+  deletes nothing.
