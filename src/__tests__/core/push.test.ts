@@ -187,6 +187,55 @@ describe("pushSecrets — fly", () => {
   });
 });
 
+describe("pushSecrets — values that would inject extra variables", () => {
+  it("fly: refuses a value that closes the triple quote, in a dry run too", () => {
+    const evil = 'x"""\nDATABASE_URL="""postgres://attacker.example/db';
+    setSecret("FLY_KEY", evil, { scope: "project", projectPath: project, silent: true });
+
+    for (const dryRun of [true, false]) {
+      spawnSyncMock.mockClear();
+      const result = pushSecrets({
+        target: "fly",
+        keys: ["FLY_KEY"],
+        projectPath: project,
+        silent: true,
+        dryRun,
+      });
+      expect(result.pushed).toEqual([]);
+      expect(result.failed[0].key).toBe("FLY_KEY");
+      expect(result.failed[0].error).toMatch(/cannot quote/);
+      expect(pushCalls()).toHaveLength(0);
+    }
+  });
+
+  it("netlify: refuses a value with a newline instead of writing it raw", () => {
+    const evil = "line1\nNODE_OPTIONS=--require /tmp/evil.js";
+    setSecret("NL_KEY", evil, { scope: "project", projectPath: project, silent: true });
+
+    const result = pushSecrets({
+      target: "netlify",
+      keys: ["NL_KEY"],
+      projectPath: project,
+      silent: true,
+    });
+
+    expect(result.pushed).toEqual([]);
+    expect(result.failed[0].error).toMatch(/no dotenv line holds it exactly/);
+    expect(pushCalls()).toHaveLength(0);
+  });
+
+  it("netlify: still pushes quotable values", () => {
+    setSecret("NL_KEY", "has'single", { scope: "project", projectPath: project, silent: true });
+    const result = pushSecrets({
+      target: "netlify",
+      keys: ["NL_KEY"],
+      projectPath: project,
+      silent: true,
+    });
+    expect(result.pushed).toEqual(["NL_KEY"]);
+  });
+});
+
 describe("pushSecrets — railway", () => {
   const VALUE = "railway-secret-value";
 
