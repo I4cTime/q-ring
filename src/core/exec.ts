@@ -15,7 +15,8 @@ import { StringDecoder } from "node:string_decoder";
 import { Transform } from "node:stream";
 import { listSecrets, getSecret, type KeyringOptions } from "./keyring.js";
 import { checkDecay } from "./envelope.js";
-import { checkExecPolicy, getExecMaxRuntime } from "./policy.js";
+import { checkExecPolicy, getExecMaxRuntime, getPolicyRoot } from "./policy.js";
+import { readProjectConfig } from "./collapse.js";
 import {
   RedactionSet,
   RedactionStream,
@@ -96,7 +97,13 @@ export interface ExecResult {
   code: number;
   stdout: string;
   stderr: string;
+  /** A note for the caller about what was injected (MCP exec without a manifest). */
+  note?: string;
 }
+
+/** Shown to an MCP caller when no manifest limits what exec injects. */
+export const NO_MANIFEST_NOTE =
+  "no manifest in .q-ring.json: every scoped secret was injected; declare secrets there to limit what exec_with_secrets can inject";
 
 /**
  * Best-effort output redaction over a child process's stdout/stderr. Matching
@@ -226,6 +233,25 @@ export async function execCommand(opts: ExecOptions): Promise<ExecResult> {
     silent: true, // list silently
   });
 
+  // The boundary for an MCP caller is the operator's manifest: when the
+  // project declares its secrets, exec_with_secrets injects only those (the
+  // same least-privilege set `qring run` uses), intersected with `keys`. A
+  // key an agent planted with set_secret is inert unless the operator
+  // declared it. Read from the pinned policy root, not a caller-chosen path.
+  // Without a manifest every scoped secret is injected (denylist applied)
+  // and the result says so.
+  let note: string | undefined;
+  if ((opts.source ?? "cli") === "mcp") {
+    const root = getPolicyRoot() ?? opts.projectPath ?? process.cwd();
+    const declared = Object.keys(readProjectConfig(root)?.secrets ?? {});
+    if (declared.length > 0) {
+      const allowed = new Set(declared);
+      entries = entries.filter((e) => allowed.has(e.key));
+    } else {
+      note = NO_MANIFEST_NOTE;
+    }
+  }
+
   if (opts.keys?.length) {
     const keySet = new Set(opts.keys);
     entries = entries.filter((e) => keySet.has(e.key));
@@ -285,7 +311,7 @@ export async function execCommand(opts: ExecOptions): Promise<ExecResult> {
     }
   }
 
-  return spawnRedacted({
+  const result = await spawnRedacted({
     profile,
     command: opts.command,
     args: opts.args,
@@ -294,6 +320,7 @@ export async function execCommand(opts: ExecOptions): Promise<ExecResult> {
     captureOutput: opts.captureOutput,
     projectPath: opts.projectPath,
   });
+  return note ? { ...result, note } : result;
 }
 
 export interface SpawnRedactedOptions {

@@ -510,6 +510,8 @@ qring exec --tags backend -- node server.js
 qring exec --profile restricted -- npm test
 ```
 
+**What an agent's `exec_with_secrets` injects.** When `.q-ring.json` declares a `secrets` manifest, the MCP tool injects only the declared keys (intersected with its `keys` input), the same least-privilege set `qring run` uses: a key an agent planted with `set_secret` stays inert unless you declared it. Without a manifest it injects every secret in scope and says so in its result. On every path, a key whose name is not a plain environment variable name, or that steers what a program runs (`NODE_OPTIONS`, `LD_PRELOAD`, `PATH`, `GIT_*`, `MAKEFLAGS`, `TAR_OPTIONS`, proxy and CA-bundle variables, ...), is never injected; from the CLI you can still inject a process-control name deliberately with `--keys NAME`. That denylist is best effort; the manifest is the boundary for agents.
+
 ### Codebase Secret Scanner
 
 Migrating a legacy codebase? Quickly scan directories for hardcoded credentials using regex heuristics and Shannon entropy analysis.

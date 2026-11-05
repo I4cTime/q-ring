@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -78,16 +79,39 @@ describe("child-hijacking variable names are never injected over MCP", () => {
     "NIX_PATH",
     "DOTNET_STARTUP_HOOKS",
     "GOFLAGS",
+    // inline-code gadgets in common tools
+    "TAR_OPTIONS",
+    "CFLAGS",
+    "CXXFLAGS",
+    "CPPFLAGS",
+    "LDFLAGS",
+    "RSYNC_RSH",
+    "RSYNC_CONNECT_PROG",
+    "CVS_RSH",
+    "SVN_SSH",
+    "KUBECTL_EXTERNAL_DIFF",
+    "CLASSPATH",
+    "PHPRC",
+    "UV_INDEX_URL",
+    "POETRY_REPOSITORIES_X_URL",
+    "PIPENV_PYPI_MIRROR",
+    "CONDA_PREFIX",
+    "CLOUDSDK_PYTHON",
+    "GH_HOST",
   ])("%s", (name) => {
     expect(blockedOverMcp(name)).toBe(true);
   });
 
-  it.each(["API_TOKEN", "DATABASE_URL", "NPM_TOKEN", "GEM_HOST_API_KEY", "OPENAI_API_KEY"])(
-    "%s stays injectable",
-    (name) => {
-      expect(blockedOverMcp(name)).toBe(false);
-    },
-  );
+  it.each([
+    "API_TOKEN",
+    "DATABASE_URL",
+    "NPM_TOKEN",
+    "GEM_HOST_API_KEY",
+    "OPENAI_API_KEY",
+    "GH_TOKEN",
+  ])("%s stays injectable", (name) => {
+    expect(blockedOverMcp(name)).toBe(false);
+  });
 });
 
 describe.skipIf(process.platform === "win32" || !existsSync("/bin/bash"))(
@@ -143,5 +167,63 @@ describe.skipIf(process.platform === "win32" || !existsSync("/bin/bash"))(
       const result = await run("/bin/sh", ["-c", `ls -d "${dir}"`], "/bin/sh -c ls");
       expect(result.stdout).not.toContain("PWNED");
     });
+  },
+);
+
+function isGnuTar(): boolean {
+  try {
+    return execFileSync("tar", ["--version"], { encoding: "utf8" }).includes("GNU tar");
+  } catch {
+    return false;
+  }
+}
+
+describe.skipIf(process.platform === "win32" || !isGnuTar())(
+  "the tar --checkpoint-action gadget, run for real",
+  () => {
+    let dir: string;
+    let marker: string;
+
+    beforeEach(() => {
+      resetFakeKeyring();
+      clearPolicyCache();
+      dir = mkdtempSync(join(tmpdir(), "qring-tar-gadget-"));
+      marker = join(dir, "PWNED");
+      const payload = join(dir, "payload.sh");
+      writeFileSync(payload, `#!/bin/sh\ntouch "${marker}"\n`);
+      chmodSync(payload, 0o755);
+      writeFileSync(join(dir, "input.txt"), "data\n");
+      writeFileSync(
+        join(dir, ".q-ring.json"),
+        JSON.stringify({ policy: { exec: { allowCommands: ["tar -cf"] } } }),
+      );
+      setPolicyRoot(dir);
+      setSecret("TAR_OPTIONS", `--checkpoint=1 --checkpoint-action=exec=${payload}`, {
+        scope: "global",
+        source: "mcp",
+        projectPath: dir,
+      });
+    });
+
+    afterEach(() => {
+      setPolicyRoot(process.cwd());
+      clearPolicyCache();
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it.each(["mcp", "cli"] as const)(
+      "an allowlisted `tar -cf` (%s) does not run it",
+      async (source) => {
+        await execCommand({
+          command: "tar",
+          args: ["-cf", join(dir, "out.tar"), "-C", dir, "input.txt"],
+          projectPath: dir,
+          scope: "global",
+          source,
+          captureOutput: true,
+        });
+        expect(existsSync(marker)).toBe(false);
+      },
+    );
   },
 );

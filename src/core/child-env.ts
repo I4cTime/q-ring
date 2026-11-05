@@ -94,6 +94,21 @@ const PROCESS_CONTROL_NAMES = new Set([
   "CURL_CA_BUNDLE",
   "REQUESTS_CA_BUNDLE",
   "AWS_CA_BUNDLE",
+  // Inline-code gadgets in common tools: tar's --checkpoint-action=exec,
+  // compiler flags (-wrapper), remote-shell overrides, kubectl's diff
+  // program, the Java class path, PHP's ini path.
+  "TAR_OPTIONS",
+  "CFLAGS",
+  "CXXFLAGS",
+  "CPPFLAGS",
+  "LDFLAGS",
+  "RSYNC_RSH",
+  "RSYNC_CONNECT_PROG",
+  "CVS_RSH",
+  "SVN_SSH",
+  "KUBECTL_EXTERNAL_DIFF",
+  "CLASSPATH",
+  "PHPRC",
   // Go toolchain (exact names: a GO prefix would catch GOOGLE_API_KEY).
   "GOFLAGS",
   "GOPATH",
@@ -141,6 +156,12 @@ const PROCESS_CONTROL_PREFIXES = [
   "NIX_",
   "DOTNET_",
   "OPENSSL_",
+  "UV_",
+  "POETRY_",
+  "PIPENV_",
+  "CONDA_",
+  "CLOUDSDK_",
+  "GH_",
 ];
 
 /** Prefixes whose members are never exempt as credentials, whatever the suffix. */
