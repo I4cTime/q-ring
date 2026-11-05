@@ -1024,6 +1024,18 @@ q-ring includes a full MCP server with 46 tools for AI agent integration.
 | `rotate_secret` | Ask the upstream provider to issue a new credential and store it back in the keyring |
 | `ci_validate_secrets` | Batch-validate every accessible secret in scope and return a structured pass/fail report |
 
+### Resources
+
+State an agent should look at ships as read-only MCP **resources**, not tools, so the tool count stays at 46. Every resource is JSON, never contains secret values, and goes dark when `.q-ring.json` policy denies the tool that exposes the same information.
+
+| Resource | Description |
+|----------|-------------|
+| `qring://sessions` | Per-agent session summaries from the audit chain, last 7 days (canary trips stripped; hidden when `audit_log` is denied) |
+| `qring://sessions/{id}` | One session's event timeline, key names and actions only |
+| `qring://policy` | The active `.q-ring.json` policy: which sections exist and their tool, key, exec and airlock rules; says so when there is none or it is malformed (hidden when `get_policy_summary` is denied) |
+| `qring://rotation` | The `qring rotate:due --all` list: scheduled secrets with state, interval and due date, most overdue first (hidden when `list_secrets` is denied) |
+| `qring://canaries` | Planted canaries with trip count, last trip time and client, and alert channels by type and host. **Off by default** — canary identity is the secret, so it lists nothing unless the operator starts the server with `QRING_MCP_EXPOSE_CANARIES=1` (and `audit_log` is not denied) |
+
 ### Cursor / Kiro Configuration
 
 Add to `.cursor/mcp.json` or `.kiro/settings/mcp.json` (or let `qring setup cursor` / `qring setup kiro` write it):

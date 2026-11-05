@@ -93,3 +93,41 @@ export function compareRotationUrgency(a: RotationStatus, b: RotationStatus): nu
   const bd = b.daysUntilDue ?? Number.POSITIVE_INFINITY;
   return ad - bd;
 }
+
+export interface RotationScheduleEntry {
+  key: string;
+  scope: string;
+  rotation: RotationStatus;
+}
+
+export interface RotationSchedule {
+  /** Every secret with a reminder, most overdue first */
+  scheduled: RotationScheduleEntry[];
+  /** The `due-soon` and `overdue` subset of `scheduled`, same order */
+  due: RotationScheduleEntry[];
+}
+
+/**
+ * The `rotate:due` list: secrets with a rotation reminder, most overdue first.
+ * Shared by the CLI command and the `qring://rotation` MCP resource so both
+ * surfaces order and classify identically. Takes listed entries (no values
+ * are touched — only envelope metadata).
+ */
+export function buildRotationSchedule(
+  entries: { key: string; scope: string; envelope?: { meta: SecretMetadata } }[],
+  now: Date | number = Date.now(),
+): RotationSchedule {
+  const scheduled = entries
+    .filter((e) => e.envelope)
+    .map((e) => ({
+      key: e.key,
+      scope: e.scope,
+      rotation: rotationStatus(e.envelope!.meta, now),
+    }))
+    .filter((e) => e.rotation.state !== "unscheduled")
+    .sort((a, b) => compareRotationUrgency(a.rotation, b.rotation));
+  const due = scheduled.filter(
+    (e) => e.rotation.state === "due-soon" || e.rotation.state === "overdue",
+  );
+  return { scheduled, due };
+}
