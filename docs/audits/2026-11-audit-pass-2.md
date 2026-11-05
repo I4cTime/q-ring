@@ -18,10 +18,10 @@ CVE.
 The CHANGELOG has never numbered audit findings. Code comments do: the
 0.14.0 audit appears as A2 to A6 and B1 to B4, and the 0.16.2 canary fixes
 as S2 and S8. To avoid colliding with those, this pass uses a C series:
-C1 to C31, in commit order. No code comment cites these ids. C18 to C26
+C1 to C34, in commit order. No code comment cites these ids. C18 to C26
 came from the first adversarial review of PR #143 (each upheld by three of
-three reviewers) and C27 to C31 from the second. All are fixed on the same
-branch. N13 is also from the second review; it reuses an id freed when the
+three reviewers), C27 to C31 from the second and C32 to C34 from the third.
+All are fixed on the same branch. N13 is also from the second review; it reuses an id freed when the
 first draft's N13 to N15 became C15 to C17.
 
 Id mapping from the first draft of this report: B1 to B14 became C1 to C14
@@ -90,6 +90,9 @@ the table says "attack reproduced". Items in "Examined and sound" and
 | C29 | Medium | policy | an MCP project-scope write shadowed a tag-denied global copy |
 | C30 | Low | policy | the write-policy check read the keyring on every write |
 | C31 | Low | lint | lint --fix rewrote files in which nothing was fixed (CRLF to LF, mtime) |
+| C32 | Medium | dashboard | the agent-view dashboard shipped `prevHash`, so a hidden trip was recoverable |
+| C33 | Medium | entanglement | a link made before the source was tagged kept leaking its value |
+| C34 | Low | lint | lint --fix normalized mixed line endings, even when nothing was fixed |
 
 ### C1: unknown exec profile ran unrestricted (Medium)
 
@@ -563,7 +566,7 @@ the table says "attack reproduced". Items in "Examined and sound" and
   reproduced.
 - **Residual:** agent_scan's warnings still name expired keys that MCP
   key policy hides (as before this pass). Listing through the MCP view
-  would fix that; it is left for the 0.20 issues alongside N1 to N13.
+  would fix that; it is left for the 0.20 issues alongside N1 to N14.
 - **Commit:** `fix(agent): agent_scan auto-rotation over MCP honours the MCP write policy`.
 
 ### C24: blocked alert delivery counted as a trip (Low)
@@ -708,6 +711,79 @@ the table says "attack reproduced". Items in "Examined and sound" and
   file alone when nothing in it was fixed": a CRLF and an LF file stay
   byte-identical, and their mtimes are unchanged).
 - **Commit:** `fix(lint): leave a file untouched when none of its fixes were applied`.
+
+### C32: the agent-view dashboard shipped the hash chain (Medium)
+
+- **Surface:** `collectSnapshot(agentView)` (`src/core/dashboard.ts`).
+- **Attack:** the agent-view dashboard (C28) dropped canary events but still
+  sent whole `AuditEvent` objects, `prevHash` included. They appeared in
+  `audit` and in the anomaly samples, in `/api/status`, the first SSE frame
+  and every broadcast. An agent holding the URL and token could hash the
+  visible lines and find the event whose `prevHash` names no visible line:
+  the read right after a hidden trip. This is the C5 tell.
+- **Fix:** in agent view every event is projected to its display fields
+  (timestamp, action, source, key, scope, env, agent, detail), with no
+  `prevHash`, `pid` or correlation id. The operator's dashboard is
+  unchanged.
+- **Test:** `src/__tests__/core/dashboard-agent-view.test.ts`. An
+  agent-started dashboard with a tripped canary, read through `/api/status`
+  and the first SSE frame: no event carries `prevHash`, `pid` or a
+  correlation id, and none is a canary record. Attack reproduced: `prevHash`
+  was present on the parent commit. The canary's key name still appears in
+  the secrets table and in its own `read` event, as it does in every
+  key-name listing; what is hidden is that it is a canary.
+- **Commit:** `fix(dashboard): an agent-view dashboard ships no hash-chain links`.
+
+### C33: a link made before the source was tagged kept leaking (Medium)
+
+- **Surface:** `entangleSecrets` and the propagation loop in `setSecret`
+  (`src/core/keyring.ts`).
+- **Attack:** the policy has `deniedTags: ["prod"]` and no `deniedKeys`. An
+  agent links SCRATCH and PROD_DB_URL while PROD_DB_URL is still untagged,
+  which is allowed. Once the operator tags it `prod`, the operator's own CLI
+  writes keep propagating the value into SCRATCH, which stays untagged and
+  readable over MCP.
+- **Fix:** entangled partners share deny tags, for any source:
+  - At link time, each side takes the other's tags that the policy lists in
+    `deniedTags`.
+  - On every propagation, the target takes the written secret's deny tags.
+  - The partner keeps its own tags.
+  - Inheritance is recorded as `tag: …` on the entangle and propagate audit
+    events.
+  - If the policy cannot be read, all tags are shared (fail closed).
+- **Test:** `src/__tests__/core/entanglement-shared-tags.test.ts`:
+  - the exact scenario: after the operator tags and writes PROD, an MCP
+    get of SCRATCH is refused;
+  - a link made while the source is already tagged copies the tag at once.
+
+  Attack reproduced. The C19 write-path test now expects the MCP write to
+  be refused outright, and a raw pre-C33 registry link still exercises the
+  propagation guard.
+- **Commit:** `fix(entangle): entangled partners share deny tags`.
+
+### C34: lint --fix normalized mixed line endings (Low)
+
+- **Surface:** `lintFiles` (`src/core/linter.ts`).
+- **Issue:** C31 chose one line ending per file (CRLF if the file had any),
+  so a file with both CRLF and LF lines was rewritten all CRLF, even when
+  every fix was skipped.
+- **Fix:** the file is split keeping each line's own terminator, and fixes
+  edit line contents only. Rejoining reproduces the original bytes.
+- **Test:** `src/__tests__/core/linter.test.ts` ("lintFiles --fix keeps
+  each line's own terminator"):
+  - a mixed-endings file whose only fix is skipped stays byte-identical;
+  - in a file with an applied fix, only that line changes and every
+    terminator is kept.
+- **Commit:** `fix(lint): keep each line's own terminator when lint --fix rewrites a file`.
+
+### Test-only: wrap --inherit-env
+
+`src/__tests__/core/wrap-inherit-env.test.ts` covers the C9 stripping on the
+`qring mcp wrap --inherit-env` path. It uses a dependency-free stdio MCP stub
+that reports its own environment. Both passphrases are absent and an
+unrelated variable is present. Replacing the `withoutQringCredentials` call
+with the raw `process.env` makes the test fail.
+Commit: `test(wrap): --inherit-env strips q-ring's master keys from the wrapped server`.
 
 ## Examined and sound
 
@@ -965,6 +1041,22 @@ A related residual from C28: a dashboard an agent starts with
 policy hides. A dashboard started for an agent should list secrets
 through the MCP view.
 
+### N14: re-setting a secret without `--tags` drops its tags (Medium)
+
+`setSecret` builds the new envelope with `tags: opts.tags` and
+`description: opts.description` (`src/core/keyring.ts`, the two
+`createEnvelope` calls). Rotation, approval, provider and JIT settings are
+carried over from the existing envelope, but tags and description are not.
+Verified by running code: `qring set K v1 --tags prod` followed by
+`qring set K v2` leaves `tags` and `description` undefined. An operator
+rotating a protected value from the CLI therefore silently removes its
+`prod` tag, and with it the `deniedTags` protection. MCP writes cannot do
+this to a tag-denied key (C4, C29).
+**Recommendation:** carry `tags` (and `description`) over when the write
+does not pass them, as the other metadata already is; clearing tags should
+be an explicit flag. It changes `qring set` behaviour, so it is left for a
+decision.
+
 ## Draft CHANGELOG `Security` bullets for 0.19.0
 
 The `[Unreleased]` section is not edited on this branch. These bullets follow
@@ -995,7 +1087,8 @@ the 0.14.0 house style.
   still inject. Exec profiles are not a sandbox: a caller who controls an
   allowed binary's arguments can still run code through it.
 - **Canary identity no longer leaks** through `prevHash` gaps in MCP
-  `export_audit` and `qring://sessions/{id}`, through `policy_deny` events
+  `export_audit`, `qring://sessions/{id}` and the dashboard an agent starts
+  with `status_dashboard`, through `policy_deny` events
   when an alert channel is SSRF-blocked, or through silent reads in
   `ci_validate_secrets`, which now audits each read and trips canaries.
 - **`canary plant --force` starts fresh.** It no longer inherits the
@@ -1030,7 +1123,8 @@ the 0.14.0 house style.
   the allowed ones and list the protected ones as skipped with a reason
   (`importDotenv` gains `skippedByPolicy`). `lint --fix` leaves a file
   byte-identical (line endings and mtime included) when none of its fixes
-  were applied.
+  were applied, and keeps each line's own line ending when it rewrites
+  one.
 - **`agent_scan` auto-rotation over MCP honours the MCP write policy.**
   Protected keys are never rotated and are reported in `rotationSkipped`.
 - **Blocked canary alert deliveries are no longer counted as trips.** They
@@ -1047,6 +1141,11 @@ the 0.14.0 house style.
 - **get_project_context and agent-started dashboards no longer show canary
   records.** A tripped canary's key no longer appears in their recent
   activity.
+- **Entangled secrets share deny tags.** When one side of an
+  entanglement carries a tag that `policy.mcp.deniedTags` lists, at link
+  time or on any later write, the partner takes the tag too, so a link made
+  before a secret was tagged can no longer keep copying its value into a
+  key an agent can read.
 - **An MCP write cannot shadow a protected secret from another scope.** A
   project-scope write is refused when a global (or any other resolvable)
   copy of the key is denied by key or tag policy, so an agent can no
