@@ -180,15 +180,25 @@ keychain the same way q-ring does; no local tool changes that.
   interpreters/shells (`python`, `node`, `sh`, …), because
   `python -c '…'` is a network tool. `ci` and `unrestricted` widen
   this deliberately; custom profiles live in `.q-ring.json`.
-- **This is not a sandbox.** An allowed binary can still do anything an
-  allowed binary can do. Redaction is best-effort against *known*
-  values — it cannot mask a secret the child encrypts, compresses, or
-  re-encodes in a form other than the ones above, or prints fewer than
-  16 characters of. Values over 256 chars are not matched in encoded
-  form, and credential parts longer than 1024 characters (a whole
-  opaque value counts as one part) are not sliced; their values are
-  still matched verbatim. A service-account JSON or a large PEM key
-  still slices, because its parts (PEM lines, token fields) are short.
+- Secrets whose *names* steer what a program runs (`NODE_OPTIONS`,
+  `LD_PRELOAD`, `PATH`, the `GIT_*`, `SSH_*`, `MAKE*`, `CARGO_*`,
+  `PYTHON*` and similar families, `PAGER`, `EDITOR`, `HOME`, ...) are
+  never injected over MCP, and from the CLI only when named with
+  `--keys`. Credentials inside those families (`NPM_TOKEN`,
+  `CARGO_REGISTRY_TOKEN`, ...) are still injected.
+- **This is not a sandbox, `restricted` included.** An allowed binary can
+  still do anything an allowed binary can do, and a caller who controls
+  its arguments can get code execution through the binary itself
+  (`git -c core.pager=…`, `make -f …`, `npm run …`). The name denylist
+  closes the environment-variable route only. Redaction is best-effort
+  against *known* values — it cannot mask a secret the child encrypts,
+  compresses, or re-encodes in a form other than the ones above, or
+  prints fewer than 16 characters of. Values over 256 chars are not
+  matched in encoded form, and credential parts longer than 1024
+  characters (a whole opaque value counts as one part) are not sliced;
+  their values are still matched verbatim. A service-account JSON or a
+  large PEM key still slices, because its parts (PEM lines, token
+  fields) are short.
 
 **At rest**
 
