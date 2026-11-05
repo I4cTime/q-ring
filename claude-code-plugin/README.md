@@ -29,7 +29,7 @@ qring-mcp --help
 
 ### Always-on rules (SessionStart hook, `rules/`, and `memory/CLAUDE.md`)
 
-The always-on rules are the equivalent of `cursor-plugin/rules/*.mdc`: never hardcode secrets, and use q-ring for every secret operation. Claude Code plugins have no rules component and a plugin-root `CLAUDE.md` is not loaded, so the plugin delivers them through its one always-on channel, the **`SessionStart` hook**: `hooks/scripts/qring-session-start.sh` injects `hooks/qring-session-rules.md` into every session's context, next to the `get_project_context` note. That file holds the two `alwaysApply` Cursor rules (secret hygiene, q-ring workflow) and is generated from them by `pnpm run plugin:gen-skills`, so the plugins cannot drift (CI fails if it does).
+The always-on rules are the equivalent of `cursor-plugin/rules/*.mdc`: never hardcode secrets, and use q-ring for every secret operation. Claude Code plugins have no rules component and a plugin-root `CLAUDE.md` is not loaded, so the plugin delivers them through its one always-on channel, the **`SessionStart` hook**: `hooks/scripts/qring-session-start.sh` injects `hooks/qring-session-rules.md` into the session's context, next to the `get_project_context` note, when a session starts, is cleared (`/clear`), or is compacted (a compaction summary may drop them). On `resume` it injects only the note, since the resumed transcript already carries the rules from startup. That file holds the two `alwaysApply` Cursor rules (secret hygiene, q-ring workflow) and is generated from them by `pnpm run plugin:gen-skills`, so the plugins cannot drift (CI fails if it does).
 
 The `.env` file-safety rule is path-scoped in Cursor (`globs: "**/.env*"`) and a session hook cannot scope by path, so it is not injected. Plugin installs get it from the `secret-hygiene-rules` skill (all three rules, loaded when relevant) and the `PreToolUse` guard that asks before a shell command prints or commits a `.env` file.
 
@@ -90,7 +90,7 @@ Skills are progressively disclosed — Claude Code reads only the metadata until
 |-------|----------|
 | `PostToolUse` (`Write\|Edit\|MultiEdit`) | Log a reminder to lint the edited file with `lint_files` MCP tool |
 | `PreToolUse` (`Bash`) | Block commands that look like they would commit / print `.env` files; warn about secret leakage |
-| `SessionStart` | Inject the always-on rules (`hooks/qring-session-rules.md`) and a reminder to call `get_project_context`; when a `.q-ring.json` is detected, also nudge the agent to call `check_project` |
+| `SessionStart` | Inject the always-on rules (`hooks/qring-session-rules.md`; not on `resume`) and a reminder to call `get_project_context`; when a `.q-ring.json` is detected, also nudge the agent to call `check_project` |
 
 > Hook scripts live in `hooks/scripts/`. They are plain Bash that needs only `jq` (without it they exit silently and do nothing) — safe to read before installing. Plugin installs wire them via `hooks/hooks.json` (`${CLAUDE_PLUGIN_ROOT}` paths); the project-scoped sync wires them via `.claude/settings.json` instead.
 

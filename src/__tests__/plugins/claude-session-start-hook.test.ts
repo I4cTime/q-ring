@@ -24,14 +24,16 @@ const hasJq = process.platform !== "win32" && spawnSync("jq", ["--version"]).sta
 let home: string;
 let project: string;
 
-function runHook(script = hookScript) {
-  const input = JSON.stringify({
+const sessionStartInput = (source: string) =>
+  JSON.stringify({
     session_id: "test",
     transcript_path: join(project, "transcript.jsonl"),
     cwd: project,
     hook_event_name: "SessionStart",
-    source: "startup",
+    source,
   });
+
+function runHook(script = hookScript, input = sessionStartInput("startup")) {
   const res = spawnSync("bash", [script], {
     input,
     encoding: "utf8",
@@ -65,6 +67,30 @@ describe.skipIf(!hasJq)("claude-code-plugin SessionStart hook", () => {
     // Path-scoped in Cursor (globs), so it is not injected session-wide.
     expect(ctx).not.toContain(".env File Safety");
     expect(ctx).not.toContain("check_project");
+  });
+
+  it("skips the rules on resume but keeps the note and the check_project nudge", () => {
+    writeFileSync(join(project, ".q-ring.json"), "{}");
+    const ctx = runHook(hookScript, sessionStartInput("resume"));
+    expect(ctx).toContain("get_project_context");
+    expect(ctx).toContain("check_project");
+    expect(ctx).not.toContain("## Secret Hygiene");
+  });
+
+  it.each(["compact", "clear"])("injects the rules on %s", (source) => {
+    const ctx = runHook(hookScript, sessionStartInput(source));
+    expect(ctx).toContain("get_project_context");
+    expect(ctx).toContain(sessionRules);
+  });
+
+  it.each([
+    ["malformed", "{not json"],
+    ["empty", ""],
+    ["non-object", '["resume"]'],
+  ])("treats %s stdin as startup and injects the rules", (_label, input) => {
+    const ctx = runHook(hookScript, input);
+    expect(ctx).toContain("get_project_context");
+    expect(ctx).toContain(sessionRules);
   });
 
   it("adds the check_project nudge when .q-ring.json exists", () => {
