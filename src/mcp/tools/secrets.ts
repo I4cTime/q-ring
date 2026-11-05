@@ -399,6 +399,9 @@ export function registerSecretTools(server: McpServer): void {
       if (result.skipped.length > 0) {
         lines.push(`Skipped (existing): ${result.skipped.join(", ")}`);
       }
+      for (const s of result.skippedByPolicy) {
+        lines.push(`Skipped (policy): ${s.key}: ${s.reason}`);
+      }
 
       return text(lines.join("\n"));
     },

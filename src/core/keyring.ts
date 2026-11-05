@@ -29,7 +29,12 @@ import { hasApproval } from "./approval.js";
 import { notifyApprovalRequested } from "./notify.js";
 import { recordCanaryTrip } from "./canary-alert.js";
 import { registry as jitRegistry } from "./provision.js";
-import { checkKeyReadPolicy, checkSecretLifecyclePolicy, getPolicyRoot } from "./policy.js";
+import {
+  checkKeyReadPolicy,
+  checkSecretLifecyclePolicy,
+  getPolicyRoot,
+  type PolicyDecision,
+} from "./policy.js";
 
 function withJitEnvelopeLock<T>(service: string, key: string, fn: () => T): T {
   return withFileLock(`${service}\0${key}`, fn, { dir: "jit-locks" });
@@ -334,6 +339,34 @@ export function getEnvelope(
 }
 
 /**
+ * An MCP write is held to the same key policy as an MCP read or delete: an
+ * agent that may not read or delete a key (deniedKeys, readableKeys,
+ * deniedTags on the stored secret) may not overwrite it either. CLI and
+ * other local writes are the operator's and stay unrestricted.
+ */
+function writeDecision(
+  key: string,
+  storedTags: string[] | undefined,
+  opts: KeyringOptions,
+): PolicyDecision {
+  if ((opts.source ?? "cli") !== "mcp") return { allowed: true, policySource: "local" };
+  return checkKeyReadPolicy(key, storedTags, opts.projectPath);
+}
+
+/**
+ * Would `setSecret(key, …, opts)` be allowed by key policy? Bulk writers
+ * (import_dotenv, teleport_unpack, lint_files --fix) call this for every key
+ * before writing any, so one protected key is reported and skipped instead
+ * of aborting the batch halfway with earlier keys already written. Judged
+ * against the tags of the secret currently stored at the write scope.
+ */
+export function checkKeyWritePolicy(key: string, opts: KeyringOptions = {}): PolicyDecision {
+  const scope = opts.scope ?? "global";
+  const { service } = resolveScope({ ...opts, scope })[0];
+  return writeDecision(key, readEnvelope(service, key)?.meta.tags, opts);
+}
+
+/**
  * Store a secret with quantum metadata.
  */
 export function setSecret(
@@ -348,17 +381,9 @@ export function setSecret(
 
   const current = readEnvelope(service, key);
 
-  // An MCP write is held to the same key policy as an MCP read or delete:
-  // an agent that may not read or delete a key (deniedKeys, readableKeys,
-  // deniedTags on the stored secret) may not overwrite it either. Without
-  // this, set_secret, teleport_unpack, import_dotenv, generate_secret
-  // saveAs, promote_secret and rotate_secret could all replace a protected
-  // value. CLI writes are the local operator's and stay unrestricted.
-  if (source === "mcp") {
-    const decision = checkKeyReadPolicy(key, current?.meta.tags, opts.projectPath);
-    if (!decision.allowed) {
-      throw new Error(`Policy Denied: ${decision.reason}`);
-    }
+  const decision = writeDecision(key, current?.meta.tags, opts);
+  if (!decision.allowed) {
+    throw new Error(`Policy Denied: ${decision.reason}`);
   }
 
   // Check if there's an existing envelope to preserve metadata

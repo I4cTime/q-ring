@@ -1,7 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { toolAnnotations } from "../tool-annotations.js";
 import { z } from "zod";
-import { getSecret, setSecret, listSecrets } from "../../core/keyring.js";
+import { getSecret, setSecret, listSecrets, checkKeyWritePolicy } from "../../core/keyring.js";
 import {
   teleportPack,
   teleportPackFor,
@@ -160,21 +160,33 @@ export function registerTeleportTools(server: McpServer): void {
           identity: identity?.privateKey,
         });
 
+        // Policy first, for every key: protected keys are skipped and listed,
+        // never thrown on halfway through the bundle.
+        const o = opts(params);
+        const skipped: { key: string; reason: string }[] = [];
+        const allowed = payload.secrets.filter((s) => {
+          const decision = checkKeyWritePolicy(s.key, o);
+          if (!decision.allowed) skipped.push({ key: s.key, reason: decision.reason ?? "denied" });
+          return decision.allowed;
+        });
+        const skippedLines = skipped.map((s) => `Skipped (policy): ${s.key}: ${s.reason}`);
+
         if (params.dryRun) {
-          const preview = payload.secrets
-            .map((s) => `${s.key} [${s.scope ?? "global"}]`)
-            .join("\n");
+          const preview = allowed.map((s) => `${s.key} [${s.scope ?? "global"}]`).join("\n");
           return text(
-            `${header}Would import ${payload.secrets.length} secrets:\n${preview}`,
+            [`${header}Would import ${allowed.length} secrets:`, preview, ...skippedLines]
+              .filter(Boolean)
+              .join("\n"),
           );
         }
 
-        const o = opts(params);
-        for (const s of payload.secrets) {
+        for (const s of allowed) {
           setSecret(s.key, s.value, o);
         }
 
-        return text(`Imported ${payload.secrets.length} secret(s) from teleport bundle`);
+        return text(
+          [`Imported ${allowed.length} secret(s) from teleport bundle`, ...skippedLines].join("\n"),
+        );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         return text(JSON.stringify({ ok: false, error: { message: msg } }), true);

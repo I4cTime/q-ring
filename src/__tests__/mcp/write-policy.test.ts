@@ -99,13 +99,14 @@ describe("MCP writes are held to key policy", () => {
 
   it("teleport_unpack cannot plant over a denied key", async () => {
     const bundle = teleportPack([{ key: "PROD_DB_PASSWORD", value: "attacker-value" }], "pw");
-    const err = await call(tools.get("teleport_unpack")!, {
+    const res = await tools.get("teleport_unpack")!({
       bundle,
       passphrase: "pw",
       scope: "global",
       projectPath: dir,
     });
-    expect(err).toMatch(/Policy Denied/);
+    // Skipped and reported (see bulk-write-policy.test.ts), never written.
+    expect(res.content[0].text).toMatch(/Skipped \(policy\): PROD_DB_PASSWORD/);
     expect(read("PROD_DB_PASSWORD")).toBe(PROTECTED);
   });
 
