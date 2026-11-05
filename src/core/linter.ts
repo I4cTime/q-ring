@@ -9,11 +9,17 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { basename, extname } from "node:path";
 import { type ScanResult } from "./scan.js";
-import { setSecret, hasSecret } from "./keyring.js";
+import { setSecret, secretExists, checkKeyWritePolicy } from "./keyring.js";
 import { findSecretsInLine, calculateEntropy } from "./secrets-detect.js";
 
 export interface LintResult extends ScanResult {
   fixed: boolean;
+  /**
+   * Why a requested fix was not applied: key policy does not let this
+   * caller write the key. The literal is left in place (rewriting it to an
+   * env reference without storing the value would lose it).
+   */
+  skipped?: string;
 }
 
 export interface LintOptions {
@@ -71,7 +77,14 @@ export function lintFiles(
     if (content.includes("\0")) continue;
 
     const lines = content.split(/\r?\n/);
-    const fixes: Array<{ line: number; original: string; replacement: string; keyName: string; value: string }> = [];
+    const fixes: Array<{
+      line: number;
+      original: string;
+      replacement: string;
+      keyName: string;
+      value: string;
+      result: LintResult;
+    }> = [];
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -82,6 +95,17 @@ export function lintFiles(
         const entropy = calculateEntropy(m.value);
         const shouldFix = opts.fix === true;
 
+        const result: LintResult = {
+          file,
+          line: i + 1,
+          keyName: varNameUpper,
+          match: m.value,
+          context: line.trim(),
+          entropy: parseFloat(entropy.toFixed(2)),
+          fixed: shouldFix,
+        };
+        results.push(result);
+
         if (shouldFix) {
           const envRef = getEnvRef(file, varNameUpper);
           fixes.push({
@@ -90,34 +114,39 @@ export function lintFiles(
             replacement: envRef,
             keyName: varNameUpper,
             value: m.value,
+            result,
           });
         }
-
-        results.push({
-          file,
-          line: i + 1,
-          keyName: varNameUpper,
-          match: m.value,
-          context: line.trim(),
-          entropy: parseFloat(entropy.toFixed(2)),
-          fixed: shouldFix,
-        });
       }
     }
 
     if (opts.fix && fixes.length > 0) {
       const fixLines = content.split(/\r?\n/);
       for (const fix of fixes.reverse()) {
+        // Policy first: a key this caller may not write is skipped with a
+        // reason and its literal left alone; the other fixes, in this file
+        // and the next, still run (no abort halfway through a batch).
+        const decision = checkKeyWritePolicy(fix.keyName, {
+          scope: opts.scope ?? "global",
+          projectPath: opts.projectPath,
+          source: opts.source ?? "cli",
+        });
+        if (!decision.allowed) {
+          fix.result.fixed = false;
+          fix.result.skipped = decision.reason ?? "denied by policy";
+          continue;
+        }
+
         const lineIdx = fix.line;
         if (lineIdx >= 0 && lineIdx < fixLines.length) {
           fixLines[lineIdx] = fixLines[lineIdx].replace(fix.original, fix.replacement);
         }
 
+        // True existence, not the caller's policy-filtered view (hasSecret).
         if (
-          !hasSecret(fix.keyName, {
+          !secretExists(fix.keyName, {
             scope: opts.scope,
             projectPath: opts.projectPath,
-            source: opts.source,
           })
         ) {
           setSecret(fix.keyName, fix.value, {
