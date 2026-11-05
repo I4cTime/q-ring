@@ -219,12 +219,16 @@ async function sendOne(
   const base = { channelId: channel.id, type: channel.type };
   const ssrfBlock = await checkSSRF(channel.url);
   if (ssrfBlock) {
+    // Recorded as a "canary" event, which every agent-facing audit view
+    // drops. As a policy_deny naming the key it reached MCP audit_log on
+    // every trip (a self-hosted ntfy on the LAN is blocked by default), so
+    // an agent could read which keys are canaries. No `key` field either:
+    // canary trip counters match on it, and this is not a trip.
     logAudit({
-      action: "policy_deny",
-      key: event.key,
+      action: "canary",
       scope: event.scope,
       source: "hook",
-      detail: `canary alert SSRF blocked: ${describeAlertUrl(channel.url)}`,
+      detail: `canary alert SSRF blocked: ${describeAlertUrl(channel.url)} (trip on "${event.key}")`,
     });
     return { ...base, success: false, message: ssrfBlock };
   }

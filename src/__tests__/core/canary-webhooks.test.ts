@@ -183,8 +183,18 @@ describe("sendCanaryAlerts", () => {
     const results = await sendCanaryAlerts(EVENT);
     expect(results[0].success).toBe(false);
     expect(httpRequestMock).not.toHaveBeenCalled();
-    const denies = queryAudit({ action: "policy_deny" });
-    expect(denies.some((e) => e.detail?.includes("canary alert SSRF blocked"))).toBe(true);
+    // Operator-only record: a "canary" action without a key field...
+    const blocked = queryAudit({ action: "canary" }).filter((e) =>
+      e.detail?.includes("canary alert SSRF blocked"),
+    );
+    expect(blocked).toHaveLength(1);
+    expect(blocked[0].key).toBeUndefined();
+    expect(blocked[0].detail).toContain(EVENT.key);
+    // ...so nothing an agent can see (MCP audit views drop "canary") names
+    // the tripped key or mentions the alert.
+    const agentVisible = queryAudit().filter((e) => e.action !== "canary");
+    expect(agentVisible.some((e) => e.key === EVENT.key)).toBe(false);
+    expect(agentVisible.some((e) => e.detail?.includes("canary"))).toBe(false);
   });
 
   it("never sends the canary value", async () => {
