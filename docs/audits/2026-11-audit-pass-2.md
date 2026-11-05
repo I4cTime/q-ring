@@ -18,10 +18,11 @@ CVE.
 The CHANGELOG has never numbered audit findings. Code comments do: the
 0.14.0 audit appears as A2 to A6 and B1 to B4, and the 0.16.2 canary fixes
 as S2 and S8. To avoid colliding with those, this pass uses a C series:
-C1 to C34, in commit order. No code comment cites these ids. C18 to C26
+C1 to C35, in commit order. No code comment cites these ids. C18 to C26
 came from the first adversarial review of PR #143 (each upheld by three of
 three reviewers), C27 to C31 from the second and C32 to C34 from the third.
-All are fixed on the same branch. N13 is also from the second review; it reuses an id freed when the
+C35 was found while fixing C33 (first recorded as N14). All are fixed on the
+same branch. N13 is also from the second review; it reuses an id freed when the
 first draft's N13 to N15 became C15 to C17.
 
 Id mapping from the first draft of this report: B1 to B14 became C1 to C14
@@ -93,6 +94,7 @@ the table says "attack reproduced". Items in "Examined and sound" and
 | C32 | Medium | dashboard | the agent-view dashboard shipped `prevHash`, so a hidden trip was recoverable |
 | C33 | Medium | entanglement | a link made before the source was tagged kept leaking its value |
 | C34 | Low | lint | lint --fix normalized mixed line endings, even when nothing was fixed |
+| C35 | Medium | keyring | re-setting a secret without `--tags` dropped its tags, and with them deniedTags protection |
 
 ### C1: unknown exec profile ran unrestricted (Medium)
 
@@ -566,7 +568,7 @@ the table says "attack reproduced". Items in "Examined and sound" and
   reproduced.
 - **Residual:** agent_scan's warnings still name expired keys that MCP
   key policy hides (as before this pass). Listing through the MCP view
-  would fix that; it is left for the 0.20 issues alongside N1 to N14.
+  would fix that; it is left for the 0.20 issues alongside N1 to N13.
 - **Commit:** `fix(agent): agent_scan auto-rotation over MCP honours the MCP write policy`.
 
 ### C24: blocked alert delivery counted as a trip (Low)
@@ -784,6 +786,36 @@ that reports its own environment. Both passphrases are absent and an
 unrelated variable is present. Replacing the `withoutQringCredentials` call
 with the raw `process.env` makes the test fail.
 Commit: `test(wrap): --inherit-env strips q-ring's master keys from the wrapped server`.
+
+### C35: re-setting a secret dropped its tags (Medium)
+
+- **Surface:** `setSecret` (`src/core/keyring.ts`), `qring set`, MCP
+  `set_secret`.
+- **Attack (fail-open):** the new envelope was built with the tags and
+  description passed to this write only. Rotation, approval, provider and
+  JIT settings were carried over, but tags were not. `qring set K v1 --tags
+  prod` followed by `qring set K v2` (verified by running code) left no
+  tags. An operator rotating a protected value from the CLI therefore
+  silently removed its `prod` tag and the deniedTags protection with it, and
+  the next MCP read went through.
+- **Fix:** tags and description carry over when a write (any source)
+  passes none. Passing tags replaces them as before. `qring set
+  --clear-tags` and an additive `clearTags` input on MCP `set_secret`
+  remove them explicitly. rotate, promote, import over an existing key and
+  agent auto-rotation all write through `setSecret` without tags, so they
+  keep them. `docs/stability.md` lists the new flag and input.
+- **Test:** `src/__tests__/core/tag-carry-over.test.ts`:
+  - re-set without tags keeps tags and description;
+  - `clearTags` clears the tags only;
+  - new tags replace the old ones;
+  - promote, import and agent auto-rotation keep tags;
+  - a tag-denied key stays protected after a CLI rotation, and MCP
+    `set_secret` on it is still refused (`clearTags` included);
+  - `qring set --clear-tags` driven through the CLI.
+
+  Attack reproduced: on the parent commit the tags were gone after the
+  re-set.
+- **Commit:** `fix(keyring): re-setting a secret keeps its tags and description`.
 
 ## Examined and sound
 
@@ -1041,22 +1073,6 @@ A related residual from C28: a dashboard an agent starts with
 policy hides. A dashboard started for an agent should list secrets
 through the MCP view.
 
-### N14: re-setting a secret without `--tags` drops its tags (Medium)
-
-`setSecret` builds the new envelope with `tags: opts.tags` and
-`description: opts.description` (`src/core/keyring.ts`, the two
-`createEnvelope` calls). Rotation, approval, provider and JIT settings are
-carried over from the existing envelope, but tags and description are not.
-Verified by running code: `qring set K v1 --tags prod` followed by
-`qring set K v2` leaves `tags` and `description` undefined. An operator
-rotating a protected value from the CLI therefore silently removes its
-`prod` tag, and with it the `deniedTags` protection. MCP writes cannot do
-this to a tag-denied key (C4, C29).
-**Recommendation:** carry `tags` (and `description`) over when the write
-does not pass them, as the other metadata already is; clearing tags should
-be an explicit flag. It changes `qring set` behaviour, so it is left for a
-decision.
-
 ## Draft CHANGELOG `Security` bullets for 0.19.0
 
 The `[Unreleased]` section is not edited on this branch. These bullets follow
@@ -1146,6 +1162,9 @@ the 0.14.0 house style.
   time or on any later write, the partner takes the tag too, so a link made
   before a secret was tagged can no longer keep copying its value into a
   key an agent can read.
+- **Re-setting a secret keeps its tags and description; `--clear-tags`
+  removes them.** Rotating a protected value from the CLI used to drop its
+  `prod` tag silently.
 - **An MCP write cannot shadow a protected secret from another scope.** A
   project-scope write is refused when a global (or any other resolvable)
   copy of the key is denied by key or tag policy, so an agent can no
