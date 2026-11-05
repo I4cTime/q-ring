@@ -180,11 +180,14 @@ keychain the same way q-ring does; no local tool changes that.
   interpreters/shells (`python`, `node`, `sh`, …), because
   `python -c '…'` is a network tool. `ci` and `unrestricted` widen
   this deliberately; custom profiles live in `.q-ring.json`.
-- For an MCP caller, the project's manifest is the boundary: when
-  `.q-ring.json` declares `secrets`, `exec_with_secrets` injects only those
-  keys (read from the pinned policy root), so a key an agent planted with
-  `set_secret` is inert unless the operator declared it. Without a manifest
-  every scoped secret is injected and the tool result says so.
+- For an MCP caller, what `exec_with_secrets` injects is bounded in tiers:
+  - when `.q-ring.json` declares `secrets`, only those keys (read from the
+    pinned policy root), so a key an agent planted with `set_secret` is
+    inert unless the operator declared it;
+  - without a manifest, only credential-shaped names (`…_KEY`, `…_TOKEN`,
+    `…_SECRET`, `…_URL`, `…_DSN`, ...), with the skipped names listed in
+    the result. A planted hook variable that no denylist knows yet
+    (`GOAUTH`, `MAVEN_OPTS`, ...) is still left out.
 - Secrets whose *names* steer what a program runs (`NODE_OPTIONS`,
   `LD_PRELOAD`, `PATH`, the `GIT_*`, `SSH_*`, `MAKE*`, `CARGO_*`,
   `PYTHON*` and similar families, `PAGER`, `EDITOR`, `HOME`, proxies and

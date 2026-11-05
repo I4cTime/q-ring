@@ -19,7 +19,7 @@ export function registerToolingTools(server: McpServer): void {
       "[exec] Run a child shell command with project secrets injected as environment variables and any leaked secret values redacted from captured stdout/stderr before they return to the agent.",
       "Use to let an agent run a script that needs credentials (`npm run db:migrate`, `terraform plan`, `vercel deploy`) without ever putting plaintext values in the chat; prefer `env_generate` if you need to write a `.env` file to disk and `validate_secret` for upstream liveness checks.",
       "Spawns a real child process — has whatever side effects the command itself causes (writes, network, exec). Subject to BOTH tool policy and exec policy (allowlist/denylist). Returns a text body with `Exit code: N` then `STDOUT:` and `STDERR:` blocks; both streams are scrubbed against the secret values that were injected (verbatim; base64/hex/URL/JSON-encoded for values up to 256 chars; 16+ char slices of each credential part, skipping credential parts longer than 1024 chars, where a whole opaque value counts as one part). A scrubbed value reads `[QRING:REDACTED:<KEY_NAME>]`, naming the keyring key it came from.",
-      "Which secrets are injected: when the project's .q-ring.json declares a `secrets` manifest, only the declared keys (intersected with `keys`); without one, every secret in scope, and the result ends with a NOTE saying so. Keys named like process-control variables (NODE_OPTIONS, LD_PRELOAD, GIT_*, ...) or that are not plain identifiers are never injected.",
+      "Which secrets are injected: when the project's .q-ring.json declares a `secrets` manifest, only the declared keys (intersected with `keys`); without one, only credential-shaped names (…_KEY, …_TOKEN, …_SECRET, …_PASSWORD, …_URL, …_DSN, ...), and the result ends with a NOTE naming the skipped keys. On every path, keys named like process-control variables (NODE_OPTIONS, LD_PRELOAD, GIT_*, MAVEN_OPTS, ...) or that are not plain identifiers are never injected.",
     ].join(" "),
     {
       command: z
@@ -37,7 +37,7 @@ export function registerToolingTools(server: McpServer): void {
         .array(z.string())
         .optional()
         .describe(
-          "Whitelist of exact key names to inject. Omit to inject every allowed secret (the manifest's keys when the project declares one, else every secret in scope; subject to `tags`).",
+          "Whitelist of exact key names to inject. Omit to inject every allowed secret (the manifest's keys when the project declares one, else the credential-shaped names in scope; subject to `tags`).",
         ),
       tags: z
         .array(z.string())

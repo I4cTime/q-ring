@@ -11,7 +11,7 @@ vi.mock("@napi-rs/keyring", async () => {
 
 import { resetFakeKeyring } from "../helpers/fake-keyring.js";
 import { setSecret } from "../../core/keyring.js";
-import { execCommand, NO_MANIFEST_NOTE } from "../../core/exec.js";
+import { execCommand, noManifestNote } from "../../core/exec.js";
 import { clearPolicyCache, setPolicyRoot } from "../../core/policy.js";
 import { clearCollapseCache } from "../../core/collapse.js";
 import { registerToolingTools } from "../../mcp/tools/tooling.js";
@@ -88,11 +88,11 @@ describe("exec_with_secrets injects only what the manifest declares", () => {
     expect(injected((await run(undefined, elsewhere)).stdout)).toEqual(["A_KEY", "B_KEY"]);
   });
 
-  it("without a manifest every scoped secret is injected (denylist applied) and the result says so", async () => {
+  it("without a manifest the credential-shaped secrets are injected (denylist applied) and the result says so", async () => {
     writeConfig(false);
     const result = await run();
     expect(injected(result.stdout)).toEqual(["A_KEY", "B_KEY", "C_KEY"]);
-    expect(result.note).toBe(NO_MANIFEST_NOTE);
+    expect(result.note).toBe(noManifestNote([]));
 
     let tool:
       ((p: Record<string, unknown>) => Promise<{ content: { text: string }[] }>) | undefined;
@@ -109,6 +109,6 @@ describe("exec_with_secrets injects only what the manifest declares", () => {
       scope: "global",
       projectPath: dir,
     });
-    expect(res.content[0].text).toContain(`NOTE: ${NO_MANIFEST_NOTE}`);
+    expect(res.content[0].text).toContain(`NOTE: ${noManifestNote([])}`);
   });
 });

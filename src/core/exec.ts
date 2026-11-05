@@ -10,7 +10,12 @@
  */
 
 import { spawn } from "node:child_process";
-import { withoutQringCredentials, isProcessControlEnvName, hasEnvNameShape } from "./child-env.js";
+import {
+  withoutQringCredentials,
+  isProcessControlEnvName,
+  hasEnvNameShape,
+  isCredentialShapedName,
+} from "./child-env.js";
 import { StringDecoder } from "node:string_decoder";
 import { Transform } from "node:stream";
 import { listSecrets, getSecret, type KeyringOptions } from "./keyring.js";
@@ -101,9 +106,17 @@ export interface ExecResult {
   note?: string;
 }
 
-/** Shown to an MCP caller when no manifest limits what exec injects. */
-export const NO_MANIFEST_NOTE =
-  "no manifest in .q-ring.json: every scoped secret was injected; declare secrets there to limit what exec_with_secrets can inject";
+/**
+ * Shown to an MCP caller when no manifest limits what exec injects. Names
+ * the keys the credential-shape rule skipped (names only, never values).
+ */
+export function noManifestNote(skipped: string[]): string {
+  return (
+    "no manifest in .q-ring.json: only credential-shaped secret names (…_KEY, …_TOKEN, …_SECRET, …_URL, …_DSN, …) were injected" +
+    (skipped.length ? `; skipped: ${skipped.join(", ")}` : "") +
+    "; declare secrets there to lift this rule and choose exactly what exec_with_secrets injects"
+  );
+}
 
 /**
  * Best-effort output redaction over a child process's stdout/stderr. Matching
@@ -238,9 +251,11 @@ export async function execCommand(opts: ExecOptions): Promise<ExecResult> {
   // same least-privilege set `qring run` uses), intersected with `keys`. A
   // key an agent planted with set_secret is inert unless the operator
   // declared it. Read from the pinned policy root, not a caller-chosen path.
-  // Without a manifest every scoped secret is injected (denylist applied)
-  // and the result says so.
+  // Without a manifest only credential-shaped names are injected (below,
+  // after the shape rule and denylist), and the result says which were
+  // skipped.
   let note: string | undefined;
+  let credentialShapedOnly = false;
   if ((opts.source ?? "cli") === "mcp") {
     const root = getPolicyRoot() ?? opts.projectPath ?? process.cwd();
     const declared = Object.keys(readProjectConfig(root)?.secrets ?? {});
@@ -248,7 +263,7 @@ export async function execCommand(opts: ExecOptions): Promise<ExecResult> {
       const allowed = new Set(declared);
       entries = entries.filter((e) => allowed.has(e.key));
     } else {
-      note = NO_MANIFEST_NOTE;
+      credentialShapedOnly = true;
     }
   }
 
@@ -288,6 +303,15 @@ export async function execCommand(opts: ExecOptions): Promise<ExecResult> {
     }
     return false;
   });
+
+  // Third tier, MCP without a manifest: a denylist of hook variables cannot
+  // be finished (GOAUTH, CGO_*, MAVEN_OPTS, ... keep appearing), so only
+  // names that read as credentials are injected.
+  if (credentialShapedOnly) {
+    const skipped = entries.filter((e) => !isCredentialShapedName(e.key)).map((e) => e.key);
+    entries = entries.filter((e) => isCredentialShapedName(e.key));
+    note = noManifestNote(skipped);
+  }
 
   for (const entry of entries) {
     if (entry.envelope) {

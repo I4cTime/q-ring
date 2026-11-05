@@ -118,6 +118,17 @@ const PROCESS_CONTROL_NAMES = new Set([
   "GOTOOLCHAIN",
   "GOENV",
   "GOPROXY",
+  "GOAUTH",
+  "GOINSECURE",
+  "GONOSUMDB",
+  "GONOSUMCHECK",
+  "GOSUMDB",
+  "GOPRIVATE",
+  // JVM option variables (also covered by the JAVA/_JAVA_/JDK_ prefixes;
+  // listed so they can never fall under the credential exemption).
+  "JAVA_TOOL_OPTIONS",
+  "_JAVA_OPTIONS",
+  "JDK_JAVA_OPTIONS",
 ]);
 
 const PROCESS_CONTROL_PREFIXES = [
@@ -164,6 +175,17 @@ const PROCESS_CONTROL_PREFIXES = [
   "CONDA_",
   "CLOUDSDK_",
   "GH_",
+  // cgo flags (-wrapper reaches gcc), cc-rs target/host compiler variables,
+  // JVM build tools' option variables (-XX:OnOutOfMemoryError runs a
+  // command), rustup.
+  "CGO_",
+  "TARGET_",
+  "HOST_",
+  "MAVEN_",
+  "GRADLE_",
+  "SBT_",
+  "ANT_",
+  "RUSTUP_",
 ];
 
 /** Prefixes whose members are never exempt as credentials, whatever the suffix. */
@@ -203,4 +225,18 @@ export function isProcessControlEnvName(name: string): boolean {
     return false;
   }
   return true;
+}
+
+/**
+ * A name that reads as a credential: a `_`-separated segment run such as
+ * KEY, TOKEN, SECRET, PASSWORD, DSN, URL, CREDENTIALS or PRIVATE_KEY. Used
+ * by exec_with_secrets when the project declares no manifest: without the
+ * operator's list of what may be injected, only credential-shaped names
+ * are, so a planted hook variable no denylist knows yet stays out.
+ */
+const CREDENTIAL_NAME =
+  /(^|_)(KEY|TOKEN|SECRET|PASSWORD|PASSWD|PWD|PAT|DSN|URL|URI|CREDENTIALS?|CERT|PRIVATE_KEY|API_KEY|ACCESS_KEY|SECRET_KEY|CLIENT_SECRET|AUTH|BEARER|WEBHOOK|LICENSE|SALT|SEED|PASSPHRASE)(_|$)/i;
+
+export function isCredentialShapedName(name: string): boolean {
+  return CREDENTIAL_NAME.test(name);
 }
