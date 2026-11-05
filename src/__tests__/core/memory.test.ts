@@ -43,6 +43,10 @@ import {
   resetFakeKeyring,
   setKeyringUnavailable,
 } from "../helpers/fake-keyring.js";
+import {
+  resetDeprecationWarnings,
+  SILENCE_DEPRECATIONS_ENV,
+} from "../../core/deprecation.js";
 
 const memPath = () => join(homedir(), ".config", "q-ring", "agent-memory.enc");
 
@@ -141,5 +145,72 @@ describe("agent memory — key hardening (A4)", () => {
     // keyring unavailable so the only key that decrypts it is the legacy one
     setKeyringUnavailable(new Error("no secret service"));
     expect(recall("old")).toBe("legacy-value");
+  });
+});
+
+describe("agent memory — legacy key deprecation (Deprecated in 0.19)", () => {
+  function writeLegacyStore(): void {
+    const legacyKey = createHash("sha256")
+      .update(`qring-memory:${os.hostname()}:${os.userInfo().username}`)
+      .digest();
+    const iv = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", legacyKey, iv);
+    const store = JSON.stringify({
+      entries: { old: { value: "legacy-value", updatedAt: "2026-01-01T00:00:00Z" } },
+    });
+    const enc = Buffer.concat([cipher.update(store, "utf8"), cipher.final()]);
+    const blob = `${iv.toString("base64")}:${cipher.getAuthTag().toString("base64")}:${enc.toString("base64")}`;
+    writeFileSync(memPath(), blob, "utf8");
+  }
+
+  let stderr: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    resetDeprecationWarnings();
+    delete process.env[SILENCE_DEPRECATIONS_ENV];
+    stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  });
+  afterEach(() => {
+    stderr.mockRestore();
+    delete process.env[SILENCE_DEPRECATIONS_ENV];
+  });
+
+  const deprecationLines = () =>
+    stderr.mock.calls
+      .map((c: unknown[]) => String(c[0]))
+      .filter((l: string) => l.startsWith("q-ring: deprecated:"));
+
+  it("warns once when a machine-key store is read, not on every read", () => {
+    writeLegacyStore();
+    setKeyringUnavailable(new Error("no secret service"));
+    expect(recall("old")).toBe("legacy-value");
+    expect(recall("old")).toBe("legacy-value");
+    const lines = deprecationLines();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("machine-derived key");
+    expect(lines[0]).toContain("Removed in 1.0");
+  });
+
+  it("warns while migrating to the keyring key", () => {
+    writeLegacyStore();
+    expect(recall("old")).toBe("legacy-value");
+    expect(deprecationLines()).toHaveLength(1);
+    // Migrated: the next read decrypts under the keyring key, no new warning.
+    resetDeprecationWarnings();
+    expect(recall("old")).toBe("legacy-value");
+    expect(deprecationLines()).toHaveLength(1);
+  });
+
+  it("is silent with QRING_SILENCE_DEPRECATIONS=1", () => {
+    process.env[SILENCE_DEPRECATIONS_ENV] = "1";
+    writeLegacyStore();
+    setKeyringUnavailable(new Error("no secret service"));
+    expect(recall("old")).toBe("legacy-value");
+    expect(deprecationLines()).toHaveLength(0);
+  });
+
+  it("does not warn for a store under the keyring key", () => {
+    remember("fresh", "v");
+    expect(recall("fresh")).toBe("v");
+    expect(deprecationLines()).toHaveLength(0);
   });
 });

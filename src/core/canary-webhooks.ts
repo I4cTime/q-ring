@@ -22,6 +22,7 @@ import { httpRequest } from "../utils/http-request.js";
 import { checkSSRF } from "./ssrf.js";
 import { logAudit } from "./observer.js";
 import { configDir } from "../utils/config-dir.js";
+import { warnDeprecated } from "./deprecation.js";
 
 export type CanaryAlertType = "discord" | "slack" | "ntfy" | "generic";
 
@@ -62,7 +63,13 @@ interface AlertRegistry {
 
 function getRegistryPath(): string {
   const override = process.env.QRING_CANARY_ALERTS_PATH;
-  if (override) return override;
+  if (override) {
+    warnDeprecated(
+      "QRING_CANARY_ALERTS_PATH",
+      "QRING_CANARY_ALERTS_PATH is deprecated; set QRING_CONFIG_DIR instead (the registry lives at <dir>/canary-alerts.json). Removed in 1.0.",
+    );
+    return override;
+  }
   const dir = configDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   return join(dir, "canary-alerts.json");

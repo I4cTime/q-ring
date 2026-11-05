@@ -9,6 +9,7 @@ import { getPolicySummary } from "../../core/policy.js";
 import { c, SYMBOLS } from "../../utils/colors.js";
 import { wantsJsonOutput, emitJson } from "../helpers.js";
 import { buildOpts } from "../options.js";
+import { warnDeprecated } from "../../core/deprecation.js";
 
 export function registerSecurityCommands(program: Command): void {
   program
@@ -32,6 +33,10 @@ export function registerSecurityCommands(program: Command): void {
       const service = serviceForScope(scope, opts);
 
       if (cmd.list) {
+        warnDeprecated(
+          "approve --list",
+          "`qring approve <key> --list` is deprecated; use `qring approvals` instead. Removed in 1.0.",
+        );
         const approvals = listApprovals();
         if (approvals.length === 0) {
           console.log(c.dim("  No active approvals"));
@@ -120,6 +125,10 @@ export function registerSecurityCommands(program: Command): void {
     .action((cmd) => {
       const summary = getPolicySummary();
       if (wantsJsonOutput(program, cmd)) {
+        warnDeprecated(
+          "policy --json shape",
+          "`qring policy --json` prints a bare payload; 1.0 switches it to the { ok, data } wrapper. Removed in 1.0.",
+        );
         console.log(JSON.stringify(summary, null, 2));
         return;
       }
