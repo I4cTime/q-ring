@@ -131,21 +131,53 @@ export interface AirlockOptions {
   redactor?: Redactor;
 }
 
-/** Sliding-window per-tool call counter. */
-class RateLimiter {
-  private readonly calls = new Map<string, number[]>();
+/** Most distinct tool names the rate limiter tracks per airlock session. */
+export const RATE_LIMITER_MAX_TOOLS = 1024;
+
+/**
+ * Sliding-window per-tool call counter. Bounded: an agent calling a stream of
+ * made-up tool names (each gate check records one) must not grow the map
+ * without limit. When it is full, entries whose window has fully passed are
+ * evicted oldest-first; if every tracked tool still has a live window, the
+ * new name is refused rather than evicting a live window, because dropping
+ * one would reset that tool's count and so let a name spray bypass its limit.
+ */
+export class RateLimiter {
+  private readonly calls = new Map<string, { stamps: number[]; windowMs: number }>();
+
+  get size(): number {
+    return this.calls.size;
+  }
 
   /** Record a call; returns false when the window is already full. */
   take(tool: string, limit: WrapRateLimit, now = Date.now()): boolean {
-    const windowStart = now - limit.perSeconds * 1000;
-    const recent = (this.calls.get(tool) ?? []).filter((t) => t > windowStart);
+    const windowMs = limit.perSeconds * 1000;
+    const known = this.calls.get(tool);
+    if (!known && this.calls.size >= RATE_LIMITER_MAX_TOOLS && !this.evictExpired(now)) {
+      return false;
+    }
+    const recent = (known?.stamps ?? []).filter((t) => t > now - windowMs);
+    // Re-insert so Map order is least recently used first.
+    this.calls.delete(tool);
     if (recent.length >= limit.maxCalls) {
-      this.calls.set(tool, recent);
+      this.calls.set(tool, { stamps: recent, windowMs });
       return false;
     }
     recent.push(now);
-    this.calls.set(tool, recent);
+    this.calls.set(tool, { stamps: recent, windowMs });
     return true;
+  }
+
+  /** Drop the oldest entry whose window has passed; false if none has. */
+  private evictExpired(now: number): boolean {
+    for (const [tool, entry] of this.calls) {
+      const last = entry.stamps[entry.stamps.length - 1] ?? 0;
+      if (last <= now - entry.windowMs) {
+        this.calls.delete(tool);
+        return true;
+      }
+    }
+    return false;
   }
 }
 

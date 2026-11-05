@@ -358,6 +358,9 @@ function matchesToolPattern(pattern: string, toolName: string): boolean {
         .map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
         .join(".*") +
       "$",
+    // dotAll: without it `*` stops at a newline, so a tool named
+    // "delete_\nrepo" would slip past a "delete_*" deny.
+    "s",
   );
   return re.test(toolName);
 }
