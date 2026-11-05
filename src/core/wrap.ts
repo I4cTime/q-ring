@@ -202,6 +202,39 @@ export function createAirlockServer(
   const audit = (detail: string, action: "wrap" | "policy_deny" = "wrap") =>
     logAudit({ action, source: "mcp", detail, correlationId: session.correlationId });
 
+  /**
+   * Redact downstream-supplied text that does not travel inside a result:
+   * error messages, progress messages, resource URIs. A downstream that
+   * echoes a credential into an error ("401 for token sk-...") would
+   * otherwise put it in the transcript and the audit log. Fails closed: if
+   * the redactor cannot run, the text is withheld.
+   */
+  const scrub = (input: string): string => {
+    try {
+      return redactor.text(input);
+    } catch {
+      return "[airlock: text withheld, redaction unavailable]";
+    }
+  };
+
+  /** A downstream error, re-raised with its message and data scrubbed. */
+  const scrubbedError = (err: unknown): Error => {
+    if (err instanceof McpError) {
+      // McpError prefixes "MCP error <code>: "; strip it so it is not doubled.
+      const bare = err.message.replace(/^MCP error -?\d+: /, "");
+      let data: unknown = undefined;
+      if (err.data !== undefined) {
+        try {
+          data = redactor.result(err.data);
+        } catch {
+          data = undefined;
+        }
+      }
+      return new McpError(err.code, scrub(bare), data);
+    }
+    return new Error(scrub(err instanceof Error ? err.message : String(err)));
+  };
+
   const denied = (toolName: string, reason: string): CallToolResult => {
     audit(`airlock blocked "${toolName}" → ${session.label}: ${reason}`, "policy_deny");
     return {
@@ -294,7 +327,11 @@ export function createAirlockServer(
               void extra
                 .sendNotification({
                   method: "notifications/progress",
-                  params: { ...progress, progressToken: hostToken },
+                  params: {
+                    ...progress,
+                    ...(progress.message !== undefined ? { message: scrub(progress.message) } : {}),
+                    progressToken: hostToken,
+                  },
                 })
                 .catch(() => {});
             }
@@ -312,8 +349,8 @@ export function createAirlockServer(
         // Protocol errors (unknown tool, timeout, connection closed) must stay
         // JSON-RPC errors — the spec separates them from tool-execution
         // failures, and hosts use the distinction (e.g. to refresh tool lists).
-        if (err instanceof McpError) throw err;
-        const message = err instanceof Error ? err.message : String(err);
+        if (err instanceof McpError) throw scrubbedError(err);
+        const message = scrub(err instanceof Error ? err.message : String(err));
         audit(`tool call "${toolName}" failed: ${message}`);
         return {
           content: [{ type: "text", text: `airlock: downstream error: ${message}` }],
@@ -353,11 +390,15 @@ export function createAirlockServer(
     proxy.setRequestHandler(ReadResourceRequestSchema, async (request, extra) => {
       // URIs are identifiers, not payloads — logged (bounded) so the trail
       // says what was fetched, unlike tool arguments.
-      audit(`resource read ${truncate(request.params.uri)} → ${session.label}`);
-      const result = await downstream.readResource(request.params, {
-        signal: extra.signal,
-        timeout: downstreamTimeoutMs(),
-      });
+      audit(`resource read ${truncate(scrub(request.params.uri))} → ${session.label}`);
+      const result = await downstream
+        .readResource(request.params, {
+          signal: extra.signal,
+          timeout: downstreamTimeoutMs(),
+        })
+        .catch((err: unknown) => {
+          throw scrubbedError(err);
+        });
       return redactor.result(result);
     });
     if (dsCaps.resources?.subscribe) {
@@ -382,10 +423,14 @@ export function createAirlockServer(
     proxy.setRequestHandler(GetPromptRequestSchema, async (request, extra) => {
       // Prompt arguments are user content — never logged, like tool args.
       audit(`prompt get "${request.params.name}" → ${session.label}`);
-      const result = await downstream.getPrompt(request.params, {
-        signal: extra.signal,
-        timeout: downstreamTimeoutMs(),
-      });
+      const result = await downstream
+        .getPrompt(request.params, {
+          signal: extra.signal,
+          timeout: downstreamTimeoutMs(),
+        })
+        .catch((err: unknown) => {
+          throw scrubbedError(err);
+        });
       return redactor.result(result);
     });
   }
