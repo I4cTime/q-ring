@@ -18,10 +18,10 @@ CVE.
 The CHANGELOG has never numbered audit findings. Code comments do: the
 0.14.0 audit appears as A2 to A6 and B1 to B4, and the 0.16.2 canary fixes
 as S2 and S8. To avoid colliding with those, this pass uses a C series:
-C1 to C39, in commit order. No code comment cites these ids. C18 to C26
+C1 to C40, in commit order. No code comment cites these ids. C18 to C26
 came from the first adversarial review of PR #143 (each upheld by three of
-three reviewers), C27 to C31 from the second, C32 to C34 from the third and
-C36 to C39 from the fourth. C35 was found while fixing C33 (first recorded
+three reviewers), C27 to C31 from the second, C32 to C34 from the third,
+C36 to C39 from the fourth and C40 from the fifth. C35 was found while fixing C33 (first recorded
 as N14). All are fixed on the
 same branch. N13 is also from the second review; it reuses an id freed when the
 first draft's N13 to N15 became C15 to C17.
@@ -100,6 +100,7 @@ the table says "attack reproduced". Items in "Examined and sound" and
 | C37 | Medium | exec / run | the name-shape rule had no CLI test, and `qring run` did not apply it |
 | C38 | Low | MCP set_secret | `tags` with `clearTags` let clearTags win silently |
 | C39 | Low | exec | master-key stripping was case-sensitive (Windows env names are not) |
+| C40 | Medium | exec | the denylist still missed GOAUTH, CGO_*, TARGET_*/HOST_*, MAVEN_OPTS...; manifest-less MCP exec now injects only credential-shaped names |
 
 ### C1: unknown exec profile ran unrestricted (Medium)
 
@@ -846,7 +847,8 @@ Commit: `test(wrap): --inherit-env strips q-ring's master keys from the wrapped 
     secret is injected as before (denylist applied), and the result ends
     with `NOTE: no manifest in .q-ring.json: every scoped secret was
     injected; declare secrets there to limit what exec_with_secrets can
-    inject`.
+    inject`. (C40 replaced this manifest-less rule with credential-shaped
+    names only.)
   - **Denylist:** the names and families above are added, the CLI path
     included. `GH_TOKEN` and similar credentials stay injectable.
 - **Where the boundary is:** the denylist is best effort, a guard rail for
@@ -904,6 +906,79 @@ Commit: `test(wrap): --inherit-env strips q-ring's master keys from the wrapped 
 - **Fix:** names are compared case-insensitively on every platform.
 - **Test:** `src/__tests__/core/child-env.test.ts` (mixed-case variants).
 - **Commit:** `fix(exec): strip q-ring's master keys from child envs case-insensitively`.
+
+### C40: the third tier, credential-shaped names (Medium)
+
+- **Surface:** `execCommand`, `child-env.ts`, MCP `exec_with_secrets`.
+- **Attack:** the denylist still missed:
+  - `GOAUTH` (Go 1.24's `command` form);
+  - the `CGO_*` flags (`-wrapper` reaches gcc);
+  - cc-rs `TARGET_*`/`HOST_*`;
+  - `MAVEN_OPTS`, `GRADLE_OPTS`, `SBT_OPTS` and `ANT_OPTS`
+    (`-XX:OnOutOfMemoryError` runs via sh).
+
+  Without a manifest, C36 still injected every scoped secret that was not
+  on the list, so each newly found hook variable was another hole.
+- **Fix:** what an MCP caller's `exec_with_secrets` injects now follows
+  three tiers:
+  1. **The manifest declares.** When `.q-ring.json` lists `secrets`, only
+     those keys (C36).
+  2. **Otherwise, credential-shaped names.** Only keys whose names read as
+     credentials are injected: an `_`-separated `KEY`, `TOKEN`, `SECRET`,
+     `PASSWORD`, `PASSWD`, `PWD`, `PAT`, `DSN`, `URL`, `URI`,
+     `CREDENTIAL(S)`, `CERT`, `PRIVATE_KEY`, `API_KEY`, `ACCESS_KEY`,
+     `SECRET_KEY`, `CLIENT_SECRET`, `AUTH`, `BEARER`, `WEBHOOK`,
+     `LICENSE`, `SALT`, `SEED` or `PASSPHRASE`, case-insensitive. The
+     result's NOTE names the skipped keys (names only, never values) and
+     says a manifest lifts the rule.
+  3. **The denylist, on every path, best effort.** The shape rule and the
+     denylist always apply, and the denylist wins over the credential
+     pattern. A denied-family name is injected only under the existing
+     credential-suffix exemption (last segment `TOKEN`, `KEY`, `SECRET`,
+     `PASSWORD` or `PAT`), never for `BASH_FUNC_`, `LUA_INIT` or
+     `GIT_CONFIG_` names.
+
+  For the CLI path the denylist also gains:
+  - `GOAUTH`, `GOINSECURE`, `GONOSUMDB`, `GONOSUMCHECK`, `GOSUMDB` and
+    `GOPRIVATE`;
+  - the `CGO_`, `TARGET_`, `HOST_`, `MAVEN_`, `GRADLE_`, `SBT_`, `ANT_` and
+    `RUSTUP_` prefixes;
+  - `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS` and `JDK_JAVA_OPTIONS` as exact
+    names.
+
+  The tool description, the README and the threat model state the three
+  tiers.
+- **Test:** `src/__tests__/core/exec-credential-shape.test.ts`. With no
+  manifest, a planted `GOAUTH` and `MAVEN_OPTS` plus `DATABASE_URL`,
+  `STRIPE_KEY`, `OPENAI_API_KEY`, `SENTRY_DSN` and `MY_CONFIG`:
+  - the first two never reach the child;
+  - the credential-shaped ones do;
+  - `MY_CONFIG` is skipped and named in the note, with no value in it;
+  - naming `MY_CONFIG` in `keys` does not lift the rule;
+  - the CLI path still injects `MY_CONFIG`;
+  - the new denylist entries, the exemption and the pattern are checked
+    directly.
+
+  The C36 test now expects the tier-2 note.
+- **Commit:** `fix(exec): without a manifest, exec_with_secrets injects only credential-shaped names`.
+
+### Tests only: status_dashboard end to end, and the store symlink case
+
+- `src/__tests__/mcp/status-dashboard-tool.test.ts` calls the
+  status_dashboard tool handler and fetches the returned URL with its
+  token. `/api/status` and the first SSE frame carry no canary records and
+  no `prevHash`, `pid` or `correlationId`. A pass-through spy pins
+  `agentView: true` at the call site; dropping it fails all three tests.
+  Commit: `test(mcp): status_dashboard end to end serves the agent view`.
+- `src/__tests__/core/backend-file-symlink.test.ts` covers a symlink at the
+  file-backend store path:
+  - a symlink to a valid store elsewhere is replaced by a regular file and
+    the target's bytes are untouched;
+  - a symlink to something that is not a store is refused
+    (`BackendUnavailableError`) before any write.
+
+  The `saveStore` comment now describes both cases. Commit:
+  `test(backend): pin the file-backend store's behaviour with a symlink at its path`.
 
 ## Examined and sound
 
@@ -1244,13 +1319,18 @@ the 0.14.0 house style.
   names. A key whose name is not a plain environment variable name, such
   as `stripe-key`, is no longer injected by exec/run; rename it.
 - **An agent's `exec_with_secrets` injects only what the manifest
-  declares.** When `.q-ring.json` lists `secrets`, the MCP tool injects
-  only those keys (intersected with its `keys` input), so a key an agent
-  planted with `set_secret` stays inert. Without a manifest it injects
-  every scoped secret and says so in its result. More inline-code gadgets
-  are denied on every path: `TAR_OPTIONS`, `CFLAGS`/`LDFLAGS` and friends,
-  `RSYNC_RSH`, `CVS_RSH`, `SVN_SSH`, `KUBECTL_EXTERNAL_DIFF`, `CLASSPATH`,
-  `PHPRC` and the uv, poetry, pipenv, conda, gcloud and gh families.
+  declares, or else only credential-shaped names.**
+  - When `.q-ring.json` lists `secrets`, the MCP tool injects only those
+    keys (intersected with its `keys` input), so a key an agent planted
+    with `set_secret` stays inert.
+  - Without a manifest, it injects only keys whose names read as
+    credentials (`…_KEY`, `…_TOKEN`, `…_SECRET`, `…_PASSWORD`, `…_URL`,
+    `…_DSN`, ...), and its result names the keys it skipped.
+  - On every path, more inline-code gadgets are denied: `TAR_OPTIONS`,
+    `CFLAGS`/`LDFLAGS`, `CGO_*`, `GOAUTH`, `MAVEN_OPTS`/`GRADLE_OPTS`,
+    `TARGET_*`/`HOST_*`, `RSYNC_RSH`, `CVS_RSH`, `SVN_SSH`,
+    `KUBECTL_EXTERNAL_DIFF`, `CLASSPATH`, `PHPRC`, and the uv, poetry,
+    pipenv, conda, gcloud, gh and rustup families.
 - **get_project_context and agent-started dashboards no longer show canary
   records.** A tripped canary's key no longer appears in their recent
   activity.
