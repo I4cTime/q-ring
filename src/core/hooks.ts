@@ -197,6 +197,16 @@ function executeShell(command: string, payload: HookPayload): Promise<HookResult
   });
 }
 
+/** `scheme://host[:port]` of a URL, for logs; never the path or query. */
+function urlOrigin(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return "(unparseable URL)";
+  }
+}
+
 async function executeHttp(url: string, payload: HookPayload): Promise<HookResult> {
   const ssrfBlock = await checkSSRF(url);
   if (ssrfBlock) {
@@ -205,7 +215,10 @@ async function executeHttp(url: string, payload: HookPayload): Promise<HookResul
       key: payload.key,
       scope: payload.scope,
       source: payload.source,
-      detail: `hook SSRF blocked: ${url}`,
+      // Scheme and host only: webhook paths and query strings are often the
+      // credential (Slack/Discord paths, ?token=), and audit_log is readable
+      // over MCP.
+      detail: `hook SSRF blocked: ${urlOrigin(url)}`,
     });
     return { hookId: "", success: false, message: ssrfBlock };
   }
