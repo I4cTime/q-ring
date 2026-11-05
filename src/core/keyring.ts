@@ -87,6 +87,13 @@ export interface SetSecretOptions extends KeyringOptions {
   canary?: boolean;
   /** Provider token shape the canary value imitates */
   canaryFormat?: string;
+  /**
+   * Start from fresh metadata instead of inheriting it from an envelope
+   * already at this key: no createdAt, access count, entanglement, rotation,
+   * provider, approval or JIT settings carry over. Used when a canary is
+   * planted over an existing secret, which is a new credential, not an update.
+   */
+  freshMeta?: boolean;
 }
 
 export const MAX_ROTATE_EVERY_DAYS = 3650;
@@ -323,7 +330,7 @@ export function setSecret(
   const source = opts.source ?? "cli";
 
   // Check if there's an existing envelope to preserve metadata
-  const existing = readEnvelope(service, key);
+  const existing = opts.freshMeta ? null : readEnvelope(service, key);
 
   let envelope: QuantumEnvelope;
 
@@ -413,8 +420,9 @@ export function setSecret(
   writeEnvelope(service, key, envelope);
   logAudit({ action: "write", key, scope, source });
 
-  // Propagate to entangled secrets
-  const entangled = findEntangled({ service, key });
+  // Propagate to entangled secrets. A canary never propagates: copying its
+  // fake value into a partner would overwrite a real credential with noise.
+  const entangled = canaryFlag ? [] : findEntangled({ service, key });
   for (const target of entangled) {
     try {
       // An MCP-sourced write must not silently propagate into a key the
@@ -435,7 +443,9 @@ export function setSecret(
         }
       }
       const targetEnvelope = readEnvelope(target.service, target.key);
-      if (targetEnvelope) {
+      // Nor does a real value propagate INTO a canary: the honeytoken would
+      // start holding a live credential.
+      if (targetEnvelope && !targetEnvelope.meta.canary) {
         if (opts.states) {
           targetEnvelope.states = opts.states;
         } else {
