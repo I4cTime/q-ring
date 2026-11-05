@@ -557,12 +557,21 @@ export function deleteSecret(
 
   let deleted = false;
 
-  for (const { service, scope } of scopes) {
-    const entry = new Entry(service, key);
-    // One read serves both the tag-policy check and the canary check, so
-    // they judge the same envelope.
-    const existing = readEnvelope(service, key);
+  // Read every copy and check policy on all of them before deleting any:
+  // checking scope by scope deleted an allowed project copy and only then
+  // refused a tag-denied global one. One read per copy serves both the tag
+  // check and the canary check, so they judge the same envelope.
+  const copies = scopes.map(({ service, scope }) => ({
+    service,
+    scope,
+    existing: readEnvelope(service, key),
+  }));
+  for (const { existing } of copies) {
     if (existing) assertMcpTagPolicy(key, existing, opts);
+  }
+
+  for (const { service, scope, existing } of copies) {
+    const entry = new Entry(service, key);
     try {
       // Deleting a canary is how an attacker removes the tripwire before a
       // sweep — treat it as a trip, not a routine delete (S8, v0.16.2).

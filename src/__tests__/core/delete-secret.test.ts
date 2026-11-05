@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -14,7 +14,7 @@ vi.mock("../../core/notify.js", () => ({
   notifyApprovalRequested: vi.fn(),
 }));
 
-import { deleteSecret } from "../../core/keyring.js";
+import { setSecret, getSecret, deleteSecret } from "../../core/keyring.js";
 import { plantCanary } from "../../core/canary.js";
 import { queryAudit } from "../../core/observer.js";
 import { setPolicyRoot, clearPolicyCache } from "../../core/policy.js";
@@ -49,5 +49,25 @@ describe("deleteSecret", () => {
     );
     expect(trapReads).toHaveLength(1);
     expect(queryAudit({ action: "canary", key: "TRAP" })).toHaveLength(1);
+  });
+
+  it("checks policy on every scope's copy before deleting any of them", () => {
+    writeFileSync(
+      join(dir, ".q-ring.json"),
+      JSON.stringify({ policy: { mcp: { deniedTags: ["prod"] } } }),
+    );
+    clearPolicyCache();
+    setSecret("SHARED_KEY", "project-copy", { scope: "project", projectPath: dir, source: "cli" });
+    setSecret("SHARED_KEY", "global-copy", { scope: "global", source: "cli", tags: ["prod"] });
+
+    // No scope: resolves to the project copy (allowed) and the global copy
+    // (tag-denied). The denial must leave both in place.
+    expect(() => deleteSecret("SHARED_KEY", { projectPath: dir, source: "mcp" })).toThrow(
+      /Policy Denied: Tag "prod"/,
+    );
+    expect(getSecret("SHARED_KEY", { scope: "project", projectPath: dir, silent: true })).toBe(
+      "project-copy",
+    );
+    expect(getSecret("SHARED_KEY", { scope: "global", silent: true })).toBe("global-copy");
   });
 });
