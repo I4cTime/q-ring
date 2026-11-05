@@ -18,9 +18,11 @@ CVE.
 The CHANGELOG has never numbered audit findings. Code comments do: the
 0.14.0 audit appears as A2 to A6 and B1 to B4, and the 0.16.2 canary fixes
 as S2 and S8. To avoid colliding with those, this pass uses a C series:
-C1 to C26, in commit order. No code comment cites these ids. C18 to C26
-came from the adversarial review of PR #143 (each upheld by three of three
-reviewers) and are fixed on the same branch.
+C1 to C31, in commit order. No code comment cites these ids. C18 to C26
+came from the first adversarial review of PR #143 (each upheld by three of
+three reviewers) and C27 to C31 from the second. All are fixed on the same
+branch. N13 is also from the second review; it reuses an id freed when the
+first draft's N13 to N15 became C15 to C17.
 
 Id mapping from the first draft of this report: B1 to B14 became C1 to C14
 (same order); C15 to C17 were draft items N13 to N15, fixed on this branch.
@@ -83,6 +85,11 @@ the table says "attack reproduced". Items in "Examined and sound" and
 | C24 | Low | canary alerts | a blocked alert delivery counted as a canary trip |
 | C25 | Low | keyring | deleteSecret read each envelope twice |
 | C26 | Low | keyring | a delete across scopes deleted allowed copies before refusing a denied one |
+| C27 | High | exec | `BASH_FUNC_ls%%` (a bash exported function) and the proxy/trust-store set were injected |
+| C28 | Medium | canary | get_project_context and an agent-started dashboard showed canary records |
+| C29 | Medium | policy | an MCP project-scope write shadowed a tag-denied global copy |
+| C30 | Low | policy | the write-policy check read the keyring on every write |
+| C31 | Low | lint | lint --fix rewrote files in which nothing was fixed (CRLF to LF, mtime) |
 
 ### C1: unknown exec profile ran unrestricted (Medium)
 
@@ -556,7 +563,7 @@ the table says "attack reproduced". Items in "Examined and sound" and
   reproduced.
 - **Residual:** agent_scan's warnings still name expired keys that MCP
   key policy hides (as before this pass). Listing through the MCP view
-  would fix that; it is left for the 0.20 issues alongside N1 to N12.
+  would fix that; it is left for the 0.20 issues alongside N1 to N13.
 - **Commit:** `fix(agent): agent_scan auto-rotation over MCP honours the MCP write policy`.
 
 ### C24: blocked alert delivery counted as a trip (Low)
@@ -598,6 +605,109 @@ the table says "attack reproduced". Items in "Examined and sound" and
 - **Test:** `src/__tests__/core/delete-secret.test.ts` ("checks policy on
   every scope's copy before deleting any of them"). Attack reproduced.
 - **Commit:** `fix(keyring): a delete across scopes checks every copy before deleting any`.
+
+### C27: bash exported functions and network-hijack variables (High)
+
+- **Surface:** the exec injection filter (`src/core/exec.ts`,
+  `src/core/child-env.ts`).
+- **Attack:** a key named `BASH_FUNC_ls%%` with the value
+  `() { echo PWNED; }` passed the C18 denylist. bash imports such a
+  variable as an exported function definition, also in posix mode and as
+  `/bin/sh`, so any allowlisted bash script, `sh -c ...` or `npm run` ran
+  the planted `ls`. Separately, the proxy and trust-store variables
+  (`HTTPS_PROXY`, `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, ...) let a
+  planted key redirect or intercept a child's TLS traffic, credentials
+  included.
+- **Fix:**
+  - A shape rule runs first and cannot be overridden, not even with
+    `--keys`: a key that is not a plain identifier
+    (`[A-Za-z_][A-Za-z0-9_]*`) is never injected.
+  - `BASH_FUNC_` and `LUA_INIT` are denied anyway and are never exempt as
+    credentials.
+  - Newly denied:
+    - proxy variables: `HTTP(S)_PROXY`, `ALL_PROXY`, `NO_PROXY`,
+      `FTP_PROXY`, in any case;
+    - trust stores: `OPENSSL_*`, `SSL_CERT_FILE` and `SSL_CERT_DIR`,
+      `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, `AWS_CA_BUNDLE`;
+    - the `PIP_`, `COMPOSER_`, `GEM_`, `BUNDLE_`, `NIX_` and `DOTNET_`
+      families.
+  - `NODE_EXTRA_CA_CERTS`, `GIT_SSL_*`, `JAVA_TOOL_OPTIONS` and
+    `_JAVA_OPTIONS` were already covered by `NODE_`, `GIT_`, `JAVA` and
+    `_JAVA_`.
+- **Test:** `src/__tests__/core/exec-env-hijack.test.ts`. A parametrized
+  table of about 50 child-hijacking names, plus the gadget run for real: an
+  allowlisted `#!/bin/bash` script and `/bin/sh -c ls` (bash as sh).
+  Attack reproduced: on the parent commit both printed `PWNED`.
+- **Commit:** `fix(exec): never inject non-identifier names or bash functions; deny network hijack vars`.
+
+### C28: canary records in get_project_context and agent dashboards (Medium)
+
+- **Surface:** `getProjectContext` (`src/core/context.ts`), the dashboard
+  snapshot (`src/core/dashboard.ts`), `analyze_secrets`.
+- **Attack:** get_project_context returned the last 20 audit events (action
+  and key) unfiltered, so a canary trip or `canary_alert` record named the
+  honeytoken. The MCP status_dashboard tool hands the agent the dashboard
+  URL and token, and the snapshot carried the same events in `audit` and in
+  the session timelines.
+- **Fix:**
+  - get_project_context and analyze_secrets drop `AGENT_HIDDEN_ACTIONS`
+    before taking their window.
+  - A dashboard started by an agent (`agentView`) drops them too. The
+    operator's `qring status` dashboard still shows trips.
+  - The other `queryAudit` callers were checked:
+    - audit_log, export_audit and sessions were already filtered;
+    - `qring://canaries` is the operator opt-in;
+    - detect_anomalies and health_check read `read` events only and print
+      descriptions.
+- **Test:** `src/__tests__/core/canary-agent-surfaces.test.ts`. Attack
+  reproduced for get_project_context and the agent dashboard.
+- **Residual:** an agent-started dashboard still lists every key name,
+  including keys MCP key policy hides from list_secrets. See the note under
+  N13.
+- **Commit:** `fix(canary): hide canary records from every agent-reachable audit reader`.
+
+### C29: project-scope shadowing of a tag-denied global (Medium)
+
+- **Surface:** `checkKeyWritePolicy` and `setSecret` (`src/core/keyring.ts`).
+- **Attack:** with `deniedTags: ["prod"]` and a `prod`-tagged global
+  `DATABASE_URL`, an MCP `set_secret` at project scope found no copy at the
+  write scope and created an untagged project copy. Project wins the
+  operator's scope-less resolution, so every later `qring run`, `exec` and
+  `get` in the project used the agent's value.
+- **Fix:** an MCP write checks every resolvable scope's copy of the key,
+  not only the write scope's, and is refused if any copy is key-denied or
+  tag-denied. The refusal is audited as `policy_deny`.
+- **Test:** `src/__tests__/core/shadow-write.test.ts` (the exact scenario,
+  and the inverse: with no denied copy anywhere, the write succeeds).
+  Attack reproduced.
+- **Commit:** `fix(policy): an MCP write cannot shadow a tag-denied copy in another scope`.
+
+### C30: the write-policy check read the keyring on every write (Low)
+
+- **Surface:** `checkKeyWritePolicy` (`src/core/keyring.ts`).
+- **Issue:** it read the stored envelope at every resolvable scope for
+  every write, including CLI writes and MCP writes under policies without
+  `deniedTags`.
+- **Fix:**
+  - Local writes return at once, with no reads.
+  - An MCP write checks the key-name rules first, without reading.
+  - The per-scope reads run only when `policy.mcp.deniedTags` is set.
+- **Test:** `src/__tests__/core/write-policy-reads.test.ts`: a CLI import of
+  N keys does one read per key, the metadata read `setSecret` needs anyway,
+  and so does an MCP import without `deniedTags`.
+- **Commit:** `perf(policy): the write-policy check reads the keyring only when it must`.
+
+### C31: lint --fix rewrote files with nothing fixed (Low)
+
+- **Surface:** `lintFiles` (`src/core/linter.ts`).
+- **Issue:** after C22 skips, a file whose every fix was refused was still
+  rewritten, joined with `\n`: CRLF became LF and the mtime changed.
+- **Fix:** write only when the content changed, in the file's own line
+  endings.
+- **Test:** `src/__tests__/core/linter.test.ts` ("lintFiles --fix leaves a
+  file alone when nothing in it was fixed": a CRLF and an LF file stay
+  byte-identical, and their mtimes are unchanged).
+- **Commit:** `fix(lint): leave a file untouched when none of its fixes were applied`.
 
 ## Examined and sound
 
@@ -833,6 +943,28 @@ the path. The consistent choice is to fail closed when no set has ever been
 built: withhold results, as that branch already does when a build throws,
 and say so in the session-start banner.
 
+### N13: children can read the parent's environment from /proc (Medium)
+
+On Linux, a child of `qring exec` or `qring run` (or any other child)
+can read `/proc/<ppid>/environ`. That file is the environment block the
+q-ring process was started with. Stripping `QRING_FILE_PASSPHRASE` and
+`QRING_MEMORY_PASSPHRASE` from the child's environment (C9) and
+`unsetenv` in the parent do not change it, so a hostile child running as
+the same user can still recover both passphrases. That is the whole file
+store and the agent memory. This is a known limitation of passing a
+passphrase in an environment variable.
+**Recommendation for 0.20:**
+- Accept the passphrase from a file (`QRING_FILE_PASSPHRASE_FILE`,
+  `QRING_MEMORY_PASSPHRASE_FILE`; read once and never put into the
+  environment), or from the OS keyring where one exists.
+- Have `qring doctor` warn when either passphrase is in the environment
+  of a process that will exec children (exec, run, wrap, push, hooks).
+
+A related residual from C28: a dashboard an agent starts with
+`status_dashboard` lists every key name, including keys that MCP key
+policy hides. A dashboard started for an agent should list secrets
+through the MCP view.
+
 ## Draft CHANGELOG `Security` bullets for 0.19.0
 
 The `[Unreleased]` section is not edited on this branch. These bullets follow
@@ -846,6 +978,8 @@ the 0.14.0 house style.
   `rotate_secret` and `lint_files --fix` could overwrite a key that policy
   denies, which is the direct form of the 0.14.0 entanglement bypass. With
   a `readableKeys` allowlist, MCP writes are now limited to those keys too.
+  The check reads the keyring only for MCP writes under a `deniedTags`
+  policy.
 - **MCP shell and signal hooks start disabled.** `register_hook` could plant
   a persistent shell command outside exec policy. Arm a reviewed hook with
   `qring hook enable <id>`.
@@ -894,10 +1028,26 @@ the 0.14.0 house style.
 - **Bulk MCP writers no longer abort halfway.** `import_dotenv`,
   `teleport_unpack` and `lint_files --fix` check every key first, write
   the allowed ones and list the protected ones as skipped with a reason
-  (`importDotenv` gains `skippedByPolicy`).
+  (`importDotenv` gains `skippedByPolicy`). `lint --fix` leaves a file
+  byte-identical (line endings and mtime included) when none of its fixes
+  were applied.
 - **`agent_scan` auto-rotation over MCP honours the MCP write policy.**
   Protected keys are never rotated and are reported in `rotationSkipped`.
 - **Blocked canary alert deliveries are no longer counted as trips.** They
   are recorded as `canary_alert` and hidden from agents.
 - **A delete across scopes checks every copy first**, so a policy denial
   deletes nothing.
+- **Exec never injects bash functions or network-hijack variables.** A key
+  that is not a plain identifier, such as `BASH_FUNC_ls%%` (which bash
+  imports as a function, also as `/bin/sh`), is never injected. Proxy and
+  TLS trust-store variables (`HTTPS_PROXY`, `SSL_CERT_FILE`,
+  `NODE_EXTRA_CA_CERTS`, ...) and the pip, composer, gem, bundler, nix,
+  dotnet and OpenSSL families are denied like the other process-control
+  names.
+- **get_project_context and agent-started dashboards no longer show canary
+  records.** A tripped canary's key no longer appears in their recent
+  activity.
+- **An MCP write cannot shadow a protected secret from another scope.** A
+  project-scope write is refused when a global (or any other resolvable)
+  copy of the key is denied by key or tag policy, so an agent can no
+  longer override a `prod`-tagged global value for the project.

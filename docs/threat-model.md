@@ -216,6 +216,15 @@ keychain the same way q-ring does; no local tool changes that.
   an AES-256-GCM file keyed by PBKDF2 from `QRING_FILE_PASSPHRASE`.
   It is explicit-only — a missing keyring never falls back to it
   silently — and fails closed without the passphrase.
+- **Known limitation of env-based passphrases.** q-ring strips
+  `QRING_FILE_PASSPHRASE` and `QRING_MEMORY_PASSPHRASE` from the
+  environment of every child it starts, but on Linux a child running as
+  the same user can still read the parent's original environment block
+  from `/proc/<ppid>/environ` (removing a variable from a running
+  process does not scrub it). Anything run under `qring exec` / `qring
+  run` on a file-backend host can therefore recover the passphrase. Until
+  a file- or keyring-held passphrase lands (planned for 0.20), run
+  untrusted commands from a shell that does not hold the passphrase.
 - Corrupt registry files are moved aside to `<name>.corrupt-<ts>` and
   never silently overwritten.
 
