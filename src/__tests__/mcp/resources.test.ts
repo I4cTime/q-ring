@@ -170,3 +170,69 @@ describe("MCP resources: agent sessions", () => {
     }
   });
 });
+
+describe("MCP surfaces under a .q-ring.json that is not valid JSON", () => {
+  beforeEach(() => {
+    writeFileSync(join(projectDir, ".q-ring.json"), "{ not json");
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("hides the sessions resources and reports the error as data", async () => {
+    seedSession();
+    const { client, close } = await connect();
+    try {
+      const list = await client.readResource({ uri: "qring://sessions" });
+      const body = JSON.parse(textOf(list)) as { sessions: unknown[]; policyError?: string };
+      expect(body.sessions).toEqual([]);
+      expect(body.policyError).toMatch(/not valid JSON/);
+
+      const { resources } = await client.listResources();
+      expect(resources.filter((r) => r.uri.startsWith("qring://sessions/"))).toHaveLength(0);
+
+      const one = await client.readResource({ uri: "qring://sessions/anything" });
+      const oneBody = JSON.parse(textOf(one)) as { id: string; policyError?: string };
+      expect(oneBody.id).toBe("anything");
+      expect(oneBody.policyError).toMatch(/not valid JSON/);
+      expect(textOf(one)).not.toContain("OPENAI_API_KEY");
+    } finally {
+      await close();
+    }
+  });
+
+  it("check_policy answers with a denial verdict instead of erroring", async () => {
+    const { client, close } = await connect();
+    try {
+      const res = await client.callTool({
+        name: "check_policy",
+        arguments: { action: "tool", toolName: "get_secret" },
+      });
+      expect(res.isError).toBeFalsy();
+      const content = res.content as { type: string; text: string }[];
+      const verdict = JSON.parse(content[0].text) as {
+        allowed: boolean;
+        reason: string;
+        policySource: string;
+      };
+      expect(verdict.allowed).toBe(false);
+      expect(verdict.reason).toMatch(/not valid JSON/);
+      expect(verdict.policySource).toBe("invalid .q-ring.json");
+    } finally {
+      await close();
+    }
+  });
+
+  it("still refuses a gated tool (fail closed)", async () => {
+    const { client, close } = await connect();
+    try {
+      const res = await client.callTool({ name: "list_secrets", arguments: {} });
+      expect(res.isError).toBe(true);
+      const content = res.content as { type: string; text: string }[];
+      expect(content[0].text).toMatch(/not valid JSON/);
+    } finally {
+      await close();
+    }
+  });
+});
