@@ -20,7 +20,9 @@ export function withoutQringCredentials(
   const out: Record<string, string> = {};
   for (const [name, value] of Object.entries(env)) {
     if (value === undefined) continue;
-    if (QRING_CREDENTIAL_ENV_VARS.includes(name)) continue;
+    // Case-insensitive: Windows env names are, so `Qring_File_Passphrase`
+    // unlocks the store there and must not reach a child either.
+    if (QRING_CREDENTIAL_ENV_VARS.includes(name.toUpperCase())) continue;
     out[name] = value;
   }
   return out;

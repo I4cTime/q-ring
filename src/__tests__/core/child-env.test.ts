@@ -17,4 +17,13 @@ describe("withoutQringCredentials", () => {
   it("covers both master keys", () => {
     expect(QRING_CREDENTIAL_ENV_VARS).toEqual(["QRING_FILE_PASSPHRASE", "QRING_MEMORY_PASSPHRASE"]);
   });
+
+  it("strips them whatever the case (Windows env names are case-insensitive)", () => {
+    const out = withoutQringCredentials({
+      Qring_File_Passphrase: "file-master",
+      qring_memory_passphrase: "memory-master",
+      Path: "C:\\Windows",
+    });
+    expect(out).toEqual({ Path: "C:\\Windows" });
+  });
 });
