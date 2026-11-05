@@ -20,9 +20,9 @@ vi.mock("../../utils/http-request.js", () => ({ httpRequest: httpRequestMock }))
 
 import { createMcpServer } from "../../mcp/server.js";
 import { CANARY_RESOURCE_ENV } from "../../mcp/resources.js";
-import { setAuditAgentLabel } from "../../core/observer.js";
+import { logAudit, setAuditAgentLabel } from "../../core/observer.js";
 import { clearPolicyCache, setPolicyRoot } from "../../core/policy.js";
-import { setSecret, getSecret } from "../../core/keyring.js";
+import { setSecret, getSecret, deleteSecret } from "../../core/keyring.js";
 import { plantCanary } from "../../core/canary.js";
 import { resetCanaryAlertThrottle } from "../../core/canary-alert.js";
 import { addCanaryAlert } from "../../core/canary-webhooks.js";
@@ -233,14 +233,110 @@ describe("qring://rotation", () => {
 });
 
 describe("qring://canaries", () => {
-  function plantAndTrip() {
-    const { value } = plantCanary("AWS_SECRET_ACCESS_KEY", { format: "aws" });
+  /**
+   * Run steps one second apart on a fake clock (an hour ago), so "after it
+   * was planted" never depends on two calls landing in the same millisecond.
+   */
+  function onClock(...steps: (() => void)[]) {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = Date.now() - 60 * 60 * 1000;
+    steps.forEach((step, i) => {
+      vi.setSystemTime(start + i * 1000);
+      step();
+    });
+    vi.useRealTimers();
+  }
+
+  function trip(key: string, opts: { scope: "global" | "project"; projectPath?: string }) {
     setAuditAgentLabel("cursor@1.2.3");
-    getSecret("AWS_SECRET_ACCESS_KEY", { scope: "global", source: "mcp" }); // trip it
+    getSecret(key, { ...opts, source: "mcp" });
     setAuditAgentLabel(null);
-    plantCanary("QUIET_TRAP", { format: "github" });
+  }
+
+  function plantAndTrip() {
+    let value = "";
+    onClock(
+      () => ({ value } = plantCanary("AWS_SECRET_ACCESS_KEY", { format: "aws" })),
+      () => trip("AWS_SECRET_ACCESS_KEY", { scope: "global" }),
+      () => plantCanary("QUIET_TRAP", { format: "github" }),
+    );
     return value;
   }
+
+  type CanaryRow = {
+    key: string;
+    state: string;
+    tripCount: number;
+    lastTrip: {
+      at: string;
+      source: string | null;
+      agent: string | null;
+      detail: string | null;
+    } | null;
+    unattributedEvents?: number;
+  };
+
+  it("does not carry a deleted canary's trips over to one planted again under the key", async () => {
+    onClock(
+      () => plantCanary("REPLANTED", { format: "aws" }),
+      () => trip("REPLANTED", { scope: "global" }),
+      () => deleteSecret("REPLANTED", { scope: "global", source: "cli" }), // records a trip too
+      () => plantCanary("REPLANTED", { format: "aws" }),
+    );
+    process.env[CANARY_RESOURCE_ENV] = "1";
+    const { json } = await read("qring://canaries");
+    const [c] = json.canaries as CanaryRow[];
+    expect(c).toMatchObject({ key: "REPLANTED", state: "quiet", tripCount: 0, lastTrip: null });
+    expect(c.unattributedEvents).toBeUndefined();
+  });
+
+  it("marks a canary tripped by a read after it was planted again", async () => {
+    onClock(
+      () => plantCanary("REPLANTED", { format: "aws" }),
+      () => deleteSecret("REPLANTED", { scope: "global", source: "cli" }),
+      () => plantCanary("REPLANTED", { format: "aws" }),
+      () => trip("REPLANTED", { scope: "global" }),
+    );
+    process.env[CANARY_RESOURCE_ENV] = "1";
+    const { json } = await read("qring://canaries");
+    const [c] = json.canaries as CanaryRow[];
+    expect(c).toMatchObject({ key: "REPLANTED", state: "tripped", tripCount: 1 });
+    expect(c.lastTrip).toMatchObject({ source: "mcp", agent: "cursor@1.2.3" });
+    expect(c.lastTrip!.detail).not.toMatch(/deleted/);
+  });
+
+  it("never attributes a project-scope trip event it cannot tie to this project", async () => {
+    const projectPath = process.cwd();
+    onClock(
+      () => plantCanary("PROJ_TRAP", { format: "github", scope: "project", projectPath }),
+      // Same key, same scope name, another project: indistinguishable in the audit chain.
+      () =>
+        logAudit({
+          action: "canary",
+          key: "PROJ_TRAP",
+          scope: "project",
+          source: "mcp",
+          detail: "CANARY TRIPPED: honeytoken read via mcp",
+        }),
+    );
+    process.env[CANARY_RESOURCE_ENV] = "1";
+    let { json } = await read("qring://canaries");
+    let [c] = json.canaries as CanaryRow[];
+    expect(c).toMatchObject({
+      key: "PROJ_TRAP",
+      state: "quiet",
+      tripCount: 0,
+      lastTrip: null,
+      unattributedEvents: 1,
+    });
+
+    // A real read of this project's canary still shows up, from its own envelope.
+    trip("PROJ_TRAP", { scope: "project", projectPath });
+    ({ json } = await read("qring://canaries"));
+    [c] = json.canaries as CanaryRow[];
+    expect(c).toMatchObject({ state: "tripped", tripCount: 1, unattributedEvents: 2 });
+    expect(c.lastTrip).toMatchObject({ source: null, agent: null });
+  });
 
   it("is dark by default: no key names, no values, no count", async () => {
     const value = plantAndTrip();

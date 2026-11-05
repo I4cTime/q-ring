@@ -180,10 +180,24 @@ function readCanariesResource() {
     return { exposed: false, reason: hiddenBy("audit_log"), canaries: [], alerts: [] };
   }
 
-  // One audit pass for every canary; newest first, so the first hit per key wins.
+  // One audit pass for every canary, newest first.
   const trips = queryAudit({ action: "canary" });
   const canaries = listCanaries(mcpListOpts()).map((c) => {
-    const last = trips.find((e) => e.key === c.key && (!e.scope || e.scope === c.scope));
+    // Only events after this canary was planted belong to it: deleting a
+    // canary records its own trip, so a key planted again must not inherit
+    // the old canary's history.
+    const plantedMs = Date.parse(c.plantedAt);
+    const mine = trips.filter(
+      (e) =>
+        e.key === c.key &&
+        e.scope === c.scope &&
+        (Number.isNaN(plantedMs) || Date.parse(e.timestamp) > plantedMs),
+    );
+    // Trip events carry the scope name but no project path, team or org id,
+    // so outside the global scope the same key elsewhere would collide. Those
+    // events are counted, never attributed, and never flip the state alone.
+    const attributable = c.scope === "global";
+    const last = attributable ? mine[0] : undefined;
     const lastTrip = last
       ? {
           at: last.timestamp,
@@ -191,8 +205,9 @@ function readCanariesResource() {
           agent: last.agent ?? null,
           detail: last.detail ?? null,
         }
-      : c.lastTrippedAt
-        ? { at: c.lastTrippedAt, source: null, agent: null, detail: null }
+      : c.tripCount > 0 && c.lastTrippedAt
+        ? // The envelope's own read stats are per canary; they lack the client.
+          { at: c.lastTrippedAt, source: null, agent: null, detail: null }
         : null;
     // Explicit field allowlist: nothing value-shaped can ride along if
     // CanaryStatus ever grows.
@@ -201,9 +216,10 @@ function readCanariesResource() {
       scope: c.scope,
       format: c.format ?? "generic",
       plantedAt: c.plantedAt,
-      state: c.tripCount > 0 || lastTrip ? "tripped" : "quiet",
+      state: c.tripCount > 0 || last ? "tripped" : "quiet",
       tripCount: c.tripCount,
       lastTrip,
+      ...(attributable ? {} : { unattributedEvents: mine.length }),
     };
   });
   const alerts = listCanaryAlerts().map((ch) => ({
