@@ -10,6 +10,8 @@ vi.mock("@napi-rs/keyring", async () => {
 });
 
 import { setSecret, getSecret, entangleSecrets } from "../../core/keyring.js";
+import { entangle } from "../../core/entanglement.js";
+import { globalService } from "../../core/scope.js";
 import { queryAudit } from "../../core/observer.js";
 import { setPolicyRoot, clearPolicyCache } from "../../core/policy.js";
 import { registerSecretTools } from "../../mcp/tools/secrets.js";
@@ -55,11 +57,27 @@ afterEach(() => {
 });
 
 describe("entanglement respects deniedTags", () => {
-  it("write path: an MCP write to SCRATCH does not propagate into a tag-denied PROD", () => {
+  it("write path: linking shares the deny tag, so the MCP write to SCRATCH is refused", () => {
     entangleSecrets("SCRATCH", { scope: "global", source: "cli" }, "PROD", {
       scope: "global",
       source: "cli",
     });
+
+    // SCRATCH took PROD's `prod` tag at link time (C33).
+    expect(() =>
+      setSecret("SCRATCH", "attacker-value", { scope: "global", source: "mcp", projectPath: dir }),
+    ).toThrow(/Tag "prod"/);
+
+    expect(getSecret("PROD", { scope: "global", silent: true })).toBe(PROD_VALUE);
+    expect(JSON.stringify(queryAudit())).not.toContain("attacker-value");
+  });
+
+  it("write path: a link from an older version (no shared tags) still cannot propagate", () => {
+    // A raw registry link, as pre-C33 versions created it: no tag sharing.
+    entangle(
+      { service: globalService(), key: "SCRATCH" },
+      { service: globalService(), key: "PROD" },
+    );
 
     setSecret("SCRATCH", "attacker-value", { scope: "global", source: "mcp", projectPath: dir });
 

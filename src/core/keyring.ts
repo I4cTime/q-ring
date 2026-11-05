@@ -400,6 +400,33 @@ export function checkKeyWritePolicy(key: string, opts: KeyringOptions = {}): Pol
 }
 
 /**
+ * Entangled partners share deny tags: the tags of `tags` that the governing
+ * policy lists in `policy.mcp.deniedTags`. Otherwise a key linked to a
+ * secret that is later tagged (say `prod`) keeps receiving its value on
+ * every write, untagged and readable by an agent. If the policy cannot be
+ * read, every tag is shared (fail closed).
+ */
+function sharedDenyTags(tags: string[] | undefined, projectPath?: string): string[] {
+  if (!tags?.length) return [];
+  let denied: string[] | undefined;
+  try {
+    denied = loadPolicy(projectPath).mcp?.deniedTags;
+  } catch {
+    return [...tags];
+  }
+  if (!denied?.length) return [];
+  return tags.filter((t) => denied.includes(t));
+}
+
+/** Add `extra` to an envelope's tags; returns the tags that were new. */
+function inheritTags(envelope: QuantumEnvelope, extra: string[]): string[] {
+  const current = envelope.meta.tags ?? [];
+  const added = extra.filter((t) => !current.includes(t));
+  if (added.length) envelope.meta.tags = [...current, ...added];
+  return added;
+}
+
+/**
  * Store a secret with quantum metadata.
  */
 export function setSecret(
@@ -513,6 +540,7 @@ export function setSecret(
   // Propagate to entangled secrets. A canary never propagates: copying its
   // fake value into a partner would overwrite a real credential with noise.
   const entangled = canaryFlag ? [] : findEntangled({ service, key });
+  const denyTagsToShare = sharedDenyTags(envelope.meta.tags, opts.projectPath);
   for (const target of entangled) {
     try {
       // An MCP-sourced write must not silently propagate into a key the
@@ -548,13 +576,14 @@ export function setSecret(
           targetEnvelope.value = value;
         }
         targetEnvelope.meta.updatedAt = new Date().toISOString();
+        const inherited = inheritTags(targetEnvelope, denyTagsToShare);
         writeEnvelope(target.service, target.key, targetEnvelope);
         logAudit({
           action: "entangle",
           key: target.key,
           scope: "global",
           source,
-          detail: `propagated from ${key}`,
+          detail: `propagated from ${key}${inherited.length ? `; tag: ${inherited.join(",")}` : ""}`,
         });
       }
     } catch {
@@ -904,11 +933,32 @@ export function entangleSecrets(
     source: sourceOpts.source ?? "cli",
     policyRoot: getPolicyRoot(),
   });
+
+  // The link is bidirectional, so each side takes the other's deny tags
+  // now, before any value moves between them.
+  const inherited: string[] = [];
+  const sourceEnv = readEnvelope(source.service, source.key);
+  const targetEnv = readEnvelope(target.service, target.key);
+  if (sourceEnv && targetEnv) {
+    const toTarget = sharedDenyTags(sourceEnv.meta.tags, sourceOpts.projectPath);
+    const toSource = sharedDenyTags(targetEnv.meta.tags, sourceOpts.projectPath);
+    const addedToTarget = inheritTags(targetEnv, toTarget);
+    const addedToSource = inheritTags(sourceEnv, toSource);
+    if (addedToTarget.length) {
+      writeEnvelope(target.service, target.key, targetEnv);
+      inherited.push(`${targetKey}+${addedToTarget.join(",")}`);
+    }
+    if (addedToSource.length) {
+      writeEnvelope(source.service, source.key, sourceEnv);
+      inherited.push(`${sourceKey}+${addedToSource.join(",")}`);
+    }
+  }
+
   logAudit({
     action: "entangle",
     key: sourceKey,
     source: sourceOpts.source ?? "cli",
-    detail: `entangled with ${targetKey}`,
+    detail: `entangled with ${targetKey}${inherited.length ? `; tag: ${inherited.join(" ")}` : ""}`,
   });
 }
 
