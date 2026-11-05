@@ -202,27 +202,31 @@ describe("MCP surfaces under a .q-ring.json that is not valid JSON", () => {
     }
   });
 
-  it("check_policy answers with a denial verdict instead of erroring", async () => {
-    const { client, close } = await connect();
-    try {
-      const res = await client.callTool({
-        name: "check_policy",
-        arguments: { action: "tool", toolName: "get_secret" },
-      });
-      expect(res.isError).toBeFalsy();
-      const content = res.content as { type: string; text: string }[];
-      const verdict = JSON.parse(content[0].text) as {
-        allowed: boolean;
-        reason: string;
-        policySource: string;
-      };
-      expect(verdict.allowed).toBe(false);
-      expect(verdict.reason).toMatch(/not valid JSON/);
-      expect(verdict.policySource).toBe("invalid .q-ring.json");
-    } finally {
-      await close();
-    }
-  });
+  it.each([
+    { action: "tool", toolName: "get_secret" },
+    { action: "key_read", key: "PROD_DB" },
+    { action: "exec", command: "ls -la" },
+  ])(
+    "check_policy action $action answers with a denial verdict instead of erroring",
+    async (args) => {
+      const { client, close } = await connect();
+      try {
+        const res = await client.callTool({ name: "check_policy", arguments: args });
+        expect(res.isError).toBeFalsy();
+        const content = res.content as { type: string; text: string }[];
+        const verdict = JSON.parse(content[0].text) as {
+          allowed: boolean;
+          reason: string;
+          policySource: string;
+        };
+        expect(verdict.allowed).toBe(false);
+        expect(verdict.reason).toMatch(/not valid JSON/);
+        expect(verdict.policySource).toBe("invalid .q-ring.json");
+      } finally {
+        await close();
+      }
+    },
+  );
 
   it("still refuses a gated tool (fail closed)", async () => {
     const { client, close } = await connect();
