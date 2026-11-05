@@ -23,6 +23,7 @@ import { MIN_REDACT_LENGTH, type RedactionEntry } from "./redaction.js";
 import { parseDotenv } from "./import.js";
 import { resolveRef, resolveRefsInMap, isRef } from "./refs.js";
 import { readProjectConfig } from "./collapse.js";
+import { hasEnvNameShape } from "./child-env.js";
 import type { KeyringOptions } from "./keyring.js";
 
 export interface RunOptions extends KeyringOptions {
@@ -89,6 +90,13 @@ export function buildRunPlan(opts: RunOptions): RunPlan {
   if (opts.useManifest !== false) {
     const config = readProjectConfig(projectPath);
     for (const [key, entry] of Object.entries(config?.secrets ?? {})) {
+      // Same shape rule as exec: only plain identifiers reach a child.
+      if (!hasEnvNameShape(key)) {
+        process.stderr.write(
+          `[QRING] not injecting "${key}": not a plain environment variable name\n`,
+        );
+        continue;
+      }
       const value = resolveRef(
         { key, raw: `manifest:${key}` },
         keyringOpts,
@@ -119,6 +127,12 @@ export function buildRunPlan(opts: RunOptions): RunPlan {
     const { resolved, secretValues, missing } = resolveRefsInMap(parsed, keyringOpts);
 
     for (const [name, value] of Object.entries(resolved)) {
+      if (!hasEnvNameShape(name)) {
+        process.stderr.write(
+          `[QRING] not injecting "${name}": not a plain environment variable name\n`,
+        );
+        continue;
+      }
       envMap[name] = value;
       injected.push({
         name,
