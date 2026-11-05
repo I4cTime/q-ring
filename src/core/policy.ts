@@ -6,10 +6,9 @@
  * exec allowlists, and mandatory metadata requirements.
  */
 
-import { statSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { readProjectConfig } from "./collapse.js";
+import { clearConfigCache, readProjectConfig, type ProjectConfig } from "./collapse.js";
 
 /**
  * Strict schema for the `.q-ring.json` `policy` object. `.strict()` at every
@@ -93,9 +92,12 @@ export interface PolicyDecision {
   policySource: string;
 }
 
+// Keyed on the config object readProjectConfig returns. That object is reused
+// exactly while the file's text is unchanged and replaced when it changes, so
+// this cache can never outlive an edit (an mtime key could, #132).
 let cachedPolicy:
-  | { path: string; mtimeMs: number; policy: PolicyConfig; error?: undefined }
-  | { path: string; mtimeMs: number; error: PolicyConfigError; policy?: undefined }
+  | { path: string; config: ProjectConfig | null; policy: PolicyConfig; error?: undefined }
+  | { path: string; config: ProjectConfig | null; error: PolicyConfigError; policy?: undefined }
   | null = null;
 
 /**
@@ -120,28 +122,19 @@ function resolvePolicyPath(projectPath?: string): string {
   return policyRoot ?? projectPath ?? process.cwd();
 }
 
-function configMtime(pp: string): number {
-  try {
-    return statSync(join(pp, ".q-ring.json")).mtimeMs;
-  } catch {
-    return 0; // file absent — stable sentinel
-  }
-}
-
 export function loadPolicy(projectPath?: string): PolicyConfig {
   const pp = resolvePolicyPath(projectPath);
-  const mtimeMs = configMtime(pp);
-  if (cachedPolicy && cachedPolicy.path === pp && cachedPolicy.mtimeMs === mtimeMs) {
+  const config = readProjectConfig(pp);
+  if (cachedPolicy && cachedPolicy.path === pp && cachedPolicy.config === config) {
     if (cachedPolicy.error) throw cachedPolicy.error;
     return cachedPolicy.policy;
   }
 
-  const config = readProjectConfig(pp) as { policy?: unknown } | null;
-  const rawPolicy = config?.policy;
+  const rawPolicy = (config as { policy?: unknown } | null)?.policy;
 
   if (rawPolicy === undefined || rawPolicy === null) {
     const policy: PolicyConfig = {};
-    cachedPolicy = { path: pp, mtimeMs, policy };
+    cachedPolicy = { path: pp, config, policy };
     return policy;
   }
 
@@ -154,19 +147,21 @@ export function loadPolicy(projectPath?: string): PolicyConfig {
       `Invalid policy in ${join(pp, ".q-ring.json")} — refusing to run under an ` +
         `unparseable security policy (fail closed). Fix these and retry: ${issues}`,
     );
-    // Loud, and cached by mtime so it surfaces on every call until the file is
-    // corrected (a dropped deny rule must never silently allow access).
+    // Loud, and cached so it keeps throwing on every call until the file's
+    // content changes (a dropped deny rule must never silently allow access).
     console.error(`q-ring: ${error.message}`);
-    cachedPolicy = { path: pp, mtimeMs, error };
+    cachedPolicy = { path: pp, config, error };
     throw error;
   }
 
-  cachedPolicy = { path: pp, mtimeMs, policy: parsed.data };
+  cachedPolicy = { path: pp, config, policy: parsed.data };
   return parsed.data;
 }
 
+/** Reset the policy cache and the `.q-ring.json` cache it reads through. */
 export function clearPolicyCache(): void {
   cachedPolicy = null;
+  clearConfigCache();
 }
 
 export function checkToolPolicy(toolName: string, projectPath?: string): PolicyDecision {

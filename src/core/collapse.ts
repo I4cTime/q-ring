@@ -11,7 +11,7 @@
  */
 
 import { execSync } from "node:child_process";
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Environment } from "./envelope.js";
 
@@ -32,7 +32,8 @@ const BRANCH_ENV_MAP: Record<string, Environment> = {
 // explicit env; without caching that shelled out `git rev-parse` (sync, up to a
 // 3s timeout) and re-read .q-ring.json on every call, blocking the MCP event
 // loop. Git branch is cached per-cwd for a short window (a branch switch is
-// picked up within the TTL); the config is cached by mtime (always current).
+// picked up within the TTL); the config is cached by its exact text (always
+// current, see readProjectConfig).
 const BRANCH_CACHE_TTL_MS = 2000;
 let branchCache: { cwd: string; at: number; branch: string | null } | null = null;
 
@@ -61,6 +62,11 @@ function detectGitBranch(cwd?: string): string | null {
 /** Reset the collapse caches (config + git branch). Primarily for tests. */
 export function clearCollapseCache(): void {
   branchCache = null;
+  clearConfigCache();
+}
+
+/** Reset only the `.q-ring.json` cache (clearPolicyCache calls this too). */
+export function clearConfigCache(): void {
   configCache = null;
 }
 
@@ -87,28 +93,41 @@ export interface ProjectConfig {
   policy?: import("./policy.js").PolicyConfig;
 }
 
-let configCache: { path: string; mtimeMs: number; config: ProjectConfig | null } | null = null;
+// Keyed on the file's exact text, not on stat fields. An mtime-only key served
+// the previous policy when two writes landed in the same millisecond (Windows
+// CI, #132), and mtime + size + inode is not enough either: an in-place rewrite
+// of equal length keeps the inode and size, and mtime resolution can be coarse.
+// The file is a few hundred bytes, so reading it and comparing strings is cheap;
+// what the cache saves is the JSON parse and, in loadPolicy, the schema check.
+// Callers get the same object back while the text is unchanged, which is what
+// loadPolicy keys its own cache on.
+const ABSENT = Symbol("absent");
+let configCache: {
+  path: string;
+  raw: string | typeof ABSENT;
+  config: ProjectConfig | null;
+} | null = null;
 
 export function readProjectConfig(projectPath?: string): ProjectConfig | null {
   const configPath = join(projectPath ?? process.cwd(), ".q-ring.json");
-  let mtimeMs = 0;
+  let raw: string | typeof ABSENT = ABSENT;
   try {
-    mtimeMs = statSync(configPath).mtimeMs;
+    raw = readFileSync(configPath, "utf8");
   } catch {
-    // absent — mtimeMs stays 0 as a stable sentinel
+    // absent or unreadable: ABSENT is a stable sentinel
   }
-  if (configCache && configCache.path === configPath && configCache.mtimeMs === mtimeMs) {
+  if (configCache && configCache.path === configPath && configCache.raw === raw) {
     return configCache.config;
   }
   let config: ProjectConfig | null = null;
-  if (mtimeMs > 0) {
+  if (raw !== ABSENT) {
     try {
-      config = JSON.parse(readFileSync(configPath, "utf8")) as ProjectConfig;
+      config = JSON.parse(raw) as ProjectConfig;
     } catch {
       config = null; // invalid config
     }
   }
-  configCache = { path: configPath, mtimeMs, config };
+  configCache = { path: configPath, raw, config };
   return config;
 }
 
@@ -130,9 +149,7 @@ export interface CollapseResult {
     | "default";
 }
 
-export function collapseEnvironment(
-  ctx: CollapseContext = {},
-): CollapseResult | null {
+export function collapseEnvironment(ctx: CollapseContext = {}): CollapseResult | null {
   if (ctx.explicit) {
     return { env: ctx.explicit, source: "explicit" };
   }
