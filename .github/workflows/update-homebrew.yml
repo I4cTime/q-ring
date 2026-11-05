@@ -27,15 +27,17 @@ jobs:
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Wait for npm publish
+        # Up to 15 minutes: npm can lag the publish by several minutes
+        # (0.19.0 needed about 6, which outlasted the old 5-minute loop).
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           echo "Waiting for @i4ctime/q-ring@${VERSION} on npm..."
-          for i in $(seq 1 30); do
+          for i in $(seq 1 90); do
             if npm view "@i4ctime/q-ring@${VERSION}" version 2>/dev/null; then
               echo "Found on npm!"
               exit 0
             fi
-            echo "Attempt $i/30 — not yet available, waiting 10s..."
+            echo "Attempt $i/90 — not yet available, waiting 10s..."
             sleep 10
           done
           echo "::error::Timed out waiting for npm publish"

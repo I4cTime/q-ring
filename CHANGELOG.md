@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Removed
+- **Smithery publishing is gone from the release pipeline.** Smithery shut
+  down its API and accounts on 2026-10-31, so the publish job could only
+  fail with a 403. `scripts/smithery-publish.mjs`, the `publish:smithery`
+  script, the listing metadata re-apply and the Smithery deploy payload from
+  `scripts/build-mcpb.mjs` are removed, along with the README badge. The
+  MCPB bundle is still built and attached to every GitHub release for
+  Claude Desktop; the `publish.yml` job is now `mcpb` and the dispatch input
+  `smithery_only` is now `mcpb_only` (#160).
+
+### Changed
+- **The npm propagation waits are now 15 minutes.** Both waits in
+  `publish.yml` and the one in `update-homebrew.yml` allowed 5 minutes;
+  0.19.0 needed about 6 and both jobs had to be re-run (#160).
+
 ## [0.19.0] — 2026-11-05
 
 ### Added
