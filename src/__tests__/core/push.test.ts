@@ -70,6 +70,24 @@ describe("pushSecrets", () => {
     expect(pushCall![1]).not.toContain("secret-value-1");
   });
 
+  it("never hands q-ring's master-key env vars to the platform CLI", () => {
+    process.env.QRING_FILE_PASSPHRASE = "file-store-master-key";
+    process.env.QRING_MEMORY_PASSPHRASE = "memory-master-key";
+    try {
+      setSecret("K", "value-long", { scope: "project", projectPath: project, silent: true });
+      pushSecrets({ target: "github", keys: ["K"], projectPath: project, silent: true });
+      const pushCall = spawnSyncMock.mock.calls.find((c) => c[1]?.includes("set"));
+      const env = pushCall![2].env as Record<string, string>;
+      expect(env).toBeDefined();
+      expect(env.QRING_FILE_PASSPHRASE).toBeUndefined();
+      expect(env.QRING_MEMORY_PASSPHRASE).toBeUndefined();
+      expect(env.PATH).toBe(process.env.PATH);
+    } finally {
+      delete process.env.QRING_FILE_PASSPHRASE;
+      delete process.env.QRING_MEMORY_PASSPHRASE;
+    }
+  });
+
   it("passes --repo to gh when given", () => {
     setSecret("K", "value-long", { scope: "project", projectPath: project, silent: true });
     pushSecrets({ target: "github", keys: ["K"], repo: "I4cTime/q-ring", projectPath: project, silent: true });

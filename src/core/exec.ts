@@ -10,6 +10,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { withoutQringCredentials } from "./child-env.js";
 import { StringDecoder } from "node:string_decoder";
 import { Transform } from "node:stream";
 import { listSecrets, getSecret, type KeyringOptions } from "./keyring.js";
@@ -288,7 +289,9 @@ export interface SpawnRedactedOptions {
  * secret values from its output.
  */
 export function spawnRedacted(opts: SpawnRedactedOptions): Promise<ExecResult> {
-  const { profile, secretsToRedact, envMap } = opts;
+  const { profile, secretsToRedact } = opts;
+  // q-ring's own master keys never reach a child (see child-env.ts).
+  const envMap = withoutQringCredentials(opts.envMap);
   const maxRuntime = profile.maxRuntimeSeconds ?? getExecMaxRuntime(opts.projectPath);
 
   return new Promise((resolve, reject) => {

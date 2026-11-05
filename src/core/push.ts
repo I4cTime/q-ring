@@ -23,6 +23,7 @@ import { resolveRef } from "./refs.js";
 import { readProjectConfig } from "./collapse.js";
 import { logAudit } from "./observer.js";
 import type { KeyringOptions } from "./keyring.js";
+import { withoutQringCredentials } from "./child-env.js";
 
 export type PushTarget = "github" | "vercel" | "cloudflare" | "fly" | "railway" | "netlify";
 
@@ -251,6 +252,8 @@ export function pushSecrets(opts: PushOptions): PushResult {
         const child = spawnSync(target.binary, args, {
           input,
           cwd: opts.projectPath,
+          // Third-party platform CLIs never get q-ring's master keys.
+          env: withoutQringCredentials(process.env),
           encoding: "utf8",
           shell: false,
         });

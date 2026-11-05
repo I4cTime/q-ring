@@ -183,3 +183,31 @@ describe("execCommand with an unknown profile", () => {
   });
 });
 
+describe("child environment hygiene", () => {
+  it("exec/run children never inherit q-ring's master-key env vars", async () => {
+    writeManifest({ CHILD_TOKEN: { required: true } });
+    setSecret("CHILD_TOKEN", "child-token-value", {
+      scope: "project",
+      projectPath: project,
+      silent: true,
+    });
+    process.env.QRING_FILE_PASSPHRASE = "file-store-master-key";
+    process.env.QRING_MEMORY_PASSPHRASE = "memory-master-key";
+    try {
+      const result = await runCommand({
+        command: process.execPath,
+        args: [
+          "-e",
+          "console.log(JSON.stringify([process.env.QRING_FILE_PASSPHRASE ?? null, process.env.QRING_MEMORY_PASSPHRASE ?? null, process.env.CHILD_TOKEN ? 'injected' : null]))",
+        ],
+        projectPath: project,
+        silent: true,
+        captureOutput: true,
+      });
+      expect(JSON.parse(result.stdout.trim())).toEqual([null, null, "injected"]);
+    } finally {
+      delete process.env.QRING_FILE_PASSPHRASE;
+      delete process.env.QRING_MEMORY_PASSPHRASE;
+    }
+  });
+});

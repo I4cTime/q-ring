@@ -59,6 +59,7 @@ import {
   type ServerCapabilities,
 } from "@modelcontextprotocol/sdk/types.js";
 import { PACKAGE_VERSION } from "../version.js";
+import { withoutQringCredentials } from "./child-env.js";
 import { logAudit, setAuditAgentLabel } from "./observer.js";
 import {
   checkWrapToolPolicy,
@@ -424,12 +425,9 @@ export async function connectDownstream(opts: WrapOptions): Promise<Client> {
 
   if (!opts.command) throw new Error("wrap needs a server command or --url");
 
-  const env = opts.inheritEnv
-    ? (Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== undefined)) as Record<
-        string,
-        string
-      >)
-    : undefined; // SDK default: getDefaultEnvironment(), the minimal safe set
+  // --inherit-env passes the parent environment, minus q-ring's own master
+  // keys: a wrapped server is an untrusted child.
+  const env = opts.inheritEnv ? withoutQringCredentials(process.env) : undefined; // SDK default: getDefaultEnvironment(), the minimal safe set
 
   const transport = new StdioClientTransport({
     command: opts.command,
