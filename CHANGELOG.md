@@ -45,8 +45,8 @@ All notable changes to this project will be documented in this file.
   redaction tokens), what stays experimental, the semver promise from 1.0,
   the deprecation policy and the support window (#134).
 - **Audit pass 2 report**: `docs/audits/2026-11-audit-pass-2.md`, with
-  seventeen fixed findings (see Security), the surfaces examined and found
-  sound, and twelve design items carried to 0.20 (#133).
+  forty fixed findings (see Security), the surfaces examined and found
+  sound, and the design items carried to 0.20 as issues #144 to #157 (#133).
 - `QRING_ALLOW_PRIVATE_HOOKS` is the canonical name of the private-address
   override (the old `Q_RING_` spelling still works, see Deprecated).
   `QRING_SILENCE_DEPRECATIONS=1` silences deprecation warnings.

@@ -213,10 +213,16 @@ Registered in `src/mcp/resources.ts`:
 | --- | --- | --- |
 | `qring://sessions` | `agent-sessions` | JSON `{ "sessions": [...] }`: agent session summaries for the last 7 days |
 | `qring://sessions/{id}` | `agent-session` | JSON: one session's timeline |
+| `qring://policy` | `policy` | JSON: the project's policy as the agent may see it (sections, lists, limits); `{ valid: false, error }` for a corrupt file |
+| `qring://rotation` | `rotation` | JSON: the `rotate:due` list, most overdue first, plus `dueCount` and `scheduledCount` |
+| `qring://canaries` | `canaries` | JSON: planted canaries and alert targets; `{ exposed: false }` unless the server started with `QRING_MCP_EXPOSE_CANARIES=1` |
 
-Both are `application/json`, never contain secret values, strip canary
-trips, and return nothing when `.q-ring.json` policy denies the `audit_log`
-tool. Session objects keep their 0.19 fields; new fields may be added.
+All are `application/json` and never contain secret values. Sessions and
+rotation hide what `.q-ring.json` policy denies (`audit_log` and
+`list_secrets` respectively) and return their empty shape with a
+`policyError` field when the policy file cannot be loaded; canaries stay
+hidden by default because which keys are canaries is what the feature
+protects. Objects keep their 0.19 fields; new fields may be added.
 
 ### `.q-ring.json` format
 
@@ -366,19 +372,15 @@ replaced with a redaction token. Both forms are frozen as of 0.19:
   whose value was replaced
 
 Tools that post-process redacted output can match both on the
-`[QRING:REDACTED` prefix. Redaction is exact-match against values the ring
-knows (`src/core/exec.ts`, `src/core/wrap-redact.ts`); `exec` / `run` skip
-values of 5 characters or fewer.
+`[QRING:REDACTED` prefix. What is matched (`src/core/redaction.ts`): the
+whole value and its encoded forms everywhere (values up to 256 characters
+for the encoded forms), and in `exec` / `run` output also any run of 16 or
+more characters of the value's credential part (parts up to 1024
+characters, no repeated-character runs). The airlock never matches partial
+slices. Values of 5 characters or fewer are skipped. The limits are
+described in `docs/threat-model.md` and may be widened in a minor; they are
+not narrowed without a major.
 
-### Known defect scheduled for 0.19
-
-`qring exec --profile <name>` and `qring run --profile <name>` accept any
-name. An unknown one (a typo such as `restrcted`) becomes an empty profile
-with no restrictions instead of an error (`getProfile` in
-`src/core/exec.ts`). The MCP `exec_with_secrets` tool is not affected: its
-`profile` input only accepts `unrestricted`, `restricted` and `ci`. This
-fails open, so it is a defect, not frozen behaviour; it is fixed before the
-0.19 tag, after which an unknown profile name is an error.
 
 ## Experimental (not frozen)
 
