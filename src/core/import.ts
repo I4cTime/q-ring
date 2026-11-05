@@ -3,7 +3,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import { setSecret, hasSecret, checkKeyWritePolicy, type SetSecretOptions } from "./keyring.js";
+import { setSecret, secretExists, checkKeyWritePolicy, type SetSecretOptions } from "./keyring.js";
 
 export interface ImportOptions {
   scope?: "global" | "project";
@@ -114,7 +114,7 @@ export function importDotenv(
       continue;
     }
 
-    if (options.skipExisting && hasSecret(key, {
+    if (options.skipExisting && secretExists(key, {
       scope: options.scope,
       projectPath: options.projectPath,
       source: options.source ?? "cli",

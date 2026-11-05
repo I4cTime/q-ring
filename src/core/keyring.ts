@@ -615,7 +615,12 @@ export function disarmCanary(key: string, opts: KeyringOptions = {}): boolean {
 }
 
 /**
- * Check whether a secret exists in any applicable scope.
+ * Visibility check: does a live secret exist that this caller may see? For
+ * an MCP caller a key hidden by key policy (deniedKeys, readableKeys,
+ * deniedTags) answers false, exactly as get/list hide it.
+ *
+ * Write paths must not use this to decide "absent, so write": hidden is not
+ * absent. They use `secretExists` (the truth) and `checkKeyWritePolicy`.
  */
 export function hasSecret(
   key: string,
@@ -641,6 +646,22 @@ export function hasSecret(
     }
   }
 
+  return false;
+}
+
+/**
+ * Existence check for write paths: is there a live (non-expired) secret at
+ * this key, whatever the caller may see? `skipExisting` in import_dotenv
+ * and the existing-key check in lint --fix need the true answer, or a
+ * secret hidden from the caller would read as absent and be overwritten.
+ * Callers pair it with `checkKeyWritePolicy`, which runs first, so a key
+ * the caller may not touch is reported as a policy skip, not as existing.
+ */
+export function secretExists(key: string, opts: KeyringOptions = {}): boolean {
+  for (const { service } of resolveScope(opts)) {
+    const envelope = readEnvelope(service, key);
+    if (envelope && !checkDecay(envelope).isExpired) return true;
+  }
   return false;
 }
 
