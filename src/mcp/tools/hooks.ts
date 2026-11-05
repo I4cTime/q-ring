@@ -17,6 +17,7 @@ export function registerHookTools(server: McpServer): void {
       "[hooks] Register a side-effect (shell command, HTTP webhook, or process signal) that fires automatically when a matching secret is written, deleted, or rotated.",
       "Use to keep external systems in sync (restart a service after rotation, post to Slack on delete, kick a build); prefer `agent_remember` for storing facts an agent should recall later, and `register_hook` is not the right tool for time-based scheduled rotation (use `agent_scan` for that).",
       "Mutates the hook registry on disk. At least one match criterion (`key`, `keyPattern`, or `tag`) is required — calls without any return an error. Returns JSON of the registered hook entry including its assigned `id` (use that `id` with `remove_hook`).",
+      "`shell` and `signal` hooks registered here start DISABLED (`enabled: false`): they run commands or signal processes outside exec policy, so the operator must review and arm them with `qring hook enable <id>`. `http` hooks are SSRF-guarded, carry no values, and start enabled.",
     ].join(" "),
     {
       type: z
@@ -107,9 +108,18 @@ export function registerHookTools(server: McpServer): void {
           ? { target: params.signalTarget, signal: params.signalName }
           : undefined,
         description: params.description,
-        enabled: true,
+        // A shell hook is a persistent command that later runs with the full
+        // environment on every matching write (the operator's CLI writes
+        // included), outside exec policy and its runtime cap; a signal hook
+        // can kill any process the user owns. An agent may propose one, but
+        // only the operator arms it (`qring hook enable <id>`).
+        enabled: params.type === "http",
       });
 
+      if (!entry.enabled) {
+        const note = `Registered disabled: ${params.type} hooks created over MCP run only after the operator reviews and arms them with: qring hook enable ${entry.id}`;
+        return text(JSON.stringify({ ...entry, note }, null, 2));
+      }
       return text(JSON.stringify(entry, null, 2));
     },
   );
