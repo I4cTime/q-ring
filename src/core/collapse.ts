@@ -219,7 +219,11 @@ export function collapseEnvironment(ctx: CollapseContext = {}): CollapseResult |
   const branch = detectGitBranch(ctx.projectPath);
   if (branch) {
     const branchMap = { ...BRANCH_ENV_MAP, ...config?.branchMap };
-    const mapped = branchMap[branch] ?? matchGlob(branchMap, branch);
+    // Own property only: a branch named "constructor" must not resolve to
+    // an Object.prototype member.
+    const mapped =
+      (Object.hasOwn(branchMap, branch) ? branchMap[branch] : undefined) ??
+      matchGlob(branchMap, branch);
     if (mapped) {
       return { env: mapped, source: "git-branch" };
     }

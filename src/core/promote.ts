@@ -9,7 +9,7 @@
  * checks, audit and hooks all apply.
  */
 import { getEnvelope, listSecrets, setSecret, type KeyringOptions } from "./keyring.js";
-import type { Environment } from "./envelope.js";
+import { ownState, type Environment } from "./envelope.js";
 import type { Scope } from "./scope.js";
 
 export interface PromoteOptions extends KeyringOptions {
@@ -66,12 +66,12 @@ export function promoteSecret(key: string, opts: PromoteOptions): PromoteResult 
       `"${key}" has a single value, not per-environment states — set one with: qring set ${key} --env ${opts.from}`,
     );
   }
-  const source = states[opts.from];
+  const source = ownState(states, opts.from);
   if (source === undefined) {
     const available = Object.keys(states).join(", ") || "none";
     throw new Error(`"${key}" has no value for env "${opts.from}" (available: ${available})`);
   }
-  const current = states[opts.to];
+  const current = ownState(states, opts.to);
   const previous: PromotePrevious =
     current === undefined ? "absent" : current === source ? "same" : "different";
   if (previous === "same") {
@@ -131,8 +131,8 @@ export function diffEnvironments(opts: DiffOptions): DiffResult {
     if (!states) {
       status = "collapsed";
     } else {
-      const va = states[opts.a];
-      const vb = states[opts.b];
+      const va = ownState(states, opts.a);
+      const vb = ownState(states, opts.b);
       if (va === undefined && vb === undefined) continue; // in neither env
       if (va === undefined) status = "only-b";
       else if (vb === undefined) status = "only-a";
