@@ -564,8 +564,23 @@ export function registerSecretTools(server: McpServer): void {
       // i.e. it grants write access to targetKey. Gate BOTH keys with the same
       // key-level policy a direct read/write would face, so an agent can't link
       // a scratch key to a denied one and overwrite it via propagation (A2).
-      for (const key of [params.sourceKey, params.targetKey]) {
-        const decision = checkKeyReadPolicy(key, undefined, params.sourceProjectPath);
+      // The stored tags count too (deniedTags): a link FROM a tag-denied key
+      // would copy its value into a readable one on the next operator write.
+      const sides = [
+        { key: params.sourceKey, scope: params.sourceScope, path: params.sourceProjectPath },
+        { key: params.targetKey, scope: params.targetScope, path: params.targetProjectPath },
+      ];
+      for (const side of sides) {
+        const stored = getEnvelope(side.key, {
+          scope: (side.scope as Scope | undefined) ?? "global",
+          projectPath: side.path ?? process.cwd(),
+          source: "cli",
+        });
+        const decision = checkKeyReadPolicy(
+          side.key,
+          stored?.envelope.meta.tags,
+          params.sourceProjectPath,
+        );
         if (!decision.allowed) {
           return text(`Policy Denied: ${decision.reason} (source: ${decision.policySource})`, true);
         }

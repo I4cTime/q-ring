@@ -461,20 +461,26 @@ export function setSecret(
       // caller's policy forbids — otherwise entanglement is a write primitive
       // that bypasses deniedKeys/deniedTags (A2). CLI writes are unrestricted
       // by design (the local operator already has full access).
+      const targetEnvelope = readEnvelope(target.service, target.key);
       if (source === "mcp") {
-        const decision = checkKeyReadPolicy(target.key, undefined, opts.projectPath);
+        // The target's stored tags count too: a deniedTags key is as
+        // protected from a propagated write as a deniedKeys one.
+        const decision = checkKeyReadPolicy(
+          target.key,
+          targetEnvelope?.meta.tags,
+          opts.projectPath,
+        );
         if (!decision.allowed) {
           logAudit({
-            action: "entangle",
+            action: "policy_deny",
             key: target.key,
             scope: "global",
             source,
-            detail: `blocked propagation from ${key}: ${decision.reason}`,
+            detail: `blocked entangled propagation from ${key}: ${decision.reason}`,
           });
           continue;
         }
       }
-      const targetEnvelope = readEnvelope(target.service, target.key);
       // Nor does a real value propagate INTO a canary: the honeytoken would
       // start holding a live credential.
       if (targetEnvelope && !targetEnvelope.meta.canary) {
