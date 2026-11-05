@@ -13,11 +13,7 @@ import {
   ciValidateBatch,
   registry as providerRegistry,
 } from "../../core/validate.js";
-import {
-  rotationStatus,
-  describeRotation,
-  compareRotationUrgency,
-} from "../../core/rotation.js";
+import { describeRotation, buildRotationSchedule } from "../../core/rotation.js";
 import { c, SYMBOLS, scopeColor } from "../../utils/colors.js";
 import { wantsJsonOutput, emitJson, safeStr } from "../helpers.js";
 import { buildOpts } from "../options.js";
@@ -256,21 +252,14 @@ export function registerValidationCommands(program: Command): void {
     .option("--json", "Output as JSON")
     .action((cmd) => {
       const opts = buildOpts(cmd);
-      const entries = listSecrets(opts);
-
-      const scheduled = entries
-        .filter((e) => e.envelope)
-        .map((e) => ({
-          key: safeStr(e.key),
-          scope: safeStr(e.scope),
-          rotation: rotationStatus(e.envelope!.meta),
-        }))
-        .filter((e) => e.rotation.state !== "unscheduled")
-        .sort((a, b) => compareRotationUrgency(a.rotation, b.rotation));
-
-      const due = scheduled.filter(
-        (e) => e.rotation.state === "due-soon" || e.rotation.state === "overdue",
-      );
+      const schedule = buildRotationSchedule(listSecrets(opts));
+      const clean = (e: (typeof schedule.scheduled)[number]) => ({
+        ...e,
+        key: safeStr(e.key),
+        scope: safeStr(e.scope),
+      });
+      const scheduled = schedule.scheduled.map(clean);
+      const due = schedule.due.map(clean);
       const shown = cmd.all ? scheduled : due;
 
       if (

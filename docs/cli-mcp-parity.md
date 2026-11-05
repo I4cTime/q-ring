@@ -16,6 +16,21 @@ approval gates.
   policy denies `audit_log`) both build on `listAgentSessions` in
   `src/core/sessions.ts`. Resources, not tools, by the standing rule; the
   tool count stays at 46.
+- **Introspection resources:** each maps a CLI command to a read-only MCP
+  resource (no new tools) and goes dark when policy denies the tool that
+  already exposes the same data:
+  - `qring policy` ↔ `qring://policy` — both read `getPolicySummary`
+    (`src/core/policy.ts`); hidden when `get_policy_summary` is denied.
+  - `qring rotate:due --all` ↔ `qring://rotation` — both build the list with
+    `buildRotationSchedule` (`src/core/rotation.ts`), most overdue first; the
+    resource honours key policy like `list_secrets` and is hidden when
+    `list_secrets` is denied.
+  - `qring canary list` + `qring canary alert list` ↔ `qring://canaries` —
+    both read `listCanaries`; the resource adds the last trip's client from
+    the audit chain and shows alert channels by type and host only. Canary
+    identity is the asset, so the resource is **dark unless the operator
+    launches the server with `QRING_MCP_EXPOSE_CANARIES=1`**, and denying
+    `audit_log` hides it regardless.
 - **Airlock policy:** `policy.wrap` (`src/core/policy.ts`) is enforced only
   by `qring mcp wrap` — the q-ring MCP server itself is governed by
   `policy.mcp`. `qring mcp approve` grants use the same HMAC-verified approval
@@ -66,7 +81,7 @@ approval gates.
 | Agent scan         | `agent`                                          | `agent_scan`                                                    |
 | Agent memory       | `remember` / `recall` / `forget`                 | `agent_remember` / `agent_recall` / `agent_forget`              |
 | Analysis           | `analyze`                                        | `analyze_secrets`                                               |
-| Policy summary     | `policy`                                         | `get_policy_summary`                                            |
+| Policy summary     | `policy`                                         | `get_policy_summary` (also the `qring://policy` resource)       |
 
 ## CLI-only (no MCP tool)
 
@@ -78,7 +93,8 @@ approval gates.
 | `hook enable` / `disable` / `test`                        | Runtime lifecycle for secret-change hooks                       |
 | `qring doctor`                                            | Install self-check (keyring, audit, manifest, MCP binary)       |
 | `qring teleport keygen` / `identity`                      | Recipient identity lives in the operator's keyring; agents only ever handle recipient strings |
-| `qring rotate:due`                                        | Rotation reminders list; agents read the same status per key via `inspect_secret.rotation` and `status_dashboard` |
+| `qring rotate:due`                                        | Rotation reminders list; no tool — agents read the same list from the `qring://rotation` resource, or per key via `inspect_secret.rotation` |
+| `qring canary list` / `canary alert list`                 | No tool; the `qring://canaries` resource carries the same view only when the operator opts in with `QRING_MCP_EXPOSE_CANARIES=1` |
 | `qring completion <shell>`                                | bash/zsh/fish completion scripts generated from the CLI itself  |
 
 ## MCP-only (no CLI subcommand)

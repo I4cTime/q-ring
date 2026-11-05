@@ -82,7 +82,10 @@ telemetry).
   which tripwires fired), bulk `export` and `delete` trip them like
   reads, and disarming is CLI-only. Reviewing trips is an
   operator-terminal activity: `qring canary list`,
-  `qring audit --action canary`.
+  `qring audit --action canary`. The `qring://canaries` MCP resource is
+  dark by default and lists canaries only when the operator launches the
+  server with `QRING_MCP_EXPOSE_CANARIES=1` — a deliberate trade of
+  tripwire secrecy for agent visibility, never the default.
 - **The per-agent audit label (`clientInfo` name@version) is
   client-supplied and trivially spoofable.** It is sanitized (printable
   ASCII, capped) and used exclusively as attribution metadata in the
