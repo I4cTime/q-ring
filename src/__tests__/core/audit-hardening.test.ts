@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -150,5 +151,30 @@ describe("MCP audit surface", () => {
     const textOut = (result.content as Array<{ text: string }>)[0].text;
     expect(textOut).not.toContain('"canary"');
     expect(textOut).toContain('"read"');
+  });
+
+  it("export_audit carries no hash chain that would point at a removed trip", async () => {
+    setSecret("REAL_ONE", "real-value-1", { scope: "global", source: "cli" });
+    plantCanary("CHAIN_TRAP", { format: "github" });
+    getSecret("REAL_ONE", { scope: "global", source: "cli" });
+    getSecret("CHAIN_TRAP", { scope: "global", source: "cli" }); // trips: read + canary lines
+    getSecret("REAL_ONE", { scope: "global", source: "cli" });
+
+    const host = await connectHost();
+    const result = await host.callTool({ name: "export_audit", arguments: { format: "jsonl" } });
+    const lines = (result.content as Array<{ text: string }>)[0].text.split("\n").filter(Boolean);
+    const events = lines.map((l) => JSON.parse(l) as { prevHash?: string; key?: string });
+
+    // The attack: hash each exported line and look for an event whose
+    // prevHash names no exported line; the read just before it tripped.
+    const hashes = new Set(lines.map((l) => createHash("sha256").update(l).digest("hex")));
+    const orphans = events.filter((e, i) => i > 0 && e.prevHash && !hashes.has(e.prevHash));
+    expect(orphans).toEqual([]);
+    expect(events.every((e) => e.prevHash === undefined)).toBe(true);
+
+    // The operator's unfiltered export keeps the chain.
+    const full = exportAudit({ format: "jsonl" }).split("\n").filter(Boolean);
+    const chained = full.slice(1).map((l) => (JSON.parse(l) as { prevHash?: string }).prevHash);
+    expect(chained.every(Boolean)).toBe(true);
   });
 });

@@ -134,10 +134,13 @@ describe("buildSessions", () => {
 describe("canary visibility", () => {
   it("agentVisibleEvents strips canary trips and nothing else", () => {
     const events: AuditEvent[] = [
-      ev({ action: "canary", source: "mcp", agent: "a@1", key: "AWS_TRAP" }),
-      ev({ action: "read", source: "mcp", agent: "a@1", key: "REAL" }),
+      ev({ action: "canary", source: "mcp", agent: "a@1", key: "AWS_TRAP", prevHash: "h1" }),
+      ev({ action: "read", source: "mcp", agent: "a@1", key: "REAL", prevHash: "h2" }),
     ];
     expect(agentVisibleEvents(events).map((e) => e.action)).toEqual(["read"]);
+    // ...and the hash-chain links, which would otherwise expose where a
+    // trip line was cut out.
+    expect(agentVisibleEvents(events).every((e) => e.prevHash === undefined)).toBe(true);
   });
 
   it("the agent view never leaks a canary key name, the operator view keeps it", () => {

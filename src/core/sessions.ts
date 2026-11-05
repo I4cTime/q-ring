@@ -143,9 +143,16 @@ export function buildSessions(
 /**
  * Operator-only: canary trips stay in. Drop them with `agentVisibleEvents`
  * before handing anything to an agent surface.
+ *
+ * The agent view also drops `prevHash`. Each one is the SHA-256 of the
+ * audit line before it, so once a trip line is removed, the next event's
+ * prevHash matches no visible line, and hashing the timeline's events would
+ * show exactly which read was followed by a (hidden) canary trip.
  */
 export function agentVisibleEvents(events: AuditEvent[]): AuditEvent[] {
-  return events.filter((e) => e.action !== "canary");
+  return events
+    .filter((e) => e.action !== "canary")
+    .map(({ prevHash: _prevHash, ...rest }) => rest);
 }
 
 function loadEvents(query: SessionQuery): AuditEvent[] {
