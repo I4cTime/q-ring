@@ -110,26 +110,38 @@ describe("checkSSRFSync", () => {
 });
 
 describe("guardedLookup (connect-time DNS-rebinding guard)", () => {
-  const orig = process.env.Q_RING_ALLOW_PRIVATE_HOOKS;
+  // Clear BOTH spellings of the override before each test.
+  const OVERRIDE_VARS = ["QRING_ALLOW_PRIVATE_HOOKS", "Q_RING_ALLOW_PRIVATE_HOOKS"] as const;
+  const orig: Record<string, string | undefined> = {};
+  for (const name of OVERRIDE_VARS) orig[name] = process.env[name];
+  beforeEach(() => {
+    for (const name of OVERRIDE_VARS) delete process.env[name];
+  });
   afterEach(() => {
-    if (orig === undefined) delete process.env.Q_RING_ALLOW_PRIVATE_HOOKS;
-    else process.env.Q_RING_ALLOW_PRIVATE_HOOKS = orig;
+    for (const name of OVERRIDE_VARS) {
+      if (orig[name] === undefined) delete process.env[name];
+      else process.env[name] = orig[name];
+    }
   });
 
   it("blocks resolution to a private/loopback address", async () => {
-    delete process.env.Q_RING_ALLOW_PRIVATE_HOOKS;
     const { err } = await lookupVia("127.0.0.1");
     expect(err).not.toBeNull();
     expect(err?.code).toBe("EQRINGSSRF");
   });
 
   it("allows resolution to a public address", async () => {
-    delete process.env.Q_RING_ALLOW_PRIVATE_HOOKS;
     const { err } = await lookupVia("8.8.8.8");
     expect(err).toBeNull();
   });
 
-  it("respects the Q_RING_ALLOW_PRIVATE_HOOKS override", async () => {
+  it("respects the canonical QRING_ALLOW_PRIVATE_HOOKS override", async () => {
+    process.env.QRING_ALLOW_PRIVATE_HOOKS = "1";
+    const { err } = await lookupVia("127.0.0.1");
+    expect(err).toBeNull();
+  });
+
+  it("respects the legacy Q_RING_ALLOW_PRIVATE_HOOKS override", async () => {
     process.env.Q_RING_ALLOW_PRIVATE_HOOKS = "1";
     const { err } = await lookupVia("127.0.0.1");
     expect(err).toBeNull();

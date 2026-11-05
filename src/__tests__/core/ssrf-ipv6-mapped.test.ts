@@ -55,14 +55,21 @@ describe("isPrivateIP — IPv4-mapped IPv6 (hex-group canonical form)", () => {
 });
 
 describe("SSRF entry points block the mapped-metadata address", () => {
-  let prev: string | undefined;
+  // Clear BOTH spellings of the private-address override.
+  const OVERRIDE_VARS = ["QRING_ALLOW_PRIVATE_HOOKS", "Q_RING_ALLOW_PRIVATE_HOOKS"] as const;
+  let prev: Record<string, string | undefined>;
   beforeEach(() => {
-    prev = process.env.Q_RING_ALLOW_PRIVATE_HOOKS;
-    delete process.env.Q_RING_ALLOW_PRIVATE_HOOKS;
+    prev = {};
+    for (const name of OVERRIDE_VARS) {
+      prev[name] = process.env[name];
+      delete process.env[name];
+    }
   });
   afterEach(() => {
-    if (prev === undefined) delete process.env.Q_RING_ALLOW_PRIVATE_HOOKS;
-    else process.env.Q_RING_ALLOW_PRIVATE_HOOKS = prev;
+    for (const name of OVERRIDE_VARS) {
+      if (prev[name] === undefined) delete process.env[name];
+      else process.env[name] = prev[name];
+    }
   });
 
   const METADATA = "http://[::ffff:169.254.169.254]/latest/meta-data/";
