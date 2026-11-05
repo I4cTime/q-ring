@@ -137,10 +137,12 @@ export function registerValidationTools(server: McpServer): void {
       const entries = listSecrets(opts(params));
       const secrets = entries
         .map((e) => {
+          // Not silent: a batch read of every value is the ring sweep that
+          // canaries exist to catch, and the tool promises a read event per
+          // key. A silent read skipped both.
           const val = getSecret(e.key, {
             ...opts(params),
             scope: e.scope,
-            silent: true,
           });
           if (!val) return null;
           return {
