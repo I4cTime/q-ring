@@ -121,7 +121,12 @@ export function lintFiles(
     }
 
     if (opts.fix && fixes.length > 0) {
-      const fixLines = content.split(/\r?\n/);
+      // Split keeping each line's own terminator: line i is parts[2 * i],
+      // its "\n" or "\r\n" is parts[2 * i + 1]. Rejoining reproduces the
+      // file byte for byte, mixed line endings included, so only a line
+      // whose content a fix changed can differ.
+      const parts = content.split(/(\r?\n)/);
+      const lineCount = Math.ceil(parts.length / 2);
       for (const fix of fixes.reverse()) {
         // Policy first: a key this caller may not write is skipped with a
         // reason and its literal left alone; the other fixes, in this file
@@ -138,8 +143,8 @@ export function lintFiles(
         }
 
         const lineIdx = fix.line;
-        if (lineIdx >= 0 && lineIdx < fixLines.length) {
-          fixLines[lineIdx] = fixLines[lineIdx].replace(fix.original, fix.replacement);
+        if (lineIdx >= 0 && lineIdx < lineCount) {
+          parts[2 * lineIdx] = parts[2 * lineIdx].replace(fix.original, fix.replacement);
         }
 
         // True existence, not the caller's policy-filtered view (hasSecret).
@@ -158,11 +163,10 @@ export function lintFiles(
         }
       }
 
-      // Write only a real change, in the file's own line endings: a file
-      // whose every fix was skipped by policy must stay byte-identical
-      // (no CRLF to LF rewrite, no mtime bump).
-      const eol = content.includes("\r\n") ? "\r\n" : "\n";
-      const updated = fixLines.join(eol);
+      // Write only a real change: a file whose every fix was skipped by
+      // policy must stay byte-identical (no line-ending rewrite, no mtime
+      // bump).
+      const updated = parts.join("");
       if (updated !== content) writeFileSync(file, updated, "utf8");
     }
   }

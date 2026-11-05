@@ -164,3 +164,41 @@ describe("lintFiles --fix leaves a file alone when nothing in it was fixed", () 
     }
   });
 });
+
+describe("lintFiles --fix keeps each line's own terminator", () => {
+  it("leaves a mixed CRLF/LF file byte-identical when its only fix is skipped, and changes only the fixed line otherwise", () => {
+    resetFakeKeyring();
+    clearPolicyCache();
+    const dir = mkdtempSync(join(tmpdir(), "qring-lint-mixed-"));
+    try {
+      writeFileSync(
+        join(dir, ".q-ring.json"),
+        JSON.stringify({ policy: { mcp: { deniedKeys: ["PASSWORD"] } } }),
+      );
+      setPolicyRoot(dir);
+      setSecret("PASSWORD", "the-real-protected-value", { scope: "global", source: "cli" });
+
+      const skipped = join(dir, "skipped.ts");
+      const skippedBytes =
+        'const a = 1;\r\nconst password = "Xq9vL2mR7tK4pW8zN3bY6cH1";\nconst b = 2;\r\n';
+      writeFileSync(skipped, skippedBytes);
+
+      const fixed = join(dir, "fixed.ts");
+      writeFileSync(
+        fixed,
+        'const a = 1;\r\nconst api_key = "sk-abcdef1234567890abcdef1234567890";\nconst b = 2;\r\n',
+      );
+
+      lintFiles([skipped, fixed], { fix: true, scope: "global", projectPath: dir, source: "mcp" });
+
+      expect(readFileSync(skipped, "utf8")).toBe(skippedBytes);
+      expect(readFileSync(fixed, "utf8")).toBe(
+        "const a = 1;\r\nconst api_key = process.env.API_KEY;\nconst b = 2;\r\n",
+      );
+    } finally {
+      setPolicyRoot(process.cwd());
+      clearPolicyCache();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
