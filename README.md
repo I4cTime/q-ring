@@ -490,7 +490,14 @@ connecting with [QRING:REDACTED:DATABASE_URL]
 Authorization: Basic [QRING:REDACTED:API_TOKEN]
 ```
 
-`[QRING:REDACTED]` without a name means the value's key is unknown. Redaction is still a best-effort safety net, not a guarantee: a value the child encrypts, compresses, or prints fewer than 16 characters of gets through.
+`[QRING:REDACTED]` without a name means the value's key is unknown.
+
+Limits, so redaction stays fast and leaves ordinary output alone:
+
+- **Encoded forms** are matched for values up to 256 characters. Longer values (PEM keys, service-account JSON) are not matched in encoded form.
+- **Slices** are matched for values up to 1024 characters; a longer value is matched verbatim only (and q-ring prints a one-line, counts-only note on stderr). Only the credential-bearing part of a structured value is sliced: the `user:password` of a URL with credentials (the path and query of a URL without), the signature of a JWT, the body of a PEM block, the long string values of a JSON object. So a different connection string to the same host, or another JWT with the same header, is left alone. Runs with little variety (`0000000000000000`) never count as a slice.
+
+Redaction is a best-effort safety net, not a guarantee: a value the child encrypts, compresses, or prints fewer than 16 characters of gets through.
 
 ```bash
 # Execute a deployment script with secrets injected
@@ -618,7 +625,8 @@ Tools, resources, and prompts all pass through verbatim (pagination, progress no
 qring mcp wrap --url https://mcp.example.com/mcp --auth-secret EXAMPLE_MCP_TOKEN
 
 # Keep results verbatim (default: known secret values, including their encoded forms and
-# 16+ char slices, are replaced with [QRING:REDACTED:<KEY_NAME>], as in `qring exec`)
+# 16+ char slices, are replaced with [QRING:REDACTED:<KEY_NAME>], as in `qring exec`;
+# if redaction cannot be set up, results are withheld with a tool error, never passed through)
 qring mcp wrap --no-redact -- npx -y some-mcp-server
 ```
 

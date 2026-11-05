@@ -15,7 +15,12 @@ import { Transform } from "node:stream";
 import { listSecrets, getSecret, type KeyringOptions } from "./keyring.js";
 import { checkDecay } from "./envelope.js";
 import { checkExecPolicy, getExecMaxRuntime } from "./policy.js";
-import { RedactionSet, MIN_REDACT_LENGTH, type RedactionEntry } from "./redaction.js";
+import {
+  RedactionSet,
+  RedactionStream,
+  MIN_REDACT_LENGTH,
+  type RedactionEntry,
+} from "./redaction.js";
 
 export type { RedactionEntry } from "./redaction.js";
 
@@ -84,20 +89,20 @@ export interface ExecResult {
 /**
  * Best-effort output redaction over a child process's stdout/stderr. Matching
  * lives in redaction.ts (shared with the MCP airlock): verbatim values longer
- * than 5 chars, their base64/hex/URL/JSON-encoded forms, and any run of 16+
- * consecutive characters of a value. Hits become `[QRING:REDACTED:<KEY>]`
- * (`[QRING:REDACTED]` when the key is unknown). This is a safety net, NOT a
- * guarantee: a child that transforms a secret in other ways (encrypts,
- * compresses, prints under 16 chars of it) gets through.
+ * than 5 chars, their base64/hex/URL/JSON-encoded forms (values up to 256
+ * chars), and any run of 16+ consecutive characters of a value's
+ * credential-bearing part (values up to 1024 chars). Hits become
+ * `[QRING:REDACTED:<KEY>]` (`[QRING:REDACTED]` when the key is unknown). This
+ * is a safety net, NOT a guarantee: a child that transforms a secret in other
+ * ways (encrypts, compresses, prints under 16 chars of it) gets through.
  *
- * Streaming: the raw (unredacted) last maxLen - 1 characters of each chunk are
- * held back and re-scanned with the next one, where maxLen is the longest
- * pattern including encoded forms, so a value split across writes is still
- * matched whole.
+ * Streaming (RedactionStream): only the shortest tail that could still grow
+ * into a hit is held back raw and re-examined with the next chunk, so a value
+ * split across writes is still matched whole while ordinary output flushes at
+ * once; the held tail is bounded.
  */
 export class RedactionTransform extends Transform {
-  private readonly set: RedactionSet;
-  private pending: string = "";
+  private readonly stream: RedactionStream | null;
   // Decodes UTF-8 across chunk boundaries: a multi-byte character split between
   // two Buffer chunks would otherwise be corrupted to U+FFFD by chunk.toString()
   // BEFORE matching runs, letting a multi-byte secret slip through unredacted.
@@ -107,32 +112,45 @@ export class RedactionTransform extends Transform {
   /** Takes `{ name, value }` entries, or a prebuilt set shared between streams. */
   constructor(secretsToRedact: readonly RedactionEntry[] | RedactionSet) {
     super();
-    this.set =
+    const set =
       secretsToRedact instanceof RedactionSet ? secretsToRedact : new RedactionSet(secretsToRedact);
+    this.stream = set.empty ? null : new RedactionStream(set);
   }
 
   _transform(chunk: Buffer | string, _encoding: string, callback: () => void) {
-    if (this.set.empty) {
+    if (!this.stream) {
       this.push(chunk);
       return callback();
     }
 
     const decoded = typeof chunk === "string" ? chunk : this.decoder.write(chunk);
-    const { emit, keep } = this.set.redactStream(this.pending + decoded, false);
-    this.pending = keep;
-    if (emit) this.push(emit);
+    const out = this.stream.write(decoded);
+    if (out) this.push(out);
     callback();
   }
 
   _flush(callback: () => void) {
     // Flush any bytes the decoder is still holding (an incomplete sequence at
     // end-of-stream) along with the held-back raw tail, then redact once more.
-    if (!this.set.empty) {
-      const { emit } = this.set.redactStream(this.pending + this.decoder.end(), true);
-      this.pending = "";
-      if (emit) this.push(emit);
+    if (this.stream) {
+      const out = this.stream.end(this.decoder.end());
+      if (out) this.push(out);
     }
     callback();
+  }
+}
+
+/**
+ * Build the redaction set for a spawn. A full build never fails on one bad
+ * value (derivation is per value), but if it does throw anyway, fall back to
+ * verbatim-only matching rather than running unredacted. Throws only when
+ * even that fails; callers must not spawn then.
+ */
+export function buildRedactionSet(entries: readonly RedactionEntry[]): RedactionSet {
+  try {
+    return new RedactionSet(entries);
+  } catch {
+    return new RedactionSet(entries, { verbatimOnly: true });
   }
 }
 
@@ -282,6 +300,21 @@ export function spawnRedacted(opts: SpawnRedactedOptions): Promise<ExecResult> {
       return resolve({ code: 126, stdout: "", stderr: "" });
     }
 
+    // Build the redaction set BEFORE spawning: if it cannot be built, the
+    // child must never run with secrets in its environment and unredacted
+    // output.
+    let redactionSet: RedactionSet;
+    try {
+      redactionSet = buildRedactionSet(secretsToRedact);
+    } catch (err) {
+      reject(
+        new Error(
+          `[QRING] Execution blocked: output redaction could not be set up (${err instanceof Error ? err.name : "error"})`,
+        ),
+      );
+      return;
+    }
+
     const child = spawn(opts.command, opts.args, {
       env: envMap,
       stdio: ["inherit", "pipe", "pipe"],
@@ -298,7 +331,6 @@ export function spawnRedacted(opts: SpawnRedactedOptions): Promise<ExecResult> {
       }, maxRuntime * 1000);
     }
 
-    const redactionSet = new RedactionSet(secretsToRedact);
     const stdoutRedact = new RedactionTransform(redactionSet);
     const stderrRedact = new RedactionTransform(redactionSet);
 

@@ -76,24 +76,57 @@ function scrubUnknown(node: unknown, scrub: (s: string) => string): unknown {
   return node;
 }
 
+/**
+ * Thrown by a redactor whose redaction set could not be built at all. The
+ * airlock turns it into a tool error: a result is withheld, never passed
+ * through unredacted. The message carries no values or key names.
+ */
+export class RedactionUnavailableError extends Error {
+  constructor() {
+    super("airlock: result withheld: secret redaction is unavailable");
+    this.name = "RedactionUnavailableError";
+  }
+}
+
 export function createRedactor(opts: KeyringOptions = {}): Redactor {
-  let set = new RedactionSet([]);
+  // null until the first successful build (no known values yet).
+  let set: RedactionSet | null = null;
+  let failed = false;
   let builtAt = 0;
 
   const ensure = () => {
     const now = Date.now();
-    if (now - builtAt < REFRESH_MS) return;
+    if (!failed && now - builtAt < REFRESH_MS) return;
+    let entries: RedactionEntry[];
     try {
-      set = new RedactionSet(collectSecretValues(opts));
+      entries = collectSecretValues(opts);
     } catch {
-      // Keyring unavailable — keep whatever set we had; never block a result.
+      // Keyring unavailable — keep whatever set we had.
+      builtAt = now;
+      return;
+    }
+    try {
+      set = new RedactionSet(entries);
+      failed = false;
+    } catch {
+      // A full build should never fail on one bad value, but if it does, fall
+      // back to verbatim-only matching of the same values — never to nothing.
+      try {
+        set = new RedactionSet(entries, { verbatimOnly: true });
+        failed = false;
+      } catch {
+        // Fail closed; retried on the next result.
+        failed = true;
+        return;
+      }
     }
     builtAt = now;
   };
 
   const text = (input: string): string => {
     ensure();
-    return set.redact(input);
+    if (failed) throw new RedactionUnavailableError();
+    return set ? set.redact(input) : input;
   };
 
   return {

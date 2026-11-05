@@ -1,12 +1,6 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { RedactionTransform, getProfile } from "../../core/exec.js";
-import {
-  RedactionSet,
-  MAX_SLICE_WINDOWS,
-  redactionToken,
-  resetSliceCapWarning,
-  type RedactionEntry,
-} from "../../core/redaction.js";
+import { redactionToken, type RedactionEntry } from "../../core/redaction.js";
 
 function runThrough(entries: RedactionEntry[], chunks: (string | Buffer)[]): Promise<string> {
   const t = new RedactionTransform(entries);
@@ -197,42 +191,6 @@ describe("redaction of sliced secrets (#122)", () => {
   it("a verbatim hit is one replacement, not many", async () => {
     const out = await runThrough(named(S), [`pre${S}post ${S}`]);
     expect(out).toBe(`pre${T}post ${T}`);
-  });
-
-  it("skips window matching above the cap and warns once, without values", () => {
-    resetSliceCapWarning();
-    const write = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    try {
-      // Deterministic pseudo-random value with more windows than the cap.
-      let x = 7;
-      const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-      const big = Array.from({ length: MAX_SLICE_WINDOWS + 100 }, () => {
-        x = (Math.imul(x, 1103515245) + 12345) >>> 0;
-        return chars[(x >>> 16) % chars.length];
-      }).join("");
-
-      const set = new RedactionSet([{ name: "BIG_KEY", value: big }]);
-      new RedactionSet([{ name: "BIG_KEY", value: big }]);
-      expect(set.slicing).toBe(false);
-      expect(write).toHaveBeenCalledTimes(1);
-      const msg = String(write.mock.calls[0][0]);
-      expect(msg).toContain("cap");
-      expect(msg).not.toContain(big.slice(0, 16));
-      expect(msg).not.toContain("BIG_KEY");
-
-      // Verbatim still redacted; a slice is not.
-      expect(set.redact(`v=${big}`)).toBe("v=[QRING:REDACTED:BIG_KEY]");
-      const slice = big.slice(100, 140);
-      expect(set.redact(`s=${slice}`)).toBe(`s=${slice}`);
-
-      // Under the cap, slicing stays on.
-      expect(
-        new RedactionSet([{ name: "K", value: big.slice(0, MAX_SLICE_WINDOWS + 15) }]).slicing,
-      ).toBe(true);
-    } finally {
-      write.mockRestore();
-      resetSliceCapWarning();
-    }
   });
 });
 

@@ -71,7 +71,12 @@ import {
 import { hasApproval } from "./approval.js";
 import { getSecret } from "./keyring.js";
 import { hashProjectPath } from "../utils/hash.js";
-import { createRedactor, NOOP_REDACTOR, type Redactor } from "./wrap-redact.js";
+import {
+  createRedactor,
+  NOOP_REDACTOR,
+  RedactionUnavailableError,
+  type Redactor,
+} from "./wrap-redact.js";
 
 /**
  * Ceiling on a single downstream tool call. Deliberately generous: the HOST
@@ -294,14 +299,14 @@ export function createAirlockServer(
             }
           : undefined;
 
+      let result: CallToolResult;
       try {
-        const result = (await downstream.callTool(request.params, undefined, {
+        result = (await downstream.callTool(request.params, undefined, {
           signal: extra.signal,
           timeout: downstreamTimeoutMs(),
           resetTimeoutOnProgress: true,
           onprogress,
         })) as CallToolResult;
-        return redactor.result(result);
       } catch (err) {
         // Protocol errors (unknown tool, timeout, connection closed) must stay
         // JSON-RPC errors — the spec separates them from tool-execution
@@ -311,6 +316,17 @@ export function createAirlockServer(
         audit(`tool call "${toolName}" failed: ${message}`);
         return {
           content: [{ type: "text", text: `airlock: downstream error: ${message}` }],
+          isError: true,
+        } satisfies CallToolResult;
+      }
+      try {
+        return redactor.result(result);
+      } catch {
+        // Fail closed: a result that cannot be redacted is withheld, never
+        // passed through. The message names no value or key.
+        audit(`tool call "${toolName}" result withheld: redaction unavailable`);
+        return {
+          content: [{ type: "text", text: new RedactionUnavailableError().message }],
           isError: true,
         } satisfies CallToolResult;
       }

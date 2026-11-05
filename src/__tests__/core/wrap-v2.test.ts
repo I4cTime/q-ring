@@ -13,7 +13,11 @@ vi.mock("@napi-rs/keyring", async () => {
 });
 
 import { createAirlockServer, WRAP_APPROVAL_SCOPE, wrapApprovalService } from "../../core/wrap.js";
-import { createRedactor } from "../../core/wrap-redact.js";
+import {
+  createRedactor,
+  RedactionUnavailableError,
+  type Redactor,
+} from "../../core/wrap-redact.js";
 import { queryAudit, setAuditAgentLabel } from "../../core/observer.js";
 import { clearPolicyCache, setPolicyRoot } from "../../core/policy.js";
 import { grantApproval } from "../../core/approval.js";
@@ -69,14 +73,15 @@ function buildDownstream(): McpServer {
   return server;
 }
 
-async function buildAirlock(opts: { redact?: boolean } = {}) {
+async function buildAirlock(opts: { redact?: boolean; redactor?: Redactor } = {}) {
   const downstream = buildDownstream();
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   await downstream.connect(serverSide);
   const downstreamClient = new Client({ name: "q-ring-airlock", version: "test" });
   await downstreamClient.connect(clientSide);
 
-  const redactor = opts.redact ? createRedactor({ projectPath: projectDir }) : undefined;
+  const redactor =
+    opts.redactor ?? (opts.redact ? createRedactor({ projectPath: projectDir }) : undefined);
   const proxy = createAirlockServer(
     downstreamClient,
     { label: "rich-cmd", correlationId: "wrap-v2-session" },
@@ -171,6 +176,31 @@ describe("airlock v2: result redaction", () => {
     expect(redactor.text(`Basic ${b64}`)).not.toContain(b64.slice(8, 30));
     expect(redactor.text(`hex ${Buffer.from(SECRET).toString("hex")}`)).toBe(`hex ${REDACTED}`);
     expect(redactor.text(`first 20: ${SECRET.slice(0, 20)}...`)).toBe(`first 20: ${REDACTED}...`);
+  });
+
+  it("fails closed: a result that cannot be redacted is withheld, never passed through", async () => {
+    const broken: Redactor = {
+      text: () => {
+        throw new RedactionUnavailableError();
+      },
+      result: () => {
+        throw new RedactionUnavailableError();
+      },
+      invalidate: () => {},
+    };
+    const { host } = await buildAirlock({ redactor: broken });
+
+    const call = await host.callTool({ name: "leak", arguments: {} });
+    expect(call.isError).toBe(true);
+    expect(text(call)).toBe("airlock: result withheld: secret redaction is unavailable");
+    expect(JSON.stringify(call)).not.toContain(SECRET);
+    const events = queryAudit({ action: "wrap", correlationId: "wrap-v2-session" });
+    expect(events.some((e) => e.detail?.includes("result withheld"))).toBe(true);
+
+    await expect(host.readResource({ uri: "cfg://app" })).rejects.toThrow(/result withheld/);
+    await expect(
+      host.getPrompt({ name: "summarize", arguments: { topic: "x" } }),
+    ).rejects.toThrow(/result withheld/);
   });
 
   it("does not touch results when no redactor is wired", async () => {

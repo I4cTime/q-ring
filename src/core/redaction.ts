@@ -2,22 +2,26 @@
  * Shared secret-redaction engine.
  *
  * Used by `qring exec` / `qring run` (RedactionTransform in exec.ts, a
- * streaming scrubber over child stdout/stderr) and by the MCP airlock
- * (wrap-redact.ts, scrubbing tool results). Both build one RedactionSet from
- * `{ name, value }` entries and ask it for matches.
+ * streaming scrubber over child stdout/stderr, via RedactionStream) and by
+ * the MCP airlock (wrap-redact.ts, scrubbing tool results via
+ * RedactionSet.redact). Both build one RedactionSet from `{ name, value }`
+ * entries.
  *
  * What counts as a hit, for every value longer than 5 characters:
  *
  * 1. The verbatim value.
- * 2. Encoded forms of it (#121): base64 standard and URL-safe at all three
- *    byte alignments (so a value embedded mid-string, as in
- *    `Authorization: Basic base64(user:pass)`, still matches; padding is
- *    ignored), lowercase and uppercase hex of the UTF-8 bytes,
- *    `encodeURIComponent`, and the JSON-string-escaped body (with and without
- *    escaped forward slashes).
- * 3. Slices of it (#122): any run of 16 or more consecutive characters of the
- *    raw value. A hit is extended left and right while the text still follows
- *    the value, and the whole run is replaced.
+ * 2. Encoded forms of it (#121), for values up to DERIVE_MAX_LENGTH chars:
+ *    base64 standard and URL-safe at all three byte alignments (so a value
+ *    embedded mid-string, as in `Authorization: Basic base64(user:pass)`,
+ *    still matches; padding is ignored), lowercase and uppercase hex of the
+ *    UTF-8 bytes, `encodeURIComponent`, and the JSON-string-escaped body
+ *    (with and without escaped forward slashes).
+ * 3. Slices of it (#122), for values up to SLICE_MAX_LENGTH chars: any run of
+ *    16 or more consecutive characters of the value's credential-bearing part
+ *    (see sliceRegions: the userinfo of a URL, the signature of a JWT, the body
+ *    of a PEM block, the long string values of a JSON object), extended left
+ *    and right while the text still follows it and replaced whole. Windows
+ *    with under 3 bits/char of entropy (`0000000000000000`) are ignored.
  *
  * Every hit is replaced by `[QRING:REDACTED:<KEY_NAME>]` naming the keyring
  * key the value came from (#123); `[QRING:REDACTED]` when the name is unknown.
@@ -36,13 +40,27 @@ export const MIN_REDACT_LENGTH = 6;
 /** Shortest run of a secret's characters treated as a sliced hit. */
 export const SLICE_WINDOW = 16;
 
-/** Above this many 16-char windows across all values, slice matching is skipped. */
-export const MAX_SLICE_WINDOWS = 5000;
+/** Values longer than this get no encoded forms (verbatim and slices only). */
+export const DERIVE_MAX_LENGTH = 256;
+
+/** Values longer than this are not sliced (verbatim, plus encoded if short enough). */
+export const SLICE_MAX_LENGTH = 1024;
+
+/** Slice windows below this Shannon entropy (bits per char) are ignored. */
+export const MIN_WINDOW_ENTROPY = 3.0;
 
 export interface RedactionEntry {
   /** Keyring key the value came from; omitted when unknown. */
   name?: string;
   value: string;
+}
+
+export interface RedactionSetOptions {
+  /**
+   * Verbatim values only: no encoded forms, no slices. The fallback when a
+   * full build fails, so a bad value can never leave the set empty.
+   */
+  verbatimOnly?: boolean;
 }
 
 /** The replacement token for a key name (fallback when the name is unknown). */
@@ -53,27 +71,29 @@ export function redactionToken(name?: string): string {
   return `[QRING:REDACTED:${safe}]`;
 }
 
-interface Pattern {
-  text: string;
-  token: string;
-}
-
-interface SliceSecret {
-  value: string;
-  token: string;
-}
-
-interface WindowRef {
-  secret: number;
-  offset: number;
-}
-
 /** A matched region of a text, [start, end), to be replaced by `token`. */
 export interface RedactionMatch {
   start: number;
   end: number;
   token: string;
 }
+
+interface Pattern {
+  text: string;
+  token: string;
+}
+
+interface SliceRegion {
+  text: string;
+  token: string;
+}
+
+interface WindowRef {
+  region: number;
+  offset: number;
+}
+
+// ── Encoded forms ────────────────────────────────────────────────────────
 
 /** Base64 of `bytes` as it appears when preceded by `lead` bytes (0, 1 or 2). */
 function base64Core(bytes: Buffer, lead: number): string {
@@ -87,28 +107,132 @@ function base64Core(bytes: Buffer, lead: number): string {
   return b64.slice(from, to);
 }
 
-/** Every encoded form of a value worth matching (excluding the value itself). */
+/**
+ * Every encoded form of a value worth matching (excluding the value itself).
+ * Never throws: a form that cannot be computed (encodeURIComponent on a lone
+ * UTF-16 surrogate) is skipped, the rest still apply.
+ */
 export function derivedForms(value: string): string[] {
-  const bytes = Buffer.from(value, "utf8");
   const forms = new Set<string>();
+  const add = (make: () => string | string[]) => {
+    try {
+      const made = make();
+      for (const f of Array.isArray(made) ? made : [made]) forms.add(f);
+    } catch {
+      // Skip just this form.
+    }
+  };
+  const bytes = Buffer.from(value, "utf8");
   for (const lead of [0, 1, 2]) {
-    const core = base64Core(bytes, lead);
-    forms.add(core);
-    forms.add(core.replace(/\+/g, "-").replace(/\//g, "_"));
+    add(() => {
+      const core = base64Core(bytes, lead);
+      return [core, core.replace(/\+/g, "-").replace(/\//g, "_")];
+    });
   }
-  const hex = bytes.toString("hex");
-  forms.add(hex);
-  forms.add(hex.toUpperCase());
-  forms.add(encodeURIComponent(value));
-  const json = JSON.stringify(value).slice(1, -1);
-  forms.add(json);
-  forms.add(json.replace(/\//g, "\\/"));
+  add(() => {
+    const hex = bytes.toString("hex");
+    return [hex, hex.toUpperCase()];
+  });
+  add(() => encodeURIComponent(value));
+  add(() => {
+    const json = JSON.stringify(value).slice(1, -1);
+    return [json, json.replace(/\//g, "\\/")];
+  });
   forms.delete(value);
   return [...forms].filter((f) => f.length >= MIN_REDACT_LENGTH);
 }
 
-// Polynomial rolling hash over SLICE_WINDOW UTF-16 code units, mod 2^32.
-const HASH_BASE = 31;
+// ── Slice regions ────────────────────────────────────────────────────────
+
+const JWT_RE = /^eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.([A-Za-z0-9_-]+)$/;
+const URL_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/([^/?#\s]*)(\S*)$/;
+
+function collectJsonStrings(node: unknown, out: string[], depth: number): void {
+  if (depth > 20) return;
+  if (typeof node === "string") {
+    if (node.length >= SLICE_WINDOW) out.push(...sliceRegions(node, depth + 1));
+  } else if (Array.isArray(node)) {
+    for (const n of node) collectJsonStrings(n, out, depth + 1);
+  } else if (node && typeof node === "object") {
+    for (const v of Object.values(node as Record<string, unknown>)) {
+      collectJsonStrings(v, out, depth + 1);
+    }
+  }
+}
+
+/**
+ * The credential-bearing parts of a value, which are what slice matching
+ * looks for. Public structure is left out so it never matches unrelated text:
+ *
+ * - URL with userinfo: the userinfo (`user:password`) only.
+ * - URL without userinfo: the path + query, scheme and host stripped.
+ * - JWT: the signature segment only (header and payload are shared shapes).
+ * - PEM: the base64 body lines, armor and header lines removed.
+ * - JSON object: its string values of 16+ chars, recursively (not keys).
+ * - Anything else: the whole value.
+ */
+export function sliceRegions(value: string, depth = 0): string[] {
+  const trimmed = value.trim();
+
+  if (/-----BEGIN [^-\n]+-----/.test(value)) {
+    return value
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0 && !l.startsWith("-----") && !l.includes(":"));
+  }
+
+  const jwt = JWT_RE.exec(trimmed);
+  if (jwt) return [jwt[1]];
+
+  const url = URL_RE.exec(trimmed);
+  if (url) {
+    const authority = url[1];
+    const at = authority.lastIndexOf("@");
+    if (at >= 0) return [authority.slice(0, at)];
+    return url[2] ? [url[2]] : [];
+  }
+
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      if (parsed && typeof parsed === "object") {
+        const out: string[] = [];
+        collectJsonStrings(parsed, out, depth);
+        return out;
+      }
+    } catch {
+      // Not JSON: fall through to the whole value.
+    }
+  }
+
+  return [value];
+}
+
+/** Shannon entropy, bits per char, of s[start, start + len). */
+function entropy(s: string, start: number, len: number): number {
+  const counts = new Map<number, number>();
+  for (let i = start; i < start + len; i++) {
+    const c = s.charCodeAt(i);
+    counts.set(c, (counts.get(c) ?? 0) + 1);
+  }
+  let h = 0;
+  for (const n of counts.values()) {
+    const p = n / len;
+    h -= p * Math.log2(p);
+  }
+  return h;
+}
+
+// ── Hashing ──────────────────────────────────────────────────────────────
+
+// Polynomial hash mod 2^32: h(s) = s0*B^(L-1) + ... + s(L-1). Used rolling
+// over SLICE_WINDOW chars for window lookup, and right-to-left over suffixes
+// for the hold-back check. A collision can only cause an extra (verified)
+// comparison or a longer hold-back, never a missed hit.
+// A large odd multiplier (not 31): with a small base, short strings collide
+// structurally ("s\n" and "qH" share a hash), which would hold back ordinary
+// output for no reason.
+const HASH_BASE = 0x9e3779b1 | 0;
 const HASH_DROP = (() => {
   // HASH_BASE^(SLICE_WINDOW - 1) mod 2^32, used to remove the outgoing char.
   let p = 1;
@@ -124,25 +248,38 @@ function windowHash(s: string, start: number): number {
   return h;
 }
 
-let sliceCapWarned = false;
+let longValueNoted = false;
 
-/** Test hook: let the once-per-process slice-cap warning fire again. */
-export function resetSliceCapWarning(): void {
-  sliceCapWarned = false;
+/** Test hook: let the once-per-process "value too long to slice" note fire again. */
+export function resetRedactionNotes(): void {
+  longValueNoted = false;
+}
+
+/** Per-stream scan state: what earlier calls already examined. */
+export interface ScanState {
+  /** Chars at the start of the text already scanned by an earlier call. */
+  from: number;
+  /** Per pattern: earliest start for the next occurrence (non-overlapping). */
+  next: Int32Array;
 }
 
 export class RedactionSet {
   /** Full-value patterns (verbatim and encoded), longest first. */
-  private readonly patterns: Pattern[];
-  private readonly sliceSecrets: SliceSecret[];
+  private readonly patterns: Pattern[] = [];
+  private readonly regions: SliceRegion[] = [];
   private readonly windows = new Map<number, WindowRef[]>();
-  /** Longest full pattern: the streaming tail must hold maxLen - 1 chars. */
+  /** Hashes of every suffix that could still grow into a hit (see liveStart). */
+  private readonly live = new Set<number>();
+  /** Longest full pattern. */
   readonly maxLen: number;
-  /** False when there was nothing to slice or the window cap tripped. */
+  /** Upper bound on how much raw text a stream may hold back. */
+  readonly holdMax: number;
+  /** True when at least one value has slice windows. */
   readonly slicing: boolean;
 
-  constructor(entries: readonly RedactionEntry[]) {
-    // One name per value: the first entry that supplies it wins.
+  constructor(entries: readonly RedactionEntry[], options: RedactionSetOptions = {}) {
+    // One name per value: the first entry that supplies it wins (a named
+    // entry beats an unnamed one).
     const byValue = new Map<string, string | undefined>();
     for (const { name, value } of entries) {
       if (typeof value !== "string" || value.length < MIN_REDACT_LENGTH) continue;
@@ -152,82 +289,121 @@ export class RedactionSet {
     }
 
     const patternMap = new Map<string, string>();
-    const sliceSecrets: SliceSecret[] = [];
-    let windowCount = 0;
+    let tooLongToSlice = 0;
     for (const [value, name] of byValue) {
       const token = redactionToken(name);
       if (!patternMap.has(value)) patternMap.set(value, token);
-      for (const form of derivedForms(value)) {
-        if (!patternMap.has(form)) patternMap.set(form, token);
+      if (options.verbatimOnly) continue;
+
+      if (value.length <= DERIVE_MAX_LENGTH) {
+        for (const form of derivedForms(value)) {
+          if (!patternMap.has(form)) patternMap.set(form, token);
+        }
       }
-      if (value.length > SLICE_WINDOW) {
-        sliceSecrets.push({ value, token });
-        windowCount += value.length - SLICE_WINDOW + 1;
+
+      if (value.length > SLICE_MAX_LENGTH) {
+        tooLongToSlice++;
+        continue;
+      }
+      let regions: string[];
+      try {
+        regions = sliceRegions(value);
+      } catch {
+        regions = [value];
+      }
+      for (const text of regions) {
+        if (text.length >= SLICE_WINDOW) this.regions.push({ text, token });
       }
     }
 
-    this.patterns = [...patternMap].map(([text, token]) => ({ text, token }));
+    if (tooLongToSlice > 0 && !longValueNoted) {
+      longValueNoted = true;
+      // Counts only: never a value or a key name.
+      process.stderr.write(
+        `[QRING] redaction: ${tooLongToSlice} secret value(s) longer than ${SLICE_MAX_LENGTH} chars ` +
+          `are matched verbatim only (no slice matching)\n`,
+      );
+    }
+
+    for (const [text, token] of patternMap) this.patterns.push({ text, token });
     this.patterns.sort((a, b) => b.text.length - a.text.length);
     this.maxLen = this.patterns.length > 0 ? this.patterns[0].text.length : 0;
+    this.holdMax = Math.max(this.maxLen, SLICE_WINDOW);
 
-    const capped = windowCount > MAX_SLICE_WINDOWS;
-    this.sliceSecrets = capped ? [] : sliceSecrets;
-    if (capped) {
-      if (!sliceCapWarned) {
-        sliceCapWarned = true;
-        // Counts only: never a value or a key name.
-        process.stderr.write(
-          `[QRING] redaction: ${windowCount} secret slice windows exceed the cap of ${MAX_SLICE_WINDOWS}; ` +
-            `sliced-secret matching is off (verbatim and encoded values are still redacted)\n`,
-        );
-      }
-    }
-
-    this.sliceSecrets.forEach(({ value }, secret) => {
-      for (let offset = 0; offset + SLICE_WINDOW <= value.length; offset++) {
-        const h = windowHash(value, offset);
+    this.regions.forEach(({ text }, region) => {
+      for (let offset = 0; offset + SLICE_WINDOW <= text.length; offset++) {
+        if (entropy(text, offset, SLICE_WINDOW) < MIN_WINDOW_ENTROPY) continue;
+        const h = windowHash(text, offset);
         const refs = this.windows.get(h);
-        if (refs) refs.push({ secret, offset });
-        else this.windows.set(h, [{ secret, offset }]);
+        if (refs) refs.push({ region, offset });
+        else this.windows.set(h, [{ region, offset }]);
       }
     });
     this.slicing = this.windows.size > 0;
+
+    // Live suffixes: every proper prefix of a full pattern, and every
+    // substring shorter than a window of a slice region.
+    for (const { text } of this.patterns) {
+      let h = 0;
+      for (let i = 0; i < text.length - 1; i++) {
+        h = (Math.imul(h, HASH_BASE) + text.charCodeAt(i)) | 0;
+        this.live.add(h);
+      }
+    }
+    for (const { text } of this.regions) {
+      for (let i = 0; i < text.length; i++) {
+        let h = 0;
+        for (let j = i; j < text.length && j < i + SLICE_WINDOW - 1; j++) {
+          h = (Math.imul(h, HASH_BASE) + text.charCodeAt(j)) | 0;
+          this.live.add(h);
+        }
+      }
+    }
   }
 
   get empty(): boolean {
     return this.patterns.length === 0;
   }
 
-  /**
-   * All regions of `text` to redact, sorted and non-overlapping. Overlapping
-   * hits are merged into one region (named after the earliest, longest hit)
-   * so no character of either survives.
-   */
-  findMatches(text: string): RedactionMatch[] {
-    if (this.empty || text.length === 0) return [];
-
-    // 1. Full-value patterns (verbatim and encoded).
-    const full: RedactionMatch[] = [];
-    for (const { text: p, token } of this.patterns) {
-      let i = text.indexOf(p);
-      while (i !== -1) {
-        full.push({ start: i, end: i + p.length, token });
-        i = text.indexOf(p, i + 1);
-      }
-    }
-    const merged = mergeMatches(full);
-
-    // 2. Slices, skipping regions a full pattern already covers so a verbatim
-    //    hit stays one replacement.
-    if (!this.slicing || text.length < SLICE_WINDOW) return merged;
-    const slices = this.findSlices(text, merged);
-    return slices.length === 0 ? merged : mergeMatches([...merged, ...slices]);
+  get patternCount(): number {
+    return this.patterns.length;
   }
 
-  private findSlices(text: string, covered: RedactionMatch[]): RedactionMatch[] {
+  /**
+   * All regions of `text` to redact, sorted and non-overlapping. Overlapping
+   * hits are merged into one region named after the earliest, longest hit, so
+   * no character of either survives and a verbatim hit stays one token.
+   *
+   * With `state`, only occurrences that reach past `state.from` are searched
+   * for (earlier ones were found by a previous call), and full patterns resume
+   * where their last occurrence ended.
+   */
+  findMatches(text: string, state?: ScanState): RedactionMatch[] {
+    if (this.empty || text.length === 0) return [];
+    const from = state?.from ?? 0;
     const out: RedactionMatch[] = [];
-    let ci = 0; // next covered region at or after i
-    let i = 0;
+
+    // 1. Full-value patterns (verbatim and encoded), non-overlapping per pattern.
+    for (let k = 0; k < this.patterns.length; k++) {
+      const { text: p, token } = this.patterns[k];
+      let i = text.indexOf(p, Math.max(0, from - p.length + 1, state ? state.next[k] : 0));
+      while (i !== -1) {
+        out.push({ start: i, end: i + p.length, token });
+        if (state) state.next[k] = i + p.length;
+        i = text.indexOf(p, i + p.length);
+      }
+    }
+
+    // 2. Slices, over every position (including inside full-pattern hits, so
+    //    a short value nested in a longer one cannot shadow it).
+    if (this.slicing && text.length >= SLICE_WINDOW) {
+      this.findSlices(text, Math.max(0, from - (SLICE_WINDOW - 1)), out);
+    }
+    return mergeMatches(out);
+  }
+
+  private findSlices(text: string, start: number, out: RedactionMatch[]): void {
+    let i = start;
     let h = 0;
     // Position h was computed for. h is rolled forward only from i - 1; -2 can
     // never equal i - 1, so it forces a fresh hash (start, after a jump).
@@ -235,13 +411,6 @@ export class RedactionSet {
     const last = text.length - SLICE_WINDOW;
 
     while (i <= last) {
-      while (ci < covered.length && covered[ci].end <= i) ci++;
-      if (ci < covered.length && covered[ci].start <= i) {
-        i = covered[ci].end;
-        hashAt = -2;
-        continue;
-      }
-
       if (hashAt === i - 1) {
         h =
           (Math.imul(h - Math.imul(text.charCodeAt(i - 1), HASH_DROP), HASH_BASE) +
@@ -262,14 +431,13 @@ export class RedactionSet {
         i++;
       }
     }
-    return out;
   }
 
-  /** Longest run around a window hit at `pos` that still follows a secret. */
+  /** Longest run around a window hit at `pos` that still follows a region. */
   private extend(text: string, pos: number, refs: WindowRef[]): RedactionMatch | null {
     let best: RedactionMatch | null = null;
-    for (const { secret, offset } of refs) {
-      const { value, token } = this.sliceSecrets[secret];
+    for (const { region, offset } of refs) {
+      const { text: value, token } = this.regions[region];
       // Verify (the hash can collide).
       let ok = true;
       for (let k = 0; k < SLICE_WINDOW; k++) {
@@ -302,33 +470,109 @@ export class RedactionSet {
     return best;
   }
 
+  /**
+   * Start of the longest suffix of `text` (no earlier than `bound`) that could
+   * still become a hit once more text arrives: a proper prefix of a full
+   * pattern, or a substring shorter than a window of a slice region. Returns
+   * text.length when no suffix is live. One right-to-left pass of hashes.
+   */
+  liveStart(text: string, bound: number): number {
+    let best = text.length;
+    let h = 0;
+    let pow = 1;
+    for (let p = text.length - 1; p >= bound; p--) {
+      h = (h + Math.imul(text.charCodeAt(p), pow)) | 0;
+      pow = Math.imul(pow, HASH_BASE);
+      if (this.live.has(h)) best = p;
+    }
+    return best;
+  }
+
   /** Redact a complete text in one pass. */
   redact(text: string): string {
     return applyMatches(text, this.findMatches(text));
   }
+}
 
-  /**
-   * Streaming step: redact what is safe to emit from `text` and return the
-   * raw (unredacted) remainder to prepend to the next chunk. The remainder is
-   * the last maxLen - 1 characters, so any value that might complete in the
-   * next chunk is still whole when it is matched; a hit that straddles the cut
-   * is complete and emitted whole. With `final`, everything is emitted.
-   */
-  redactStream(text: string, final: boolean): { emit: string; keep: string } {
-    const matches = this.findMatches(text);
-    if (final) return { emit: applyMatches(text, matches), keep: "" };
+/**
+ * Streaming redaction over a sequence of text chunks. Emits everything that
+ * can no longer be part of a hit and holds back the rest raw:
+ *
+ * - only the longest suffix that could still grow into a hit is held
+ *   (RedactionSet.liveStart), so ordinary output flushes at once;
+ * - a hit that crosses the hold-back point or reaches the end of the text is
+ *   held whole (it may still grow), and remembered so it is not searched for
+ *   again;
+ * - the held text never exceeds holdMax chars: a region that starts before
+ *   that bound is emitted as a token up to the bound and its remainder is
+ *   carried as an already-redacted region, so even an endless run of a
+ *   repeating secret streams out in bounded memory.
+ *
+ * There is deliberately no idle flush: emitting held raw text on a timer
+ * could print a half-received secret.
+ */
+export class RedactionStream {
+  private pending = "";
+  private carried: RedactionMatch[] = [];
+  private readonly state: ScanState;
 
-    let cut = Math.max(0, text.length - Math.max(this.maxLen - 1, 0));
+  constructor(private readonly set: RedactionSet) {
+    this.state = { from: 0, next: new Int32Array(set.patternCount) };
+  }
+
+  /** Length of the raw text currently held back. */
+  get held(): number {
+    return this.pending.length;
+  }
+
+  write(chunk: string): string {
+    if (!chunk) return "";
+    const text = this.pending + chunk;
+    this.state.from = this.pending.length;
+    const matches = mergeMatches([...this.carried, ...this.set.findMatches(text, this.state)]);
+
+    const n = text.length;
+    const bound = Math.max(0, n - this.set.holdMax);
+    let cut = this.set.liveStart(text, bound);
+    const emitted: RedactionMatch[] = [];
+    const carried: RedactionMatch[] = [];
+
     for (const m of matches) {
-      if (m.start >= cut) break;
-      if (m.end <= cut) continue;
-      // Straddles the cut. A hit touching the end of the text could still
-      // grow (a slice), so hold it back whole; otherwise emit it whole.
-      cut = m.end >= text.length ? m.start : m.end;
-      break;
+      if (m.start < cut && (m.end > cut || m.end === n)) {
+        if (m.start >= bound) {
+          cut = m.start;
+          carried.push(m);
+        } else {
+          // Cap: redact up to the bound now, carry the rest as redacted.
+          cut = bound;
+          emitted.push({ start: m.start, end: bound, token: m.token });
+          carried.push({ start: bound, end: m.end, token: m.token });
+        }
+      } else if (m.end <= cut) {
+        emitted.push(m);
+      } else {
+        carried.push(m);
+      }
     }
-    const emitted = matches.filter((m) => m.end <= cut);
-    return { emit: applyMatches(text.slice(0, cut), emitted), keep: text.slice(cut) };
+
+    this.pending = text.slice(cut);
+    this.carried = carried
+      .filter((m) => m.end > cut)
+      .map((m) => ({ start: m.start - cut, end: m.end - cut, token: m.token }));
+    for (let k = 0; k < this.state.next.length; k++) {
+      this.state.next[k] = Math.max(0, this.state.next[k] - cut);
+    }
+    return applyMatches(text.slice(0, cut), emitted);
+  }
+
+  /** Flush everything held, with an optional last chunk. */
+  end(chunk = ""): string {
+    const text = this.pending + chunk;
+    this.state.from = this.pending.length;
+    const matches = mergeMatches([...this.carried, ...this.set.findMatches(text, this.state)]);
+    this.pending = "";
+    this.carried = [];
+    return applyMatches(text, matches);
   }
 }
 

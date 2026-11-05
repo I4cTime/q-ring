@@ -146,10 +146,13 @@ keychain the same way q-ring does; no local tool changes that.
 - Secrets are injected into the child's environment, not echoed to the
   shell. Captured stdout/stderr is piped through a redaction transform
   that masks known secret values (UTF-8-safe across chunk boundaries
-  since v0.14), their base64 / hex / URL / JSON-encoded forms, and any
-  run of 16+ consecutive characters of one, as
+  since v0.14), their base64 / hex / URL / JSON-encoded forms (values
+  up to 256 chars), and any run of 16+ consecutive characters of the
+  credential-bearing part of one (values up to 1024 chars; for a URL
+  the userinfo, for a JWT the signature, for PEM the body), as
   `[QRING:REDACTED:<KEY_NAME>]`. The MCP airlock scrubs wrapped-server
-  results with the same engine.
+  results with the same engine and fails closed: if the redaction set
+  cannot be built, results are withheld, and `exec` refuses to spawn.
 - Profiles gate what may run: `restricted` denies network tools *and*
   interpreters/shells (`python`, `node`, `sh`, …), because
   `python -c '…'` is a network tool. `ci` and `unrestricted` widen
@@ -158,7 +161,9 @@ keychain the same way q-ring does; no local tool changes that.
   allowed binary can do. Redaction is best-effort against *known*
   values — it cannot mask a secret the child encrypts, compresses, or
   re-encodes in a form other than the ones above, or prints fewer than
-  16 characters of.
+  16 characters of. Values over 256 chars are not matched in encoded
+  form, and values over 1024 chars (large PEM keys, service-account
+  JSON) are matched verbatim only, not as slices.
 
 **At rest**
 
