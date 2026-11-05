@@ -152,10 +152,14 @@ keychain the same way q-ring does; no local tool changes that.
   since v0.14), their base64 / hex / URL / JSON-encoded forms (values
   up to 256 chars), and any run of 16+ consecutive characters of the
   credential-bearing part of one (values up to 1024 chars; for a URL
-  the userinfo, for a JWT the signature, for PEM the body), as
-  `[QRING:REDACTED:<KEY_NAME>]`. The MCP airlock scrubs wrapped-server
-  results with the same engine and fails closed: if the redaction set
-  cannot be built, results are withheld, and `exec` refuses to spawn.
+  the userinfo, for a JWT the signature, for PEM the body, for JSON
+  each long string value read the same way; repeated-character runs
+  never count), as `[QRING:REDACTED:<KEY_NAME>]`. The MCP airlock
+  scrubs wrapped-server results with the same engine and fails
+  closed: if the redaction set cannot be built, or no secret values
+  could be listed at all, results are withheld, and `exec` refuses to
+  spawn. A single secret that cannot be read (a template naming a
+  missing key, a failing JIT provider) is left out of the set.
 - Profiles gate what may run: `restricted` denies network tools *and*
   interpreters/shells (`python`, `node`, `sh`, …), because
   `python -c '…'` is a network tool. `ci` and `unrestricted` widen

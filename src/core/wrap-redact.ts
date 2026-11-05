@@ -39,18 +39,37 @@ export interface Redactor {
   invalidate(): void;
 }
 
-/** Gather every non-expired secret value in the resolvable scopes, with its key. */
-export function collectSecretValues(opts: KeyringOptions = {}): RedactionEntry[] {
+export interface CollectStats {
+  /** Entries whose value could not be read (and so are not in the set). */
+  skipped: number;
+}
+
+/**
+ * Gather every non-expired secret value in the resolvable scopes, with its
+ * key. One entry that cannot be read (a template naming a missing or circular
+ * key, a failing JIT provider) is skipped and counted in `stats`, never allowed
+ * to fail the whole collection. Listing itself can still throw.
+ */
+export function collectSecretValues(
+  opts: KeyringOptions = {},
+  stats: CollectStats = { skipped: 0 },
+): RedactionEntry[] {
   const values = new Map<string, string>();
   for (const entry of listSecrets({ ...opts, source: "cli", silent: true })) {
-    if (entry.envelope && checkDecay(entry.envelope).isExpired) continue;
-    const value = getSecret(entry.key, {
-      scope: entry.scope,
-      projectPath: opts.projectPath,
-      env: opts.env,
-      source: "cli",
-      silent: true,
-    });
+    let value: string | null;
+    try {
+      if (entry.envelope && checkDecay(entry.envelope).isExpired) continue;
+      value = getSecret(entry.key, {
+        scope: entry.scope,
+        projectPath: opts.projectPath,
+        env: opts.env,
+        source: "cli",
+        silent: true,
+      });
+    } catch {
+      stats.skipped++;
+      continue;
+    }
     // The first key that supplies a value names it.
     if (value && value.length >= MIN_REDACT_LENGTH && !values.has(value)) {
       values.set(value, entry.key);
@@ -93,17 +112,32 @@ export function createRedactor(opts: KeyringOptions = {}): Redactor {
   let set: RedactionSet | null = null;
   let failed = false;
   let builtAt = 0;
+  let skipNoted = false;
 
   const ensure = () => {
     const now = Date.now();
     if (!failed && now - builtAt < REFRESH_MS) return;
     let entries: RedactionEntry[];
+    const stats: CollectStats = { skipped: 0 };
     try {
-      entries = collectSecretValues(opts);
+      entries = collectSecretValues(opts, stats);
     } catch {
-      // Keyring unavailable — keep whatever set we had.
-      builtAt = now;
+      if (set) {
+        // Keep the last good set; try again at the next refresh.
+        builtAt = now;
+      } else {
+        // Never built: there is nothing to redact with, so fail closed and
+        // retry on the next result.
+        failed = true;
+      }
       return;
+    }
+    if (stats.skipped > 0 && !skipNoted) {
+      skipNoted = true;
+      // Counts only: never a value or a key name.
+      process.stderr.write(
+        `[QRING] airlock redaction: ${stats.skipped} secret(s) could not be read and are not redacted\n`,
+      );
     }
     try {
       set = new RedactionSet(entries);

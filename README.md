@@ -495,7 +495,7 @@ Authorization: Basic [QRING:REDACTED:API_TOKEN]
 Limits, so redaction stays fast and leaves ordinary output alone:
 
 - **Encoded forms** are matched for values up to 256 characters. Longer values (PEM keys, service-account JSON) are not matched in encoded form.
-- **Slices** are matched for values up to 1024 characters; a longer value is matched verbatim only (and q-ring prints a one-line, counts-only note on stderr). Only the credential-bearing part of a structured value is sliced: the `user:password` of a URL with credentials (the path and query of a URL without), the signature of a JWT, the body of a PEM block, the long string values of a JSON object. So a different connection string to the same host, or another JWT with the same header, is left alone. Runs with little variety (`0000000000000000`) never count as a slice.
+- **Slices** are matched for values up to 1024 characters; a longer value is matched verbatim only (and q-ring prints a one-line, counts-only note on stderr). Only the credential-bearing part of a structured value is sliced: the `user:password` of a URL with credentials (the path and query of a URL without), the signature of a JWT, the body of a PEM block, the long string values of a JSON object (each read the same way, so a service-account JSON's `private_key` contributes its PEM body). So a different connection string to the same host, or another JWT with the same header, is left alone. Repeated-character runs (`0000000000000000`, `abababababababab`) never count as a slice; account numbers and hex tokens do.
 
 Redaction is a best-effort safety net, not a guarantee: a value the child encrypts, compresses, or prints fewer than 16 characters of gets through.
 

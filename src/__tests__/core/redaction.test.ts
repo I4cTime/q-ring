@@ -143,7 +143,8 @@ describe("slice regions of structured secrets (review #3)", () => {
     expect(sliceRegions("https://example.com/hooks/T0/B0/abcdef?x=1")).toEqual([
       "/hooks/T0/B0/abcdef?x=1",
     ]);
-    expect(sliceRegions("https://api.example.com")).toEqual([]);
+    // Nothing credential-shaped left: never an empty list, the whole value.
+    expect(sliceRegions("https://api.example.com")).toEqual(["https://api.example.com"]);
   });
 
   it("JWT: the signature segment only", () => {
@@ -354,5 +355,111 @@ describe("streaming equals one-shot redaction", () => {
       expect(out).not.toContain(S1.slice(0, 16));
       expect(out).not.toContain("hunter2-very-long");
     }
+  });
+});
+
+/** Deterministic lowercase hex (fake). */
+function fakeHex(length: number, seed: number): string {
+  let x = seed >>> 0;
+  let out = "";
+  for (let i = 0; i < length; i++) {
+    x = (Math.imul(x, 1103515245) + 12345) >>> 0;
+    out += ((x >>> 16) & 15).toString(16);
+  }
+  return out;
+}
+
+describe("JSON credentials holding a PEM (review 4 #1)", () => {
+  const pemBody = Array.from({ length: 4 }, (_, i) => fakeSecret(64, 300 + i));
+  const pem = `-----BEGIN PRIVATE KEY-----\n${pemBody.join("\n")}\n-----END PRIVATE KEY-----\n`;
+  const account = {
+    type: "service_account",
+    project_id: "demo-project",
+    private_key_id: fakeHex(40, 310),
+    private_key: pem,
+    client_email: "svc@demo-project.iam.gserviceaccount.com",
+    refresh_token: fakeSecret(40, 311),
+  };
+
+  for (const [shape, value] of [
+    ["compact", JSON.stringify(account)],
+    ["pretty-printed", JSON.stringify(account, null, 2)],
+  ] as const) {
+    it(`slices the key body and the token fields of ${shape} JSON`, () => {
+      expect(value.length).toBeLessThanOrEqual(SLICE_MAX_LENGTH);
+      expect(value.length).toBeGreaterThan(DERIVE_MAX_LENGTH); // no encoded forms to fall back on
+      const regions = sliceRegions(value);
+      expect(regions).toEqual(
+        expect.arrayContaining([...pemBody, account.private_key_id, account.refresh_token]),
+      );
+      expect(regions.some((r) => r.includes("{") || r.includes("BEGIN"))).toBe(false);
+
+      const set = new RedactionSet([{ name: "GCP_SA", value }]);
+      const body = pemBody[1].slice(10, 45); // 35 chars of the key body
+      expect(set.redact(`key: ${body}...`)).toBe(`key: ${tok("GCP_SA")}...`);
+      expect(set.redact(`tok=${account.refresh_token.slice(0, 20)}`)).toBe(`tok=${tok("GCP_SA")}`);
+      expect(set.redact(`kid ${account.private_key_id.slice(5, 30)} x`)).toBe(
+        `kid ${tok("GCP_SA")} x`,
+      );
+    });
+  }
+
+  it("a PEM pasted into .env with literal \\n separators yields its body lines", () => {
+    const escaped = pem.replace(/\n/g, "\\n");
+    expect(sliceRegions(escaped)).toEqual(pemBody);
+  });
+
+  it("never returns an empty region list", () => {
+    expect(sliceRegions('{"a":1,"b":true}')).toEqual(['{"a":1,"b":true}']);
+    expect(sliceRegions("-----BEGIN X-----\n-----END X-----")).toEqual([
+      "-----BEGIN X-----\n-----END X-----",
+    ]);
+  });
+});
+
+describe("slice variety rule (review 4 #3)", () => {
+  it("slices a 20-digit account number at 17 and 18 chars", () => {
+    const acct = "73019582640157396284";
+    const set = new RedactionSet([{ name: "ACCOUNT_NO", value: acct }]);
+    expect(set.slicing).toBe(true);
+    expect(set.redact(`ref ${acct.slice(0, 17)} ok`)).toBe(`ref ${tok("ACCOUNT_NO")} ok`);
+    expect(set.redact(`ref ${acct.slice(2, 20)} ok`)).toBe(`ref ${tok("ACCOUNT_NO")} ok`);
+  });
+
+  it("slices a 32-char hex token", () => {
+    const hex = fakeHex(32, 320);
+    const set = new RedactionSet([{ name: "HEX_TOKEN", value: hex }]);
+    expect(set.redact(`t=${hex.slice(6, 26)};`)).toBe(`t=${tok("HEX_TOKEN")};`);
+  });
+
+  it("never indexes repeated-character runs", () => {
+    for (const run of ["0".repeat(24), "x".repeat(24), "ab".repeat(12)]) {
+      const set = new RedactionSet([{ name: "RUN", value: run }]);
+      expect(set.slicing, run).toBe(false);
+      expect(set.redact(`pad ${run.slice(0, 20)} pad`)).toBe(`pad ${run.slice(0, 20)} pad`);
+    }
+  });
+});
+
+describe("table size (review 4 #4)", () => {
+  // Measured building 200 sliceable 1000-char secrets (Node 26, x86-64, cold,
+  // retained after GC): before, Set/Map tables, about 104 MB of heap and
+  // 295 ms; now, sorted typed arrays behind a bit filter, about 14 MB and
+  // 85 ms. The bound here is loose so a regression shows without flaking.
+  it("builds 200 x 1000-char secrets in well under a second", () => {
+    const entries = Array.from({ length: 200 }, (_, i) => ({
+      name: `TOKEN_${i}`,
+      value: fakeSecret(1000, 1000 + i),
+    }));
+    const t0 = performance.now();
+    const set = new RedactionSet(entries);
+    const ms = performance.now() - t0;
+    expect(set.slicing).toBe(true);
+    expect(ms).toBeLessThan(1000);
+    const v = entries[123].value;
+    expect(set.redact(`x ${v.slice(400, 430)} y`)).toBe(`x ${tok("TOKEN_123")} y`);
+    // An ordinary line still flushes whole.
+    const s = new RedactionStream(set);
+    expect(s.write("INFO all good\n")).toBe("INFO all good\n");
   });
 });

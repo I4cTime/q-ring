@@ -21,7 +21,7 @@
  *    (see sliceRegions: the userinfo of a URL, the signature of a JWT, the body
  *    of a PEM block, the long string values of a JSON object), extended left
  *    and right while the text still follows it and replaced whole. Windows
- *    with under 3 bits/char of entropy (`0000000000000000`) are ignored.
+ *    that are repeated-character runs (`0000000000000000`) are ignored.
  *
  * Every hit is replaced by `[QRING:REDACTED:<KEY_NAME>]` naming the keyring
  * key the value came from (#123); `[QRING:REDACTED]` when the name is unknown.
@@ -46,8 +46,14 @@ export const DERIVE_MAX_LENGTH = 256;
 /** Values longer than this are not sliced (verbatim, plus encoded if short enough). */
 export const SLICE_MAX_LENGTH = 1024;
 
-/** Slice windows below this Shannon entropy (bits per char) are ignored. */
-export const MIN_WINDOW_ENTROPY = 3.0;
+/**
+ * Slice windows with less variety than this are ignored, so repeated-character
+ * runs (`0000000000000000`, `abababababababab`) never count as a slice: at
+ * least MIN_WINDOW_DISTINCT distinct chars and MIN_WINDOW_ENTROPY bits/char
+ * of Shannon entropy. Digit-only account numbers and hex tokens pass.
+ */
+export const MIN_WINDOW_ENTROPY = 2.0;
+export const MIN_WINDOW_DISTINCT = 4;
 
 export interface RedactionEntry {
   /** Keyring key the value came from; omitted when unknown. */
@@ -86,11 +92,6 @@ interface Pattern {
 interface SliceRegion {
   text: string;
   token: string;
-}
-
-interface WindowRef {
-  region: number;
-  offset: number;
 }
 
 // ── Encoded forms ────────────────────────────────────────────────────────
@@ -150,6 +151,8 @@ const URL_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/([^/?#\s]*)(\S*)$/;
 function collectJsonStrings(node: unknown, out: string[], depth: number): void {
   if (depth > 20) return;
   if (typeof node === "string") {
+    // Each long string value is a value in its own right: a PEM yields its
+    // body lines, a URL its credential part, a plain token itself.
     if (node.length >= SLICE_WINDOW) out.push(...sliceRegions(node, depth + 1));
   } else if (Array.isArray(node)) {
     for (const n of node) collectJsonStrings(n, out, depth + 1);
@@ -160,23 +163,28 @@ function collectJsonStrings(node: unknown, out: string[], depth: number): void {
   }
 }
 
-/**
- * The credential-bearing parts of a value, which are what slice matching
- * looks for. Public structure is left out so it never matches unrelated text:
- *
- * - URL with userinfo: the userinfo (`user:password`) only.
- * - URL without userinfo: the path + query, scheme and host stripped.
- * - JWT: the signature segment only (header and payload are shared shapes).
- * - PEM: the base64 body lines, armor and header lines removed.
- * - JSON object: its string values of 16+ chars, recursively (not keys).
- * - Anything else: the whole value.
- */
-export function sliceRegions(value: string, depth = 0): string[] {
+function structuredRegions(value: string, depth: number): string[] {
   const trimmed = value.trim();
 
+  // JSON first: in compact JSON a PEM's newlines are the two chars `\n`, so
+  // the PEM rule below would see one line, full of ':', and keep nothing.
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed);
+      if (parsed && typeof parsed === "object") {
+        const out: string[] = [];
+        collectJsonStrings(parsed, out, depth);
+        return out;
+      }
+    } catch {
+      // Not JSON: try the other shapes.
+    }
+  }
+
   if (/-----BEGIN [^-\n]+-----/.test(value)) {
+    // Real newlines, or the literal two-char `\n` of a PEM pasted into .env.
     return value
-      .split(/\r?\n/)
+      .split(/\r?\n|\\n/)
       .map((l) => l.trim())
       .filter((l) => l.length > 0 && !l.startsWith("-----") && !l.includes(":"));
   }
@@ -192,35 +200,26 @@ export function sliceRegions(value: string, depth = 0): string[] {
     return url[2] ? [url[2]] : [];
   }
 
-  if (trimmed.startsWith("{")) {
-    try {
-      const parsed: unknown = JSON.parse(trimmed);
-      if (parsed && typeof parsed === "object") {
-        const out: string[] = [];
-        collectJsonStrings(parsed, out, depth);
-        return out;
-      }
-    } catch {
-      // Not JSON: fall through to the whole value.
-    }
-  }
-
   return [value];
 }
 
-/** Shannon entropy, bits per char, of s[start, start + len). */
-function entropy(s: string, start: number, len: number): number {
-  const counts = new Map<number, number>();
-  for (let i = start; i < start + len; i++) {
-    const c = s.charCodeAt(i);
-    counts.set(c, (counts.get(c) ?? 0) + 1);
-  }
-  let h = 0;
-  for (const n of counts.values()) {
-    const p = n / len;
-    h -= p * Math.log2(p);
-  }
-  return h;
+/**
+ * The credential-bearing parts of a value, which are what slice matching
+ * looks for. Public structure is left out so it never matches unrelated text:
+ *
+ * - JSON object or array: each string value of 16+ chars, through these same
+ *   rules (a `private_key` PEM gives its body lines), never keys or structure.
+ * - PEM: the base64 body lines, armor and header lines removed.
+ * - JWT: the signature segment only (header and payload are shared shapes).
+ * - URL with userinfo: the userinfo (`user:password`) only.
+ * - URL without userinfo: the path + query, scheme and host stripped.
+ * - Anything else: the whole value.
+ *
+ * Never empty: when a shape yields nothing, the whole value is the region.
+ */
+export function sliceRegions(value: string, depth = 0): string[] {
+  const out = structuredRegions(value, depth);
+  return out.length > 0 ? out : [value];
 }
 
 // ── Hashing ──────────────────────────────────────────────────────────────
@@ -248,6 +247,144 @@ function windowHash(s: string, start: number): number {
   return h;
 }
 
+// Membership tables are sorted Int32Arrays searched by bisection, fronted by
+// a 2^20-bit filter so most misses cost one bit test. Measured building 200
+// sliceable 1000-char secrets (Node 26, x86-64, cold, retained after GC): the
+// Set/Map tables held about 104 MB of heap and took about 295 ms; these hold
+// about 14 MB of typed arrays and take about 85 ms.
+const FILTER_BITS = 20;
+const FILTER_MASK = (1 << FILTER_BITS) - 1;
+
+function filterSlot(h: number): number {
+  return (h ^ (h >>> 13) ^ (h >>> 26)) & FILTER_MASK;
+}
+
+function buildFilter(hashes: Int32Array | Uint32Array): Uint32Array {
+  const f = new Uint32Array(1 << (FILTER_BITS - 5));
+  for (let i = 0; i < hashes.length; i++) {
+    const slot = filterSlot(hashes[i]);
+    f[slot >>> 5] |= 1 << (slot & 31);
+  }
+  return f;
+}
+
+function filterHas(f: Uint32Array, h: number): boolean {
+  const slot = filterSlot(h);
+  return (f[slot >>> 5] & (1 << (slot & 31))) !== 0;
+}
+
+/**
+ * Indices of `hashes` (unsigned 32-bit values) in ascending hash order. Each
+ * (hash, index) pair is packed into one exactly representable double
+ * (2^32 * 2^21 = 2^53) so a native numeric sort does the work, with no JS
+ * comparator; past 2^21 entries it falls back to a comparator sort.
+ */
+function sortedOrder(hashes: Uint32Array): Uint32Array {
+  const count = hashes.length;
+  const idx = new Uint32Array(count);
+  const SHIFT = 2 ** 21;
+  if (count < SHIFT) {
+    const packed = new Float64Array(count);
+    for (let i = 0; i < count; i++) packed[i] = hashes[i] * SHIFT + i;
+    packed.sort();
+    for (let k = 0; k < count; k++) idx[k] = packed[k] % SHIFT;
+  } else {
+    for (let i = 0; i < count; i++) idx[i] = i;
+    idx.sort((x, y) => hashes[x] - hashes[y]);
+  }
+  return idx;
+}
+
+/** First index in sorted `arr` whose value is >= h. */
+function lowerBound(arr: Int32Array | Uint32Array, h: number): number {
+  let lo = 0;
+  let hi = arr.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (arr[mid] < h) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/**
+ * Sort unsigned 32-bit values (two 16-bit LSD radix passes, linear time) and
+ * drop duplicates; returns a right-sized copy.
+ */
+function sortUnique(arr: Uint32Array): Uint32Array {
+  const n = arr.length;
+  const tmp = new Uint32Array(n);
+  const count = new Uint32Array(65536);
+  for (let i = 0; i < n; i++) count[arr[i] & 0xffff]++;
+  for (let i = 0, sum = 0; i < 65536; i++) {
+    const c = count[i];
+    count[i] = sum;
+    sum += c;
+  }
+  for (let i = 0; i < n; i++) tmp[count[arr[i] & 0xffff]++] = arr[i];
+  count.fill(0);
+  for (let i = 0; i < n; i++) count[tmp[i] >>> 16]++;
+  for (let i = 0, sum = 0; i < 65536; i++) {
+    const c = count[i];
+    count[i] = sum;
+    sum += c;
+  }
+  for (let i = 0; i < n; i++) arr[count[tmp[i] >>> 16]++] = tmp[i];
+  let u = 0;
+  for (let i = 0; i < n; i++) {
+    if (i === 0 || arr[i] !== arr[i - 1]) arr[u++] = arr[i];
+  }
+  return arr.slice(0, u);
+}
+
+// n * log2(n) for the counts a 16-char window can hold.
+const NLOGN = Float64Array.from({ length: SLICE_WINDOW + 1 }, (_, n) =>
+  n > 1 ? n * Math.log2(n) : 0,
+);
+// Scratch per-char counts for regionWindows (always left zeroed).
+const WINDOW_COUNTS = new Uint8Array(65536);
+
+/**
+ * Call `emit(offset, hash)` for each 16-char window of `text` with enough
+ * variety to be a slice (MIN_WINDOW_DISTINCT distinct chars and
+ * MIN_WINDOW_ENTROPY bits/char). The hash and the char counts both roll, so
+ * a region costs O(length). Shannon entropy of a window with counts n_c is
+ * log2(16) - sum(n_c log2 n_c) / 16.
+ */
+function regionWindows(text: string, emit: (offset: number, hash: number) => void): void {
+  if (text.length < SLICE_WINDOW) return;
+  let distinct = 0;
+  let sum = 0;
+  const add = (c: number) => {
+    const n = WINDOW_COUNTS[c];
+    if (n === 0) distinct++;
+    sum += NLOGN[n + 1] - NLOGN[n];
+    WINDOW_COUNTS[c] = n + 1;
+  };
+  const remove = (c: number) => {
+    const n = WINDOW_COUNTS[c];
+    if (n === 1) distinct--;
+    sum += NLOGN[n - 1] - NLOGN[n];
+    WINDOW_COUNTS[c] = n - 1;
+  };
+  for (let i = 0; i < SLICE_WINDOW; i++) add(text.charCodeAt(i));
+  let h = windowHash(text, 0);
+  const maxEntropy = Math.log2(SLICE_WINDOW);
+  for (let offset = 0; offset + SLICE_WINDOW <= text.length; offset++) {
+    if (offset > 0) {
+      const out = text.charCodeAt(offset - 1);
+      const inc = text.charCodeAt(offset + SLICE_WINDOW - 1);
+      remove(out);
+      add(inc);
+      h = (Math.imul(h - Math.imul(out, HASH_DROP), HASH_BASE) + inc) | 0;
+    }
+    const entropy = maxEntropy - sum / SLICE_WINDOW;
+    if (distinct >= MIN_WINDOW_DISTINCT && entropy >= MIN_WINDOW_ENTROPY - 1e-9) emit(offset, h);
+  }
+  for (let i = text.length - SLICE_WINDOW; i < text.length; i++)
+    WINDOW_COUNTS[text.charCodeAt(i)] = 0;
+}
+
 let longValueNoted = false;
 
 /** Test hook: let the once-per-process "value too long to slice" note fire again. */
@@ -267,9 +404,14 @@ export class RedactionSet {
   /** Full-value patterns (verbatim and encoded), longest first. */
   private readonly patterns: Pattern[] = [];
   private readonly regions: SliceRegion[] = [];
-  private readonly windows = new Map<number, WindowRef[]>();
-  /** Hashes of every suffix that could still grow into a hit (see liveStart). */
-  private readonly live = new Set<number>();
+  /** Window hashes (unsigned), sorted, with the region and offset of each (parallel). */
+  private readonly winHash: Uint32Array;
+  private readonly winRegion: Int32Array;
+  private readonly winOffset: Int32Array;
+  private readonly winFilter: Uint32Array;
+  /** Sorted unique hashes of every suffix that could still grow into a hit. */
+  private readonly liveHash: Uint32Array;
+  private readonly liveFilter: Uint32Array;
   /** Longest full pattern. */
   readonly maxLen: number;
   /** Upper bound on how much raw text a stream may hold back. */
@@ -330,24 +472,51 @@ export class RedactionSet {
     this.maxLen = this.patterns.length > 0 ? this.patterns[0].text.length : 0;
     this.holdMax = Math.max(this.maxLen, SLICE_WINDOW);
 
+    // Windows: hashes sorted (as unsigned values) with the region and offset
+    // of each in parallel arrays, sized for the worst case then trimmed.
+    let maxWindows = 0;
+    for (const { text } of this.regions) maxWindows += Math.max(0, text.length - SLICE_WINDOW + 1);
+    const hashes = new Uint32Array(maxWindows);
+    const regionOf = new Int32Array(maxWindows);
+    const offsetOf = new Int32Array(maxWindows);
+    let count = 0;
     this.regions.forEach(({ text }, region) => {
-      for (let offset = 0; offset + SLICE_WINDOW <= text.length; offset++) {
-        if (entropy(text, offset, SLICE_WINDOW) < MIN_WINDOW_ENTROPY) continue;
-        const h = windowHash(text, offset);
-        const refs = this.windows.get(h);
-        if (refs) refs.push({ region, offset });
-        else this.windows.set(h, [{ region, offset }]);
-      }
+      regionWindows(text, (offset, h) => {
+        hashes[count] = h;
+        regionOf[count] = region;
+        offsetOf[count] = offset;
+        count++;
+      });
     });
-    this.slicing = this.windows.size > 0;
+    const order = sortedOrder(hashes.subarray(0, count));
+    this.winHash = new Uint32Array(count);
+    this.winRegion = new Int32Array(count);
+    this.winOffset = new Int32Array(count);
+    for (let k = 0; k < count; k++) {
+      const i = order[k];
+      this.winHash[k] = hashes[i];
+      this.winRegion[k] = regionOf[i];
+      this.winOffset[k] = offsetOf[i];
+    }
+    this.winFilter = buildFilter(this.winHash);
+    this.slicing = count > 0;
 
     // Live suffixes: every proper prefix of a full pattern, and every
     // substring shorter than a window of a slice region.
+    let liveCount = 0;
+    for (const { text } of this.patterns) liveCount += Math.max(0, text.length - 1);
+    for (const { text } of this.regions) {
+      for (let i = 0; i < text.length; i++) {
+        liveCount += Math.min(SLICE_WINDOW - 1, text.length - i);
+      }
+    }
+    const live = new Uint32Array(liveCount);
+    let n = 0;
     for (const { text } of this.patterns) {
       let h = 0;
       for (let i = 0; i < text.length - 1; i++) {
         h = (Math.imul(h, HASH_BASE) + text.charCodeAt(i)) | 0;
-        this.live.add(h);
+        live[n++] = h;
       }
     }
     for (const { text } of this.regions) {
@@ -355,10 +524,12 @@ export class RedactionSet {
         let h = 0;
         for (let j = i; j < text.length && j < i + SLICE_WINDOW - 1; j++) {
           h = (Math.imul(h, HASH_BASE) + text.charCodeAt(j)) | 0;
-          this.live.add(h);
+          live[n++] = h;
         }
       }
     }
+    this.liveHash = sortUnique(live);
+    this.liveFilter = buildFilter(this.liveHash);
   }
 
   get empty(): boolean {
@@ -421,8 +592,7 @@ export class RedactionSet {
       }
       hashAt = i;
 
-      const refs = this.windows.get(h);
-      const hit = refs ? this.extend(text, i, refs) : null;
+      const hit = filterHas(this.winFilter, h) ? this.extend(text, i, h >>> 0) : null;
       if (hit) {
         out.push(hit);
         i = hit.end;
@@ -433,11 +603,16 @@ export class RedactionSet {
     }
   }
 
-  /** Longest run around a window hit at `pos` that still follows a region. */
-  private extend(text: string, pos: number, refs: WindowRef[]): RedactionMatch | null {
+  /** Longest run around a window (hash `h`) at `pos` that still follows a region. */
+  private extend(text: string, pos: number, h: number): RedactionMatch | null {
     let best: RedactionMatch | null = null;
-    for (const { region, offset } of refs) {
-      const { text: value, token } = this.regions[region];
+    for (
+      let k = lowerBound(this.winHash, h);
+      k < this.winHash.length && this.winHash[k] === h;
+      k++
+    ) {
+      const offset = this.winOffset[k];
+      const { text: value, token } = this.regions[this.winRegion[k]];
       // Verify (the hash can collide).
       let ok = true;
       for (let k = 0; k < SLICE_WINDOW; k++) {
@@ -483,7 +658,10 @@ export class RedactionSet {
     for (let p = text.length - 1; p >= bound; p--) {
       h = (h + Math.imul(text.charCodeAt(p), pow)) | 0;
       pow = Math.imul(pow, HASH_BASE);
-      if (this.live.has(h)) best = p;
+      if (filterHas(this.liveFilter, h)) {
+        const k = lowerBound(this.liveHash, h >>> 0);
+        if (k < this.liveHash.length && this.liveHash[k] === h >>> 0) best = p;
+      }
     }
     return best;
   }
