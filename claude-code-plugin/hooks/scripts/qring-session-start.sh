@@ -16,6 +16,13 @@
 #      project-copy CLAUDE.md (`pnpm run plugin:sync:claude`), or the plugin's
 #      rules/ copied into ~/.claude/rules/qring/ or <project>/.claude/rules/qring/.
 #
+# The hook has no matcher, so it fires for every SessionStart `source`
+# (startup, resume, clear, compact). The rules are skipped on `resume`: the
+# resumed transcript already carries the copy injected at startup. They are
+# injected on startup, clear and compact (a compaction summary may have
+# dropped them). Empty or non-JSON stdin is treated as startup. The note and
+# the check_project nudge are injected for every source.
+#
 # Required tools: jq (builds the JSON, so quotes, backslashes and newlines in
 # the rules are escaped safely). Always exits 0; never blocks the session.
 
@@ -28,6 +35,14 @@ fi
 dir="${CLAUDE_PROJECT_DIR:-${PWD}}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 rules_file="${script_dir}/../qring-session-rules.md"
+
+# SessionStart payload on stdin; `source` is startup|resume|clear|compact.
+# Missing or malformed input leaves it empty, which is handled as startup.
+payload=""
+if [ ! -t 0 ]; then
+  payload="$(cat 2>/dev/null || true)"
+fi
+source_kind="$(printf '%s' "${payload}" | jq -r '.source? // empty | strings' 2>/dev/null || true)"
 
 note="q-ring is wired into this project (see CLAUDE.md and .mcp.json). At the start of any secret-related task, call the \`get_project_context\` MCP tool for an up-to-date redacted view of secrets, environment, manifest, and policy. Available slash commands: /qring-scan-secrets, /qring-health-check, /qring-rotate-expired, /qring-setup-project, /qring-teleport-secrets, /qring-dashboard, /qring-exec-safe, /qring-analyze."
 
@@ -49,7 +64,7 @@ rules_loaded_elsewhere() {
 }
 
 rules=""
-if [ -f "${rules_file}" ] && ! rules_loaded_elsewhere; then
+if [ "${source_kind}" != "resume" ] && [ -f "${rules_file}" ] && ! rules_loaded_elsewhere; then
   rules="$(cat "${rules_file}" 2>/dev/null || true)"
 fi
 
