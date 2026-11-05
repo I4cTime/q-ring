@@ -149,14 +149,46 @@ keychain the same way q-ring does; no local tool changes that.
 - Secrets are injected into the child's environment, not echoed to the
   shell. Captured stdout/stderr is piped through a redaction transform
   that masks known secret values (UTF-8-safe across chunk boundaries
-  since v0.14).
+  since v0.14), their base64 / hex / URL / JSON-encoded forms (values
+  up to 256 chars), and any run of 16+ consecutive characters of the
+  credential-bearing parts of one (parts up to 1024 chars; for a URL
+  the userinfo, for a JWT the signature, for PEM the body, for JSON
+  the string values under credential-named keys and any PEM value,
+  read the same way; repeated-character runs never count), as `[QRING:REDACTED:<KEY_NAME>]`. The MCP airlock
+  scrubs wrapped-server results with the same engine, but for whole
+  values and their encoded forms only (see below), and fails closed:
+  if the redaction set cannot be built, or no secret values could be
+  listed at all, results are withheld, and `exec` refuses to spawn. A
+  single secret that cannot be read (a template naming a missing key,
+  a failing JIT provider) is left out of the set.
+- **Why exec slices and the airlock does not.** Slice matching
+  extends a hit while the text still follows the secret and stops at
+  the first char that does not, so it reveals, for any text the caller
+  chose, whether that text continues the secret. In the airlock the
+  caller is the agent, and many wrapped tools echo their input (echo,
+  write-then-read, a search that repeats the query): sending lines of
+  "known 16-char prefix + candidate char" and seeing which one comes
+  back as a token recovers an unknown secret one char per call. The
+  airlock therefore matches only whole values and their encoded
+  forms, which answer nothing short of "this is the entire secret".
+  In `exec` / `run` the child process already holds the secrets in
+  its environment and can print any piece of them, including pieces
+  under 16 chars, so the oracle adds no exposure there; slicing only
+  adds protection against accidental truncation (a debug print of the
+  first 20 chars, a cut-off log line).
 - Profiles gate what may run: `restricted` denies network tools *and*
   interpreters/shells (`python`, `node`, `sh`, …), because
   `python -c '…'` is a network tool. `ci` and `unrestricted` widen
   this deliberately; custom profiles live in `.q-ring.json`.
 - **This is not a sandbox.** An allowed binary can still do anything an
   allowed binary can do. Redaction is best-effort against *known*
-  values — it cannot mask a secret the child re-encodes.
+  values — it cannot mask a secret the child encrypts, compresses, or
+  re-encodes in a form other than the ones above, or prints fewer than
+  16 characters of. Values over 256 chars are not matched in encoded
+  form, and credential parts longer than 1024 characters (a whole
+  opaque value counts as one part) are not sliced; their values are
+  still matched verbatim. A service-account JSON or a large PEM key
+  still slices, because its parts (PEM lines, token fields) are short.
 
 **At rest**
 

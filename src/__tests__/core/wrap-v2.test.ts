@@ -13,7 +13,11 @@ vi.mock("@napi-rs/keyring", async () => {
 });
 
 import { createAirlockServer, WRAP_APPROVAL_SCOPE, wrapApprovalService } from "../../core/wrap.js";
-import { createRedactor, REDACTED } from "../../core/wrap-redact.js";
+import {
+  createRedactor,
+  RedactionUnavailableError,
+  type Redactor,
+} from "../../core/wrap-redact.js";
 import { queryAudit, setAuditAgentLabel } from "../../core/observer.js";
 import { clearPolicyCache, setPolicyRoot } from "../../core/policy.js";
 import { grantApproval } from "../../core/approval.js";
@@ -69,14 +73,15 @@ function buildDownstream(): McpServer {
   return server;
 }
 
-async function buildAirlock(opts: { redact?: boolean } = {}) {
+async function buildAirlock(opts: { redact?: boolean; redactor?: Redactor } = {}) {
   const downstream = buildDownstream();
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
   await downstream.connect(serverSide);
   const downstreamClient = new Client({ name: "q-ring-airlock", version: "test" });
   await downstreamClient.connect(clientSide);
 
-  const redactor = opts.redact ? createRedactor({ projectPath: projectDir }) : undefined;
+  const redactor =
+    opts.redactor ?? (opts.redact ? createRedactor({ projectPath: projectDir }) : undefined);
   const proxy = createAirlockServer(
     downstreamClient,
     { label: "rich-cmd", correlationId: "wrap-v2-session" },
@@ -148,6 +153,9 @@ describe("airlock v2: result redaction", () => {
     setSecret("STRIPE_KEY", SECRET, { scope: "global", silent: true });
   });
 
+  // Named after the keyring key the value came from.
+  const REDACTED = "[QRING:REDACTED:STRIPE_KEY]";
+
   it("scrubs known secret values from tool results, structured content, resources and prompts", async () => {
     const { host } = await buildAirlock({ redact: true });
     const call = await host.callTool({ name: "leak", arguments: {} });
@@ -159,6 +167,64 @@ describe("airlock v2: result redaction", () => {
 
     const got = await host.getPrompt({ name: "summarize", arguments: { topic: "x" } });
     expect((got.messages[0].content as { text: string }).text).not.toContain(SECRET);
+  });
+
+  it("scrubs encoded forms with the same named token, but never slices", () => {
+    const redactor = createRedactor({ projectPath: projectDir });
+    const b64 = Buffer.from(`user:${SECRET}`).toString("base64");
+    expect(redactor.text(`Basic ${b64}`)).toContain(REDACTED);
+    expect(redactor.text(`Basic ${b64}`)).not.toContain(b64.slice(8, 30));
+    expect(redactor.text(`hex ${Buffer.from(SECRET).toString("hex")}`)).toBe(`hex ${REDACTED}`);
+    // No slice matching in the airlock (it would be a per-char oracle).
+    expect(redactor.text(`first 20: ${SECRET.slice(0, 20)}...`)).toBe(
+      `first 20: ${SECRET.slice(0, 20)}...`,
+    );
+  });
+
+  it("is not a per-char oracle: echoed prefix+candidate lines come back unchanged", async () => {
+    const { host } = await buildAirlock({ redact: true });
+    // An agent knows a 16+ char prefix and probes the next char through an
+    // echoing tool. Every candidate, right or wrong, must come back as sent.
+    const known = SECRET.slice(0, 20);
+    const candidates = "abcdefghijklmnopqrstuvwxyz0123456789-_".split("");
+    expect(candidates).toContain(SECRET[20]);
+    const probe = candidates.map((c) => `${known}${c}`).join("\n");
+    const out = text(await host.callTool({ name: "echo", arguments: { msg: probe } }));
+    expect(out).toBe(`echo: ${probe}`);
+    expect(out).not.toContain("[QRING:REDACTED");
+
+    // The whole secret, or its base64, is still redacted.
+    const whole = text(await host.callTool({ name: "echo", arguments: { msg: `k=${SECRET}` } }));
+    expect(whole).toBe(`echo: k=${REDACTED}`);
+    const b64 = Buffer.from(SECRET).toString("base64");
+    const enc = text(await host.callTool({ name: "echo", arguments: { msg: `b=${b64}` } }));
+    expect(enc).toContain(REDACTED);
+    expect(enc).not.toContain(b64.slice(0, 40));
+  });
+
+  it("fails closed: a result that cannot be redacted is withheld, never passed through", async () => {
+    const broken: Redactor = {
+      text: () => {
+        throw new RedactionUnavailableError();
+      },
+      result: () => {
+        throw new RedactionUnavailableError();
+      },
+      invalidate: () => {},
+    };
+    const { host } = await buildAirlock({ redactor: broken });
+
+    const call = await host.callTool({ name: "leak", arguments: {} });
+    expect(call.isError).toBe(true);
+    expect(text(call)).toBe("airlock: result withheld: secret redaction is unavailable");
+    expect(JSON.stringify(call)).not.toContain(SECRET);
+    const events = queryAudit({ action: "wrap", correlationId: "wrap-v2-session" });
+    expect(events.some((e) => e.detail?.includes("result withheld"))).toBe(true);
+
+    await expect(host.readResource({ uri: "cfg://app" })).rejects.toThrow(/result withheld/);
+    await expect(
+      host.getPrompt({ name: "summarize", arguments: { topic: "x" } }),
+    ).rejects.toThrow(/result withheld/);
   });
 
   it("does not touch results when no redactor is wired", async () => {

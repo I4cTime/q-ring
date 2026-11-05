@@ -15,6 +15,14 @@ import { Transform } from "node:stream";
 import { listSecrets, getSecret, type KeyringOptions } from "./keyring.js";
 import { checkDecay } from "./envelope.js";
 import { checkExecPolicy, getExecMaxRuntime } from "./policy.js";
+import {
+  RedactionSet,
+  RedactionStream,
+  MIN_REDACT_LENGTH,
+  type RedactionEntry,
+} from "./redaction.js";
+
+export type { RedactionEntry } from "./redaction.js";
 
 export interface ExecProfile {
   name: string;
@@ -79,77 +87,70 @@ export interface ExecResult {
 }
 
 /**
- * Best-effort output redaction: replaces verbatim occurrences of known secret
- * values (>5 chars) in a child process's stdout/stderr. This is a safety net,
- * NOT a guarantee — it cannot catch secrets that the child has transformed
- * (base64/hex/URL-encoded, split across writes beyond the tail window, etc.).
+ * Best-effort output redaction over a child process's stdout/stderr. Matching
+ * lives in redaction.ts (shared with the MCP airlock): verbatim values longer
+ * than 5 chars, their base64/hex/URL/JSON-encoded forms (values up to 256
+ * chars), and any run of 16+ consecutive characters of a value's
+ * credential-bearing parts (parts up to 1024 chars). Hits become
+ * `[QRING:REDACTED:<KEY>]` (`[QRING:REDACTED]` when the key is unknown). This
+ * is a safety net, NOT a guarantee: a child that transforms a secret in other
+ * ways (encrypts, compresses, prints under 16 chars of it) gets through.
+ *
+ * Streaming (RedactionStream): only the shortest tail that could still grow
+ * into a hit is held back raw and re-examined with the next chunk, so a value
+ * split across writes is still matched whole while ordinary output flushes at
+ * once; the held tail is bounded.
  */
 export class RedactionTransform extends Transform {
-  private patterns: { value: string; replacement: string }[] = [];
-  private tail: string = "";
-  private maxLen: number = 0;
+  private readonly stream: RedactionStream | null;
   // Decodes UTF-8 across chunk boundaries: a multi-byte character split between
   // two Buffer chunks would otherwise be corrupted to U+FFFD by chunk.toString()
   // BEFORE matching runs, letting a multi-byte secret slip through unredacted.
   // StringDecoder buffers the incomplete trailing bytes until the rest arrives.
   private decoder = new StringDecoder("utf8");
 
-  constructor(secretsToRedact: string[]) {
+  /** Takes `{ name, value }` entries, or a prebuilt set shared between streams. */
+  constructor(secretsToRedact: readonly RedactionEntry[] | RedactionSet) {
     super();
-    // Only redact secrets > 5 chars to avoid destroying output
-    const validSecrets = secretsToRedact.filter((s) => s.length > 5);
-    // Sort by length descending to match longest first
-    validSecrets.sort((a, b) => b.length - a.length);
-
-    this.patterns = validSecrets.map((s) => ({
-      value: s,
-      replacement: "[QRING:REDACTED]",
-    }));
-
-    if (validSecrets.length > 0) {
-      this.maxLen = validSecrets[0].length;
-    }
+    const set =
+      secretsToRedact instanceof RedactionSet ? secretsToRedact : new RedactionSet(secretsToRedact);
+    this.stream = set.empty ? null : new RedactionStream(set);
   }
 
   _transform(chunk: Buffer | string, _encoding: string, callback: () => void) {
-    if (this.patterns.length === 0) {
+    if (!this.stream) {
       this.push(chunk);
       return callback();
     }
 
-    const decoded =
-      typeof chunk === "string" ? chunk : this.decoder.write(chunk);
-    const text = this.tail + decoded;
-    let redacted = text;
-
-    for (const { value, replacement } of this.patterns) {
-      redacted = redacted.split(value).join(replacement);
-    }
-
-    if (redacted.length < this.maxLen) {
-      this.tail = redacted;
-      return callback();
-    }
-
-    const outputLen = redacted.length - this.maxLen + 1;
-    const output = redacted.slice(0, outputLen);
-    this.tail = redacted.slice(outputLen);
-
-    this.push(output);
+    const decoded = typeof chunk === "string" ? chunk : this.decoder.write(chunk);
+    const out = this.stream.write(decoded);
+    if (out) this.push(out);
     callback();
   }
 
   _flush(callback: () => void) {
     // Flush any bytes the decoder is still holding (an incomplete sequence at
-    // end-of-stream) along with the retained tail, then redact once more.
-    let final = this.tail + this.decoder.end();
-    if (final) {
-      for (const { value, replacement } of this.patterns) {
-        final = final.split(value).join(replacement);
-      }
-      this.push(final);
+    // end-of-stream) along with the held-back raw tail, then redact once more.
+    if (this.stream) {
+      const out = this.stream.end(this.decoder.end());
+      if (out) this.push(out);
     }
     callback();
+  }
+}
+
+/**
+ * Build the redaction set for a spawn. A full build never fails on one bad
+ * value (derivation is per value), but if it does throw anyway, fall back to
+ * verbatim-only matching rather than running unredacted. Throws only when
+ * even that fails; callers must not spawn then.
+ */
+export function buildRedactionSet(entries: readonly RedactionEntry[]): RedactionSet {
+  try {
+    return new RedactionSet(entries);
+  } catch {
+    return new RedactionSet(entries, { verbatimOnly: true });
   }
 }
 
@@ -203,7 +204,8 @@ export async function execCommand(opts: ExecOptions): Promise<ExecResult> {
     }
   }
 
-  const secretsToRedact = new Set<string>();
+  // value -> key name; the first key that supplies a value names it.
+  const secretsToRedact = new Map<string, string>();
 
   let entries = listSecrets({
     scope: opts.scope,
@@ -239,8 +241,8 @@ export async function execCommand(opts: ExecOptions): Promise<ExecResult> {
 
     if (val !== null) {
       envMap[entry.key] = val;
-      if (val.length > 5) {
-        secretsToRedact.add(val);
+      if (val.length >= MIN_REDACT_LENGTH && !secretsToRedact.has(val)) {
+        secretsToRedact.set(val, entry.key);
       }
     }
   }
@@ -250,7 +252,7 @@ export async function execCommand(opts: ExecOptions): Promise<ExecResult> {
     command: opts.command,
     args: opts.args,
     envMap,
-    secretsToRedact: [...secretsToRedact],
+    secretsToRedact: [...secretsToRedact].map(([value, name]) => ({ name, value })),
     captureOutput: opts.captureOutput,
     projectPath: opts.projectPath,
   });
@@ -262,8 +264,8 @@ export interface SpawnRedactedOptions {
   args: string[];
   /** Complete child environment (caller composes inheritance + injection). */
   envMap: Record<string, string>;
-  /** Values to redact from the child's stdout/stderr. */
-  secretsToRedact: string[];
+  /** Values to redact from the child's stdout/stderr, with the key each came from. */
+  secretsToRedact: RedactionEntry[];
   captureOutput?: boolean;
   /** Used only to resolve the policy-configured max runtime. */
   projectPath?: string;
@@ -298,6 +300,21 @@ export function spawnRedacted(opts: SpawnRedactedOptions): Promise<ExecResult> {
       return resolve({ code: 126, stdout: "", stderr: "" });
     }
 
+    // Build the redaction set BEFORE spawning: if it cannot be built, the
+    // child must never run with secrets in its environment and unredacted
+    // output.
+    let redactionSet: RedactionSet;
+    try {
+      redactionSet = buildRedactionSet(secretsToRedact);
+    } catch (err) {
+      reject(
+        new Error(
+          `[QRING] Execution blocked: output redaction could not be set up (${err instanceof Error ? err.name : "error"})`,
+        ),
+      );
+      return;
+    }
+
     const child = spawn(opts.command, opts.args, {
       env: envMap,
       stdio: ["inherit", "pipe", "pipe"],
@@ -314,8 +331,8 @@ export function spawnRedacted(opts: SpawnRedactedOptions): Promise<ExecResult> {
       }, maxRuntime * 1000);
     }
 
-    const stdoutRedact = new RedactionTransform([...secretsToRedact]);
-    const stderrRedact = new RedactionTransform([...secretsToRedact]);
+    const stdoutRedact = new RedactionTransform(redactionSet);
+    const stderrRedact = new RedactionTransform(redactionSet);
 
     if (child.stdout) child.stdout.pipe(stdoutRedact);
     if (child.stderr) child.stderr.pipe(stderrRedact);

@@ -483,6 +483,22 @@ qring rotate:due --json
 
 Run commands with secrets securely injected into the environment. All known secret values are automatically redacted from stdout and stderr to prevent leaking into terminal logs or agent transcripts. Exec profiles restrict which commands may be run.
 
+Redaction catches each value (longer than 5 characters) verbatim, in its common encoded forms (base64 standard and URL-safe, at any offset inside a longer base64 string; lowercase and uppercase hex; URL-encoded; JSON-escaped), and as a slice: any run of 16 or more consecutive characters of it, such as a truncated log line. Every hit is replaced with a token that names the keyring key the value came from, so an agent reading the output knows which secret appeared without seeing it:
+
+```text
+connecting with [QRING:REDACTED:DATABASE_URL]
+Authorization: Basic [QRING:REDACTED:API_TOKEN]
+```
+
+`[QRING:REDACTED]` without a name means the value's key is unknown.
+
+Limits, so redaction stays fast and leaves ordinary output alone:
+
+- **Encoded forms** are matched for values up to 256 characters. Longer values (PEM keys, service-account JSON) are not matched in encoded form.
+- **Slices** are matched for every credential part up to 1024 characters; credential parts longer than 1024 characters (a whole opaque value counts as one part) are not sliced, though the value is still matched verbatim (q-ring prints a one-line, counts-only note on stderr). Only the credential-bearing parts of a structured value are sliced: the `user:password` of a URL with credentials (the path and query of a URL without), the signature of a JWT, the body of a PEM block, in a JSON object, the string values under credential-named keys (`key`, `secret`, `token`, `password`, `private`, `auth`, ...; not URL or URI fields) and any PEM value, each read the same way, so a service-account JSON contributes its `private_key` body, `private_key_id` and tokens but not `client_email` or its public cert URLs. A JSON value with no such string is matched whole only. So a different connection string to the same host, or another JWT with the same header, is left alone. Repeated-character runs (`0000000000000000`, `abababababababab`) never count as a slice; account numbers and hex tokens do.
+
+Redaction is a best-effort safety net, not a guarantee: a value the child encrypts, compresses, or prints fewer than 16 characters of gets through.
+
 ```bash
 # Execute a deployment script with secrets injected
 qring exec -- npm run deploy
@@ -608,7 +624,9 @@ Tools, resources, and prompts all pass through verbatim (pagination, progress no
 # Wrap a remote Streamable HTTP server; the Bearer token comes from q-ring (audited read)
 qring mcp wrap --url https://mcp.example.com/mcp --auth-secret EXAMPLE_MCP_TOKEN
 
-# Keep results verbatim (default: known secret values are replaced with [QRING:REDACTED])
+# Keep results verbatim (default: known secret values, whole or in an encoded form, are
+# replaced with [QRING:REDACTED:<KEY_NAME>]; unlike `qring exec`, the airlock never matches
+# slices, see docs/threat-model.md; if redaction cannot be set up, results are withheld)
 qring mcp wrap --no-redact -- npx -y some-mcp-server
 ```
 
@@ -637,7 +655,7 @@ qring mcp approvals
 qring mcp approve github_merge_pr --revoke
 ```
 
-Be clear about what the airlock is: env stripping, a tamper-evident record of every crossing, policy at the tool boundary, and best-effort redaction of secret *values* the ring knows about. It is **not a sandbox** — the wrapped process still runs as your user with normal filesystem, network, and OS-keychain access, and tool descriptions pass through uninspected. See `docs/threat-model.md` for the honest boundary picture.
+Be clear about what the airlock is: env stripping, a tamper-evident record of every crossing, policy at the tool boundary, and best-effort redaction of secret *values* the ring knows about: the whole value and its base64 / hex / URL / JSON-encoded forms, never partial slices (an agent that can make a tool echo its input could otherwise use slice redaction to recover a secret one character at a time). It is **not a sandbox** — the wrapped process still runs as your user with normal filesystem, network, and OS-keychain access, and tool descriptions pass through uninspected. See `docs/threat-model.md` for the honest boundary picture.
 
 ### Just-In-Time (JIT) Provisioning
 

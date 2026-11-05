@@ -19,6 +19,7 @@ import {
   spawnRedacted,
   type ExecResult,
 } from "./exec.js";
+import { MIN_REDACT_LENGTH, type RedactionEntry } from "./redaction.js";
 import { parseDotenv } from "./import.js";
 import { resolveRef, resolveRefsInMap, isRef } from "./refs.js";
 import { readProjectConfig } from "./collapse.js";
@@ -51,7 +52,8 @@ export interface RunPlan {
   /** Missing optional manifest keys (warned, not fatal). */
   missingOptional: string[];
   envMap: Record<string, string>;
-  secretsToRedact: string[];
+  /** Values to redact from output, with the keyring key each came from. */
+  secretsToRedact: RedactionEntry[];
 }
 
 /**
@@ -75,7 +77,13 @@ export function buildRunPlan(opts: RunOptions): RunPlan {
   const injected: InjectedVar[] = [];
   const missingRequired: string[] = [];
   const missingOptional: string[] = [];
-  const secretsToRedact = new Set<string>();
+  // value -> keyring key; the first key that supplies a value names it.
+  const secretsToRedact = new Map<string, string>();
+  const addRedaction = (name: string, value: string) => {
+    if (value.length >= MIN_REDACT_LENGTH && !secretsToRedact.has(value)) {
+      secretsToRedact.set(value, name);
+    }
+  };
 
   // 1. Manifest keys (project scope first, then global — same as auto refs).
   if (opts.useManifest !== false) {
@@ -93,7 +101,7 @@ export function buildRunPlan(opts: RunOptions): RunPlan {
       }
       envMap[key] = value;
       injected.push({ name: key, source: "manifest" });
-      if (value.length > 5) secretsToRedact.add(value);
+      addRedaction(key, value);
     }
   }
 
@@ -117,9 +125,7 @@ export function buildRunPlan(opts: RunOptions): RunPlan {
         source: isRef(parsed[name]) ? "env-file-ref" : "env-file",
       });
     }
-    for (const value of secretValues) {
-      if (value.length > 5) secretsToRedact.add(value);
-    }
+    for (const { name, value } of secretValues) addRedaction(name, value);
     // A ref written into a .env file is an explicit demand — missing is fatal.
     for (const m of missing) missingRequired.push(m.name);
   }
@@ -130,7 +136,7 @@ export function buildRunPlan(opts: RunOptions): RunPlan {
     missingRequired,
     missingOptional,
     envMap,
-    secretsToRedact: [...secretsToRedact],
+    secretsToRedact: [...secretsToRedact].map(([value, name]) => ({ name, value })),
   };
 }
 
