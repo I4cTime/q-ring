@@ -18,10 +18,11 @@ CVE.
 The CHANGELOG has never numbered audit findings. Code comments do: the
 0.14.0 audit appears as A2 to A6 and B1 to B4, and the 0.16.2 canary fixes
 as S2 and S8. To avoid colliding with those, this pass uses a C series:
-C1 to C35, in commit order. No code comment cites these ids. C18 to C26
+C1 to C39, in commit order. No code comment cites these ids. C18 to C26
 came from the first adversarial review of PR #143 (each upheld by three of
-three reviewers), C27 to C31 from the second and C32 to C34 from the third.
-C35 was found while fixing C33 (first recorded as N14). All are fixed on the
+three reviewers), C27 to C31 from the second, C32 to C34 from the third and
+C36 to C39 from the fourth. C35 was found while fixing C33 (first recorded
+as N14). All are fixed on the
 same branch. N13 is also from the second review; it reuses an id freed when the
 first draft's N13 to N15 became C15 to C17.
 
@@ -95,6 +96,10 @@ the table says "attack reproduced". Items in "Examined and sound" and
 | C33 | Medium | entanglement | a link made before the source was tagged kept leaking its value |
 | C34 | Low | lint | lint --fix normalized mixed line endings, even when nothing was fixed |
 | C35 | Medium | keyring | re-setting a secret without `--tags` dropped its tags, and with them deniedTags protection |
+| C36 | Medium | exec | the denylist still missed inline-code gadgets; the manifest now bounds MCP exec |
+| C37 | Medium | exec / run | the name-shape rule had no CLI test, and `qring run` did not apply it |
+| C38 | Low | MCP set_secret | `tags` with `clearTags` let clearTags win silently |
+| C39 | Low | exec | master-key stripping was case-sensitive (Windows env names are not) |
 
 ### C1: unknown exec profile ran unrestricted (Medium)
 
@@ -817,6 +822,89 @@ Commit: `test(wrap): --inherit-env strips q-ring's master keys from the wrapped 
   re-set.
 - **Commit:** `fix(keyring): re-setting a secret keeps its tags and description`.
 
+### C36: the manifest bounds MCP exec; more inline-code gadgets denied (Medium)
+
+- **Surface:** `execCommand` (`src/core/exec.ts`), `child-env.ts`, MCP
+  `exec_with_secrets`.
+- **Attack:** the denylist still missed variables that make an allowlisted
+  tool run code:
+  - `TAR_OPTIONS` (`--checkpoint-action=exec`);
+  - `CFLAGS`, `CXXFLAGS`, `CPPFLAGS` and `LDFLAGS` (`-wrapper`);
+  - `RSYNC_RSH`, `RSYNC_CONNECT_PROG`, `CVS_RSH` and `SVN_SSH`;
+  - `KUBECTL_EXTERNAL_DIFF`, `CLASSPATH` and `PHPRC`;
+  - the `UV_`, `POETRY_`, `PIPENV_`, `CONDA_`, `CLOUDSDK_` and `GH_`
+    families.
+
+  A denylist of hook variables cannot be complete.
+- **Fix:**
+  - **Structural, for MCP callers.** When the project's `.q-ring.json`
+    declares a `secrets` manifest (read from the pinned policy root, not a
+    caller-chosen path), `exec_with_secrets` injects only the declared
+    keys, intersected with `keys`. That is the least-privilege set
+    `qring run` uses, so a key an agent planted with `set_secret` is inert
+    unless the operator declared it. Without a manifest, every scoped
+    secret is injected as before (denylist applied), and the result ends
+    with `NOTE: no manifest in .q-ring.json: every scoped secret was
+    injected; declare secrets there to limit what exec_with_secrets can
+    inject`.
+  - **Denylist:** the names and families above are added, the CLI path
+    included. `GH_TOKEN` and similar credentials stay injectable.
+- **Where the boundary is:** the denylist is best effort, a guard rail for
+  the CLI operator's own `qring exec`. The manifest is the boundary for an
+  MCP agent. The tool description, the README exec section and the threat
+  model say so.
+- **Test:**
+  - `src/__tests__/core/exec-manifest.test.ts`: with a manifest declaring
+    A and B and a planted `TAR_OPTIONS`, the child sees A and B only, even
+    when the agent passes `keys: ["TAR_OPTIONS"]` or points `projectPath`
+    elsewhere; without a manifest the note appears.
+  - `src/__tests__/core/exec-env-hijack.test.ts`: the new names in the
+    table, and the live GNU tar gadget (an allowlisted `tar -cf` over MCP
+    and CLI), skipped when tar is not GNU.
+
+  Attack reproduced: on the parent commit tar ran the payload on both paths.
+- **Commit:** `fix(exec): the manifest bounds what exec_with_secrets injects; deny more inline-code gadgets`.
+
+### C37: the name-shape rule on the CLI path, and in qring run (Medium)
+
+- **Surface:** `execCommand` (CLI source), `buildRunPlan` (`src/core/run.ts`).
+- **Issue:** the C27 shape rule had no CLI-path test, and `qring run` did not
+  apply it at all (manifest keys and `.env` names went into the child as
+  written).
+- **Fix:** `qring run` now skips non-identifier manifest keys and `.env`
+  names with the same stderr note as exec. Existing behaviour change, to
+  call out: a key such as `stripe-key` is no longer injected by exec or
+  run; rename it.
+- **Test:** `src/__tests__/core/exec-name-shape.test.ts`:
+  - `qring exec` with a dashed `stripe-key`, without and with `--keys`: it
+    is not injected, the exact `[QRING] not injecting "stripe-key": not a
+    plain environment variable name` line is written, and valid keys still
+    inject; `--keys` cannot override the rule;
+  - `qring run` with a dashed manifest key.
+
+  The run case fails on the parent commit.
+- **Commit:** `test(exec): cover the name-shape rule on the CLI path; apply it to qring run`.
+
+### C38: set_secret with tags and clearTags (Low)
+
+- **Surface:** MCP `set_secret`.
+- **Issue:** `qring set --tags x --clear-tags` exits 1, but MCP accepted both
+  and let `clearTags` win silently.
+- **Fix:** MCP returns an error and writes nothing.
+- **Test:** `src/__tests__/core/clear-tags-conflict.test.ts` (the CLI exits
+  1 without writing; MCP returns an error without writing).
+- **Commit:** `fix(mcp): set_secret refuses tags together with clearTags`.
+
+### C39: case-sensitive master-key stripping (Low)
+
+- **Surface:** `withoutQringCredentials` (`src/core/child-env.ts`).
+- **Issue:** names were matched by exact case. Windows env names are
+  case-insensitive, so `Qring_File_Passphrase` unlocks the store there yet
+  reached children.
+- **Fix:** names are compared case-insensitively on every platform.
+- **Test:** `src/__tests__/core/child-env.test.ts` (mixed-case variants).
+- **Commit:** `fix(exec): strip q-ring's master keys from child envs case-insensitively`.
+
 ## Examined and sound
 
 These were reviewed adversarially and need no change. This is the list the
@@ -1112,9 +1200,9 @@ the 0.14.0 house style.
   after planting. It no longer keeps the old secret's settings, and it never
   copies the fake value into entangled real secrets.
 - **q-ring's master keys stay out of child processes.**
-  `QRING_FILE_PASSPHRASE` and `QRING_MEMORY_PASSPHRASE` are stripped from
-  exec and run children, from `--inherit-env` wrapped servers and from push
-  CLIs.
+  `QRING_FILE_PASSPHRASE` and `QRING_MEMORY_PASSPHRASE` (in any letter
+  case) are stripped from exec and run children, from `--inherit-env`
+  wrapped servers and from push CLIs.
 - **Airlock redaction covers errors, progress and URIs.** Downstream error
   messages and data, progress messages and audited resource URIs are now
   scrubbed like results.
@@ -1153,7 +1241,16 @@ the 0.14.0 house style.
   TLS trust-store variables (`HTTPS_PROXY`, `SSL_CERT_FILE`,
   `NODE_EXTRA_CA_CERTS`, ...) and the pip, composer, gem, bundler, nix,
   dotnet and OpenSSL families are denied like the other process-control
-  names.
+  names. A key whose name is not a plain environment variable name, such
+  as `stripe-key`, is no longer injected by exec/run; rename it.
+- **An agent's `exec_with_secrets` injects only what the manifest
+  declares.** When `.q-ring.json` lists `secrets`, the MCP tool injects
+  only those keys (intersected with its `keys` input), so a key an agent
+  planted with `set_secret` stays inert. Without a manifest it injects
+  every scoped secret and says so in its result. More inline-code gadgets
+  are denied on every path: `TAR_OPTIONS`, `CFLAGS`/`LDFLAGS` and friends,
+  `RSYNC_RSH`, `CVS_RSH`, `SVN_SSH`, `KUBECTL_EXTERNAL_DIFF`, `CLASSPATH`,
+  `PHPRC` and the uv, poetry, pipenv, conda, gcloud and gh families.
 - **get_project_context and agent-started dashboards no longer show canary
   records.** A tripped canary's key no longer appears in their recent
   activity.
@@ -1164,7 +1261,8 @@ the 0.14.0 house style.
   key an agent can read.
 - **Re-setting a secret keeps its tags and description; `--clear-tags`
   removes them.** Rotating a protected value from the CLI used to drop its
-  `prod` tag silently.
+  `prod` tag silently. Passing `tags` and `clearTags` together is refused
+  on both the CLI and MCP `set_secret`.
 - **An MCP write cannot shadow a protected secret from another scope.** A
   project-scope write is refused when a global (or any other resolvable)
   copy of the key is denied by key or tag policy, so an agent can no
