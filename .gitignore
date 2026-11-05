@@ -40,6 +40,7 @@ package-lock.json
 !claude-code-plugin/skills/exec-with-secrets/
 !claude-code-plugin/skills/exec-with-secrets/**
 !claude-code-plugin/agents/secret-*.md
+!claude-code-plugin/rules/secret-*.md
 !claude-code-plugin/commands/*secret*.md
 !claude-code-plugin/commands/*token*.md
 !kiro-plugin/steering/qring-secret-*.md

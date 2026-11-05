@@ -37,7 +37,7 @@ Thanks for helping improve q-ring! This guide covers the dev environment, projec
 
 - **CLI ↔ MCP parity:** [docs/cli-mcp-parity.md](docs/cli-mcp-parity.md) maps every CLI command to its MCP tool. Update it when adding, renaming, or removing either surface.
 - **Editor plugins:** after changing plugin content:
-  - **Skills are generated** — edit only `cursor-plugin/skills/*/SKILL.md`, then run `pnpm run plugin:gen-skills` to regenerate the Claude Code skills and Kiro steering files, and commit the output. CI (`pnpm run check:parity`) fails if they drift, if the plugins' command/agent/skill sets diverge, if doc'd MCP tool counts don't match the code, or if manifest versions are stale.
+  - **Skills and Claude Code rules are generated** — edit only `cursor-plugin/skills/*/SKILL.md` and `cursor-plugin/rules/*.mdc`, then run `pnpm run plugin:gen-skills` to regenerate the Claude Code skills, the Claude Code session-hook rules (`claude-code-plugin/hooks/qring-session-rules.md`) and rule files (`claude-code-plugin/rules/*.md`), and the Kiro skill steering files, and commit the output. CI (`pnpm run check:parity`) fails if they drift, if the plugins' command/agent/skill sets diverge, if doc'd MCP tool counts don't match the code, or if manifest versions are stale.
   - Cursor: `pnpm run plugin:sync` copies `cursor-plugin/` to `~/.cursor/plugins/local/my-plugin`.
   - Kiro: `pnpm run plugin:sync:kiro` copies `kiro-plugin/mcp.json`, `steering/`, and `hooks/` into `~/.kiro`.
   - Claude Code: `pnpm run plugin:sync:claude` copies the plugin into the current project (`--user` for `~/.claude`).
