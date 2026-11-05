@@ -361,9 +361,32 @@ function writeDecision(
  * against the tags of the secret currently stored at the write scope.
  */
 export function checkKeyWritePolicy(key: string, opts: KeyringOptions = {}): PolicyDecision {
-  const scope = opts.scope ?? "global";
-  const { service } = resolveScope({ ...opts, scope })[0];
-  return writeDecision(key, readEnvelope(service, key)?.meta.tags, opts);
+  const source = opts.source ?? "cli";
+  const { service } = resolveScope({ ...opts, scope: opts.scope ?? "global" })[0];
+  // Every copy the operator's scope-less resolution could land on, not only
+  // the write scope: an untagged project copy written over MCP would
+  // otherwise shadow a tag-denied global one (project wins resolution) and
+  // hand the agent's value to every `qring run` / `exec` in the project.
+  const services = new Set([
+    service,
+    ...resolveScope({ ...opts, scope: undefined }).map((s) => s.service),
+  ]);
+  for (const svc of services) {
+    const decision = writeDecision(key, readEnvelope(svc, key)?.meta.tags, opts);
+    if (!decision.allowed) {
+      if (source === "mcp") {
+        logAudit({
+          action: "policy_deny",
+          key,
+          scope: opts.scope ?? "global",
+          source,
+          detail: `write refused: ${decision.reason ?? "denied by policy"}`,
+        });
+      }
+      return decision;
+    }
+  }
+  return { allowed: true, policySource: source === "mcp" ? ".q-ring.json" : "local" };
 }
 
 /**
@@ -381,7 +404,7 @@ export function setSecret(
 
   const current = readEnvelope(service, key);
 
-  const decision = writeDecision(key, current?.meta.tags, opts);
+  const decision = checkKeyWritePolicy(key, { ...opts, scope });
   if (!decision.allowed) {
     throw new Error(`Policy Denied: ${decision.reason}`);
   }
