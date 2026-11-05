@@ -158,7 +158,12 @@ export function lintFiles(
         }
       }
 
-      writeFileSync(file, fixLines.join("\n"), "utf8");
+      // Write only a real change, in the file's own line endings: a file
+      // whose every fix was skipped by policy must stay byte-identical
+      // (no CRLF to LF rewrite, no mtime bump).
+      const eol = content.includes("\r\n") ? "\r\n" : "\n";
+      const updated = fixLines.join(eol);
+      if (updated !== content) writeFileSync(file, updated, "utf8");
     }
   }
 

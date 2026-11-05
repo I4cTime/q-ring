@@ -9,7 +9,15 @@ import { lintFiles } from "../../core/linter.js";
 import { setSecret, getSecret } from "../../core/keyring.js";
 import { setPolicyRoot, clearPolicyCache } from "../../core/policy.js";
 import { resetFakeKeyring } from "../helpers/fake-keyring.js";
-import { writeFileSync, readFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import {
+  writeFileSync,
+  readFileSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  utimesSync,
+} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -105,6 +113,50 @@ describe("lintFiles --fix from an MCP caller", () => {
       expect(getSecret("PASSWORD", { scope: "global", silent: true })).toBe(
         "the-real-protected-value",
       );
+    } finally {
+      setPolicyRoot(process.cwd());
+      clearPolicyCache();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("lintFiles --fix leaves a file alone when nothing in it was fixed", () => {
+  it("is byte-identical, CRLF included, with an unchanged mtime", () => {
+    resetFakeKeyring();
+    clearPolicyCache();
+    const dir = mkdtempSync(join(tmpdir(), "qring-lint-noop-"));
+    try {
+      writeFileSync(
+        join(dir, ".q-ring.json"),
+        JSON.stringify({ policy: { mcp: { deniedKeys: ["PASSWORD"] } } }),
+      );
+      setPolicyRoot(dir);
+      setSecret("PASSWORD", "the-real-protected-value", { scope: "global", source: "cli" });
+
+      const crlf = join(dir, "crlf.ts");
+      const lf = join(dir, "lf.ts");
+      const crlfBytes =
+        'const x = 1;\r\nconst password = "Xq9vL2mR7tK4pW8zN3bY6cH1";\r\nexport {};\r\n';
+      const lfBytes = 'const password = "Xq9vL2mR7tK4pW8zN3bY6cH1";\n';
+      writeFileSync(crlf, crlfBytes);
+      writeFileSync(lf, lfBytes);
+      const past = new Date("2026-01-01T00:00:00Z");
+      utimesSync(crlf, past, past);
+      utimesSync(lf, past, past);
+
+      const results = lintFiles([crlf, lf], {
+        fix: true,
+        scope: "global",
+        projectPath: dir,
+        source: "mcp",
+      });
+
+      expect(results.every((r) => r.skipped)).toBe(true);
+      expect(readFileSync(crlf, "utf8")).toBe(crlfBytes);
+      expect(readFileSync(lf, "utf8")).toBe(lfBytes);
+      expect(statSync(crlf).mtimeMs).toBe(past.getTime());
+      expect(statSync(lf).mtimeMs).toBe(past.getTime());
     } finally {
       setPolicyRoot(process.cwd());
       clearPolicyCache();
