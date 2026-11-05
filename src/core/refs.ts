@@ -126,8 +126,8 @@ export function resolveRef(ref: SecretRef, opts: ResolveRefOptions = {}): string
 export interface ResolvedRefMap {
   /** Env map with every qring:// value replaced by its resolved secret. */
   resolved: Record<string, string>;
-  /** Values that resolved from the keyring (for redaction). */
-  secretValues: string[];
+  /** Values that resolved from the keyring, with the keyring key each came from (for redaction). */
+  secretValues: { name: string; value: string }[];
   /** Refs whose key was not found in any addressed scope. */
   missing: { name: string; ref: SecretRef }[];
 }
@@ -141,7 +141,7 @@ export function resolveRefsInMap(
   opts: ResolveRefOptions = {},
 ): ResolvedRefMap {
   const resolved: Record<string, string> = {};
-  const secretValues: string[] = [];
+  const secretValues: { name: string; value: string }[] = [];
   const missing: { name: string; ref: SecretRef }[] = [];
 
   for (const [name, value] of Object.entries(map)) {
@@ -156,7 +156,7 @@ export function resolveRefsInMap(
       continue;
     }
     resolved[name] = secret;
-    secretValues.push(secret);
+    secretValues.push({ name: ref.key, value: secret });
   }
 
   return { resolved, secretValues, missing };

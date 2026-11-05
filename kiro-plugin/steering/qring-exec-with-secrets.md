@@ -28,5 +28,6 @@ Run shell commands with secrets injected from q-ring with stdout/stderr redactio
 
 ## Safety
 
+- Redacted output reads `[QRING:REDACTED:<KEY_NAME>]`: the value of that keyring key appeared there (verbatim, encoded, or as a 16+ char slice) and was scrubbed. Treat it as a leak to fix in the command, not as data. `[QRING:REDACTED]` means the key is unknown.
 - Never log raw command output to public channels without reviewing redaction limits.
 - Prefer **`tunnel_create` / `tunnel_read`** for one-off handoff of a single value to another agent when full `exec` is unnecessary.

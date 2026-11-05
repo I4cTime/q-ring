@@ -13,7 +13,7 @@ vi.mock("@napi-rs/keyring", async () => {
 });
 
 import { createAirlockServer, WRAP_APPROVAL_SCOPE, wrapApprovalService } from "../../core/wrap.js";
-import { createRedactor, REDACTED } from "../../core/wrap-redact.js";
+import { createRedactor } from "../../core/wrap-redact.js";
 import { queryAudit, setAuditAgentLabel } from "../../core/observer.js";
 import { clearPolicyCache, setPolicyRoot } from "../../core/policy.js";
 import { grantApproval } from "../../core/approval.js";
@@ -148,6 +148,9 @@ describe("airlock v2: result redaction", () => {
     setSecret("STRIPE_KEY", SECRET, { scope: "global", silent: true });
   });
 
+  // Named after the keyring key the value came from.
+  const REDACTED = "[QRING:REDACTED:STRIPE_KEY]";
+
   it("scrubs known secret values from tool results, structured content, resources and prompts", async () => {
     const { host } = await buildAirlock({ redact: true });
     const call = await host.callTool({ name: "leak", arguments: {} });
@@ -159,6 +162,15 @@ describe("airlock v2: result redaction", () => {
 
     const got = await host.getPrompt({ name: "summarize", arguments: { topic: "x" } });
     expect((got.messages[0].content as { text: string }).text).not.toContain(SECRET);
+  });
+
+  it("scrubs encoded and sliced forms with the same named token", () => {
+    const redactor = createRedactor({ projectPath: projectDir });
+    const b64 = Buffer.from(`user:${SECRET}`).toString("base64");
+    expect(redactor.text(`Basic ${b64}`)).toContain(REDACTED);
+    expect(redactor.text(`Basic ${b64}`)).not.toContain(b64.slice(8, 30));
+    expect(redactor.text(`hex ${Buffer.from(SECRET).toString("hex")}`)).toBe(`hex ${REDACTED}`);
+    expect(redactor.text(`first 20: ${SECRET.slice(0, 20)}...`)).toBe(`first 20: ${REDACTED}...`);
   });
 
   it("does not touch results when no redactor is wired", async () => {

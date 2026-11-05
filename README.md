@@ -483,6 +483,15 @@ qring rotate:due --json
 
 Run commands with secrets securely injected into the environment. All known secret values are automatically redacted from stdout and stderr to prevent leaking into terminal logs or agent transcripts. Exec profiles restrict which commands may be run.
 
+Redaction catches each value (longer than 5 characters) verbatim, in its common encoded forms (base64 standard and URL-safe, at any offset inside a longer base64 string; lowercase and uppercase hex; URL-encoded; JSON-escaped), and as a slice: any run of 16 or more consecutive characters of it, such as a truncated log line. Every hit is replaced with a token that names the keyring key the value came from, so an agent reading the output knows which secret appeared without seeing it:
+
+```text
+connecting with [QRING:REDACTED:DATABASE_URL]
+Authorization: Basic [QRING:REDACTED:API_TOKEN]
+```
+
+`[QRING:REDACTED]` without a name means the value's key is unknown. Redaction is still a best-effort safety net, not a guarantee: a value the child encrypts, compresses, or prints fewer than 16 characters of gets through.
+
 ```bash
 # Execute a deployment script with secrets injected
 qring exec -- npm run deploy
@@ -608,7 +617,8 @@ Tools, resources, and prompts all pass through verbatim (pagination, progress no
 # Wrap a remote Streamable HTTP server; the Bearer token comes from q-ring (audited read)
 qring mcp wrap --url https://mcp.example.com/mcp --auth-secret EXAMPLE_MCP_TOKEN
 
-# Keep results verbatim (default: known secret values are replaced with [QRING:REDACTED])
+# Keep results verbatim (default: known secret values, including their encoded forms and
+# 16+ char slices, are replaced with [QRING:REDACTED:<KEY_NAME>], as in `qring exec`)
 qring mcp wrap --no-redact -- npx -y some-mcp-server
 ```
 

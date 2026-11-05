@@ -5,22 +5,31 @@
  * or prompt — including the operator's own secrets if it has them (from its
  * environment, a config file, a scraped page). Those results flow straight
  * into the agent transcript, which is the obvious exfiltration hole in the
- * airlock. This module builds the set of known secret VALUES and scrubs every
- * verbatim occurrence out of results before they leave the airlock.
+ * airlock. This module builds the set of known secret VALUES (with the key
+ * each came from) and scrubs them out of results before they leave the
+ * airlock, using the same engine as `qring exec` (redaction.ts): verbatim,
+ * base64/hex/URL/JSON-encoded, and 16+ char slices, each replaced with
+ * `[QRING:REDACTED:<KEY>]`.
  *
  * Values are read silently (no audit "read", no access counter, no canary
  * trip) with CLI-source semantics, exactly like `qring exec`'s redaction set.
  * The set is rebuilt lazily every REFRESH_MS so rotated secrets are picked up
- * by a long-lived airlock. Same replacement token as exec so redacted output
- * is recognisable everywhere.
+ * by a long-lived airlock.
  */
 
 import { listSecrets, getSecret, type KeyringOptions } from "./keyring.js";
 import { checkDecay } from "./envelope.js";
+import {
+  RedactionSet,
+  MIN_REDACT_LENGTH,
+  REDACTED,
+  redactionToken,
+  type RedactionEntry,
+} from "./redaction.js";
 
-export const REDACTED = "[QRING:REDACTED]";
+export { REDACTED, redactionToken };
+
 const REFRESH_MS = 60 * 1000;
-const MIN_LENGTH = 6; // shorter values would shred ordinary text
 
 export interface Redactor {
   text(input: string): string;
@@ -30,9 +39,9 @@ export interface Redactor {
   invalidate(): void;
 }
 
-/** Gather every non-expired secret value in the resolvable scopes. */
-export function collectSecretValues(opts: KeyringOptions = {}): string[] {
-  const values = new Set<string>();
+/** Gather every non-expired secret value in the resolvable scopes, with its key. */
+export function collectSecretValues(opts: KeyringOptions = {}): RedactionEntry[] {
+  const values = new Map<string, string>();
   for (const entry of listSecrets({ ...opts, source: "cli", silent: true })) {
     if (entry.envelope && checkDecay(entry.envelope).isExpired) continue;
     const value = getSecret(entry.key, {
@@ -42,10 +51,15 @@ export function collectSecretValues(opts: KeyringOptions = {}): string[] {
       source: "cli",
       silent: true,
     });
-    if (value && value.length >= MIN_LENGTH) values.add(value);
+    // The first key that supplies a value names it.
+    if (value && value.length >= MIN_REDACT_LENGTH && !values.has(value)) {
+      values.set(value, entry.key);
+    }
   }
   // Longest first so a value that contains another is scrubbed whole.
-  return [...values].sort((a, b) => b.length - a.length);
+  return [...values]
+    .map(([value, name]) => ({ name, value }))
+    .sort((a, b) => b.value.length - a.value.length);
 }
 
 function scrubUnknown(node: unknown, scrub: (s: string) => string): unknown {
@@ -63,14 +77,14 @@ function scrubUnknown(node: unknown, scrub: (s: string) => string): unknown {
 }
 
 export function createRedactor(opts: KeyringOptions = {}): Redactor {
-  let values: string[] = [];
+  let set = new RedactionSet([]);
   let builtAt = 0;
 
   const ensure = () => {
     const now = Date.now();
     if (now - builtAt < REFRESH_MS) return;
     try {
-      values = collectSecretValues(opts);
+      set = new RedactionSet(collectSecretValues(opts));
     } catch {
       // Keyring unavailable — keep whatever set we had; never block a result.
     }
@@ -79,11 +93,7 @@ export function createRedactor(opts: KeyringOptions = {}): Redactor {
 
   const text = (input: string): string => {
     ensure();
-    let out = input;
-    for (const v of values) {
-      if (out.includes(v)) out = out.split(v).join(REDACTED);
-    }
-    return out;
+    return set.redact(input);
   };
 
   return {

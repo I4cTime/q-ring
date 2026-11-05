@@ -39,7 +39,7 @@ describe("buildRunPlan", () => {
 
     expect(plan.envMap.API_KEY).toBe("from-project");
     expect(plan.injected).toContainEqual({ name: "API_KEY", source: "manifest" });
-    expect(plan.secretsToRedact).toContain("from-project");
+    expect(plan.secretsToRedact).toContainEqual({ name: "API_KEY", value: "from-project" });
     expect(plan.missingRequired).toEqual([]);
   });
 
@@ -71,7 +71,8 @@ describe("buildRunPlan", () => {
     expect(plan.envMap.LOG_LEVEL).toBe("debug");
     expect(plan.injected).toContainEqual({ name: "DATABASE_URL", source: "env-file-ref" });
     expect(plan.injected).toContainEqual({ name: "LOG_LEVEL", source: "env-file" });
-    expect(plan.secretsToRedact).toContain("postgres://real");
+    // Named after the keyring key the ref points at, not the env var.
+    expect(plan.secretsToRedact).toContainEqual({ name: "DB_URL", value: "postgres://real" });
   });
 
   it("a missing ref in a .env file is fatal", () => {
@@ -139,7 +140,7 @@ describe("runCommand", () => {
     });
 
     expect(result.code).toBe(0);
-    expect(result.stdout).toContain("[QRING:REDACTED]");
+    expect(result.stdout).toContain("token is [QRING:REDACTED:INJECTED_TOKEN]");
     expect(result.stdout).not.toContain("super-secret-value");
   });
 

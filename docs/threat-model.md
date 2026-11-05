@@ -146,14 +146,19 @@ keychain the same way q-ring does; no local tool changes that.
 - Secrets are injected into the child's environment, not echoed to the
   shell. Captured stdout/stderr is piped through a redaction transform
   that masks known secret values (UTF-8-safe across chunk boundaries
-  since v0.14).
+  since v0.14), their base64 / hex / URL / JSON-encoded forms, and any
+  run of 16+ consecutive characters of one, as
+  `[QRING:REDACTED:<KEY_NAME>]`. The MCP airlock scrubs wrapped-server
+  results with the same engine.
 - Profiles gate what may run: `restricted` denies network tools *and*
   interpreters/shells (`python`, `node`, `sh`, …), because
   `python -c '…'` is a network tool. `ci` and `unrestricted` widen
   this deliberately; custom profiles live in `.q-ring.json`.
 - **This is not a sandbox.** An allowed binary can still do anything an
   allowed binary can do. Redaction is best-effort against *known*
-  values — it cannot mask a secret the child re-encodes.
+  values — it cannot mask a secret the child encrypts, compresses, or
+  re-encodes in a form other than the ones above, or prints fewer than
+  16 characters of.
 
 **At rest**
 

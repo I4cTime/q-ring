@@ -147,7 +147,7 @@ describe("resolveRefsInMap", () => {
     expect(resolved.PLAIN).toBe("hello");
     expect(resolved.FROM_RING).toBe("secret-value");
     expect(resolved.GONE).toBeUndefined();
-    expect(secretValues).toEqual(["secret-value"]);
+    expect(secretValues).toEqual([{ name: "PRESENT", value: "secret-value" }]);
     expect(missing).toHaveLength(1);
     expect(missing[0].name).toBe("GONE");
     expect(missing[0].ref.key).toBe("ABSENT");
