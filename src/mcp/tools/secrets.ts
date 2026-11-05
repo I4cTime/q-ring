@@ -212,6 +212,12 @@ export function registerSecretTools(server: McpServer): void {
       const toolBlock = enforceToolPolicy("set_secret", params.projectPath);
       if (toolBlock) return toolBlock;
 
+      // Same rule as `qring set`: replacing and clearing tags at once is
+      // ambiguous, so refuse it rather than silently let one win.
+      if (params.clearTags && params.tags !== undefined) {
+        return text("Use either `tags` or `clearTags`, not both", true);
+      }
+
       const o = opts(params);
 
       if (params.env) {
