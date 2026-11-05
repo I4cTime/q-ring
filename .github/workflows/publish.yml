@@ -20,8 +20,8 @@ on:
         description: "Git ref to publish (defaults to the dispatched ref)"
         required: false
         type: string
-      smithery_only:
-        description: "Skip npm + MCP Registry (already published) and only rebuild/republish the Smithery bundle"
+      mcpb_only:
+        description: "Skip npm + MCP Registry (already published) and only rebuild and re-attach the MCPB bundle"
         required: false
         type: boolean
         default: false
@@ -77,7 +77,7 @@ jobs:
         run: pnpm run build
 
       - name: Publish to npm
-        if: ${{ !inputs.smithery_only }}
+        if: ${{ !inputs.mcpb_only }}
         run: |
           NAME=$(node -p "require('./package.json').name")
           VER=$(node -p "require('./package.json').version")
@@ -91,25 +91,26 @@ jobs:
         # The MCP Registry validates that the npm version exists before it
         # accepts a server.json. npm publish returns before the registry
         # serves the tarball, and both v0.17.0 and v0.17.5 lost that race
-        # ("version '0.17.x' was not found (status: 404)"). Same tolerance
-        # loop as the smithery job and update-homebrew.yml.
-        if: ${{ !inputs.smithery_only }}
+        # ("version '0.17.x' was not found (status: 404)"), and 0.19.0 needed
+        # about 6 minutes. Same 15-minute tolerance loop as the mcpb job and
+        # update-homebrew.yml.
+        if: ${{ !inputs.mcpb_only }}
         run: |
           NAME=$(node -p "require('./package.json').name")
           VER=$(node -p "require('./package.json').version")
-          for i in $(seq 1 30); do
+          for i in $(seq 1 90); do
             if npm view "$NAME@$VER" version >/dev/null 2>&1; then
               echo "npm has $NAME@$VER"
               exit 0
             fi
-            echo "waiting for $NAME@$VER on npm ($i/30)..."
+            echo "waiting for $NAME@$VER on npm ($i/90)..."
             sleep 10
           done
           echo "::error::npm never served $NAME@$VER — cannot register with the MCP Registry"
           exit 1
 
       - name: Install mcp-publisher
-        if: ${{ !inputs.smithery_only }}
+        if: ${{ !inputs.mcpb_only }}
         # Pinned (not `latest`) so a breaking mcp-publisher release or renamed
         # asset can't silently break the publish critical path.
         env:
@@ -118,18 +119,19 @@ jobs:
           curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
 
       - name: Authenticate to MCP Registry
-        if: ${{ !inputs.smithery_only }}
+        if: ${{ !inputs.mcpb_only }}
         run: ./mcp-publisher login github-oidc
 
       - name: Publish to MCP Registry
-        if: ${{ !inputs.smithery_only }}
+        if: ${{ !inputs.mcpb_only }}
         run: ./mcp-publisher publish
 
-  smithery:
-    # Bundle + publish the MCPB to Smithery AFTER npm serves the release —
+  mcpb:
+    # Build the MCPB bundle (installs into Claude Desktop) AFTER npm serves
+    # the release and attach it to the GitHub release —
     # scripts/build-mcpb.mjs vendors the PUBLISHED npm package, not the
-    # working tree. Deliberately downstream of the critical path: a Smithery
-    # outage fails this job but never blocks the npm/MCP Registry publish.
+    # working tree. Deliberately downstream of the critical path: a failure
+    # here never blocks the npm/MCP Registry publish.
     needs: publish
     runs-on: ubuntu-latest
     permissions:
@@ -144,18 +146,18 @@ jobs:
           node-version: "24"
 
       # Same tolerance pattern as update-homebrew.yml: the registry can lag
-      # the publish step by a minute or two.
+      # the publish step by several minutes (0.19.0 needed about 6).
       - name: Wait for npm to serve the new version
         run: |
           NAME=$(node -p "require('./package.json').name")
           VER=$(node -p "require('./package.json').version")
           echo "VER=$VER" >> "$GITHUB_ENV"
-          for i in $(seq 1 30); do
+          for i in $(seq 1 90); do
             if npm view "$NAME@$VER" version >/dev/null 2>&1; then
               echo "npm has $NAME@$VER"
               exit 0
             fi
-            echo "waiting for $NAME@$VER on npm ($i/30)..."
+            echo "waiting for $NAME@$VER on npm ($i/90)..."
             sleep 10
           done
           echo "::error::npm never served $NAME@$VER — cannot bundle"
@@ -173,36 +175,3 @@ jobs:
           else
             echo "::warning::no GitHub release v$VER — skipping asset upload (manual dispatch on a non-release ref?)"
           fi
-
-      - name: Publish to Smithery
-        # Direct registry-API publish (scripts/smithery-publish.mjs), not the
-        # smithery CLI: the CLI can only send manifest-derived metadata, and
-        # the MCPB manifest cannot carry tool schemas (smithery-ai/cli#787),
-        # which left the listing at "No capabilities found" / 60 pts. The
-        # payload with the real tools/list is written by build-mcpb.mjs.
-        # SMITHERY_API_KEY is the same value `smithery auth whoami --full` prints.
-        env:
-          SMITHERY_API_KEY: ${{ secrets.SMITHERY_API_KEY }}
-        run: node scripts/smithery-publish.mjs "dist-mcpb/qring-$VER.mcpb" -n i4ctime/q-ring
-
-      - name: Re-apply listing metadata
-        # Bundle publishes ignore manifest metadata and have reset the
-        # listing before (2026-08-04): re-PATCH the description/links and
-        # re-PUT the icon after every publish. Best-effort — the listing
-        # API is undocumented and may drift.
-        continue-on-error: true
-        env:
-          SMITHERY_API_KEY: ${{ secrets.SMITHERY_API_KEY }}
-        run: |
-          curl -fsS -X PATCH "https://api.smithery.ai/servers/i4ctime%2Fq-ring" \
-            -H "Authorization: Bearer $SMITHERY_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d '{
-              "description": "OS keychain secrets for AI coding agents, over MCP.",
-              "homepage": "https://qring.i4c.studio",
-              "repositoryUrl": "https://github.com/I4cTime/q-ring",
-              "license": "AGPL-3.0-only"
-            }'
-          curl -fsS -X PUT "https://api.smithery.ai/servers/i4ctime%2Fq-ring/icon" \
-            -H "Authorization: Bearer $SMITHERY_API_KEY" \
-            -F "icon=@assets/icon-512.png"

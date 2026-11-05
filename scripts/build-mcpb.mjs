@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Build a cross-platform MCPB bundle (.mcpb) of the published q-ring
- * release — the format Smithery (and MCPB-aware clients) install from.
+ * release — the format Claude Desktop (and other MCPB-aware clients)
+ * install from. The release pipeline attaches it to every GitHub release.
  *
  *   node scripts/build-mcpb.mjs            # bundles the version in package.json
  *   node scripts/build-mcpb.mjs 0.14.1     # bundles an explicit npm version
@@ -12,14 +13,9 @@
  * foreign-platform binaries; --force overrides. Output lands in
  * dist-mcpb/qring-<version>.mcpb (~13 MB packed).
  *
- * Smithery gotcha: the manifest must NOT declare a `tools` array —
- * `smithery mcp publish` rejects bundles that do (smithery-ai/cli#787),
- * and Smithery does NOT scan local bundles, so a CLI publish leaves the
- * listing with "No capabilities found" and Capability Quality 0/40. This
- * script therefore also runs the vendored server, captures its real
- * `tools/list`, and writes a Smithery deploy payload
- * (dist-mcpb/qring-<version>.smithery.json) that
- * scripts/smithery-publish.mjs sends straight to the registry API.
+ * Before packing, the script validates the manifest and smoke-tests the
+ * vendored server (initialize + tools/list in a scrubbed env), so a bundle
+ * that cannot start or lists no usable tools is never produced.
  */
 import { execSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, copyFileSync, readFileSync } from "node:fs";
@@ -97,8 +93,8 @@ writeFileSync(
           env: { QRING_ENV: "${user_config.qring_env}" },
         },
       },
-      // Smithery's deploy step 400s ("No values to set") on manifests with no
-      // icon/user_config to project into the listing — keep both present.
+      // Lets the installing client (e.g. Claude Desktop's settings) pin the
+      // environment instead of relying on auto-detection.
       user_config: {
         qring_env: {
           type: "string",
@@ -121,10 +117,10 @@ const run = (cmd, cwd) => execSync(cmd, { cwd, stdio: "inherit" });
 run("npm install --omit=dev --no-audit --no-fund --force", stage);
 run("npx -y @anthropic-ai/mcpb validate manifest.json", stage);
 
-// Smoke test + capability capture: run the vendored entry the way a client
-// would (initialize → initialized → tools/list) in a scrubbed env with no
-// keychain, no dbus and an empty HOME — the same conditions as a fresh
-// install — and keep the tool list for the Smithery deploy payload.
+// Smoke test: run the vendored entry the way a client would (initialize →
+// initialized → tools/list) in a scrubbed env with no keychain, no dbus and
+// an empty HOME — the same conditions as a fresh install — and fail the
+// build unless the server reports this version and lists usable tools.
 const entry = "node_modules/@i4ctime/q-ring/dist/mcp.js";
 const rpc = [
   {
@@ -177,39 +173,4 @@ mkdirSync(outDir, { recursive: true });
 const bundleName = `qring-${version}.mcpb`;
 run(`npx -y @anthropic-ai/mcpb pack . ${bundleName}`, stage);
 copyFileSync(join(stage, bundleName), join(outDir, bundleName));
-// Smithery deploy payload — the same shape `smithery mcp publish` builds
-// from the manifest (see getBundleDeployPayload in smithery-ai/cli), but with
-// serverCard.tools filled from the live tools/list above, which the manifest
-// format cannot express (MCPB forbids inputSchema; the registry requires it).
-const configSchema = {
-  type: "object",
-  required: [],
-  properties: {
-    qring_env: {
-      type: "string",
-      title: "Environment override",
-      description:
-        "Force a q-ring environment context (dev, staging, prod). Leave empty to auto-detect from QRING_ENV/NODE_ENV/git branch.",
-    },
-  },
-};
-const payload = {
-  type: "stdio",
-  runtime: "node",
-  configSchema,
-  serverCard: {
-    serverInfo: { name: "q-ring", version },
-    tools: tools.map(({ name, description, inputSchema, outputSchema, annotations }) => ({
-      name,
-      description,
-      inputSchema,
-      ...(outputSchema ? { outputSchema } : {}),
-      ...(annotations ? { annotations } : {}),
-    })),
-  },
-};
-const payloadName = `qring-${version}.smithery.json`;
-writeFileSync(join(outDir, payloadName), JSON.stringify(payload, null, 2));
-console.log(`\nbundle:  dist-mcpb/${bundleName}`);
-console.log(`payload: dist-mcpb/${payloadName}`);
-console.log(`publish: node scripts/smithery-publish.mjs dist-mcpb/${bundleName} -n i4ctime/q-ring`);
+console.log(`\nbundle: dist-mcpb/${bundleName}`);
