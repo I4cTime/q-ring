@@ -71,7 +71,7 @@ writeFileSync(
       description: "OS keychain secrets for AI coding agents, over MCP.",
       long_description:
         "q-ring anchors secrets to your OS's native vault — macOS Keychain, Linux " +
-        "Secret Service, Windows Credential Vault — and exposes them through 44 " +
+        "Secret Service, Windows Credential Vault — and exposes them through 46 " +
         "policy-governed MCP tools. Environment-aware values (superposition), " +
         "TTL/decay, linked rotation (entanglement), encrypted transfer bundles, " +
         "redacted exec, and a tamper-evident audit log. Local-first: no cloud " +
