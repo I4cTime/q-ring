@@ -55,7 +55,8 @@ export function registerSecretsCommands(program: Command): void {
     )
     .option("--expires <iso>", "Expiry timestamp (ISO 8601)")
     .option("--description <desc>", "Human-readable description")
-    .option("--tags <tags>", "Comma-separated tags")
+    .option("--tags <tags>", "Comma-separated tags (replaces existing tags; omit to keep them)")
+    .option("--clear-tags", "Remove the secret's existing tags")
     .option(
       "--rotation-format <format>",
       "Format for auto-rotation (api-key, password, uuid, hex, base64, alphanumeric, token)",
@@ -75,6 +76,11 @@ export function registerSecretsCommands(program: Command): void {
     )
     .action(async (key: string, value: string | undefined, cmd) => {
       const opts = buildOpts(cmd);
+
+      if (cmd.clearTags && cmd.tags !== undefined) {
+        console.error(c.red(`${SYMBOLS.cross} Use either --tags or --clear-tags, not both`));
+        process.exit(1);
+      }
 
       if (!value) {
         value = await promptSecret(
@@ -108,6 +114,7 @@ export function registerSecretsCommands(program: Command): void {
         expiresAt: cmd.expires,
         description: cmd.description,
         tags: cmd.tags?.split(",").map((t: string) => t.trim()),
+        clearTags: cmd.clearTags === true,
         rotationFormat: cmd.rotationFormat,
         rotationPrefix: cmd.rotationPrefix,
         rotateEveryDays,

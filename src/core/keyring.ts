@@ -75,8 +75,10 @@ export interface SetSecretOptions extends KeyringOptions {
   expiresAt?: string;
   /** Description */
   description?: string;
-  /** Tags */
+  /** Tags. Omitted: the existing secret's tags are kept. */
   tags?: string[];
+  /** Remove the existing tags instead of keeping them (`qring set --clear-tags`). */
+  clearTags?: boolean;
   /** Format for auto-rotation (e.g. "api-key", "password", "uuid") */
   rotationFormat?: string;
   /** Prefix for auto-rotation (e.g. "sk-") */
@@ -475,7 +477,13 @@ export function setSecret(
   const canaryFlag = opts.canary ?? existing?.meta.canary;
   const canaryFmt = opts.canaryFormat ?? existing?.meta.canaryFormat;
 
-  const mergedTags = opts.tags ?? existing?.meta.tags;
+  // Tags and description carry over when the write passes none, like the
+  // rotation, approval and JIT settings above: re-setting or rotating a
+  // value must never silently drop a `prod` tag and with it the deniedTags
+  // protection. `--clear-tags` removes tags explicitly; passing tags
+  // replaces them.
+  const mergedTags = opts.clearTags ? undefined : (opts.tags ?? existing?.meta.tags);
+  const mergedDescription = opts.description ?? existing?.meta.description;
   const ttlForPolicy = opts.ttlSeconds ?? existing?.meta.ttlSeconds;
   const life = checkSecretLifecyclePolicy(
     {
@@ -494,8 +502,8 @@ export function setSecret(
     envelope = createEnvelope("", {
       states: opts.states,
       defaultEnv: opts.defaultEnv,
-      description: opts.description,
-      tags: opts.tags,
+      description: mergedDescription,
+      tags: mergedTags,
       ttlSeconds: opts.ttlSeconds,
       expiresAt: opts.expiresAt,
       entangled: existing?.meta.entangled,
@@ -511,8 +519,8 @@ export function setSecret(
     });
   } else {
     envelope = createEnvelope(value, {
-      description: opts.description,
-      tags: opts.tags,
+      description: mergedDescription,
+      tags: mergedTags,
       ttlSeconds: opts.ttlSeconds,
       expiresAt: opts.expiresAt,
       entangled: existing?.meta.entangled,

@@ -174,7 +174,15 @@ export function registerSecretTools(server: McpServer): void {
       tags: z
         .array(z.string())
         .optional()
-        .describe("Tag list for filtering and hook matching. Example: ['production', 'payments']."),
+        .describe(
+          "Tag list for filtering and hook matching. Example: ['production', 'payments']. Replaces the existing tags; omit to keep them.",
+        ),
+      clearTags: z
+        .boolean()
+        .optional()
+        .describe(
+          "Remove the secret's existing tags. Without it (and without `tags`), existing tags and description are kept.",
+        ),
       rotationFormat: z
         .enum(["hex", "base64", "alphanumeric", "uuid", "api-key", "token", "password"])
         .optional()
@@ -222,6 +230,7 @@ export function registerSecretTools(server: McpServer): void {
           ttlSeconds: params.ttlSeconds,
           description: params.description,
           tags: params.tags,
+          clearTags: params.clearTags,
           rotationFormat: params.rotationFormat,
           rotationPrefix: params.rotationPrefix,
           rotateEveryDays: params.rotateEveryDays,
@@ -235,6 +244,7 @@ export function registerSecretTools(server: McpServer): void {
         ttlSeconds: params.ttlSeconds,
         description: params.description,
         tags: params.tags,
+        clearTags: params.clearTags,
         rotationFormat: params.rotationFormat,
         rotationPrefix: params.rotationPrefix,
         rotateEveryDays: params.rotateEveryDays,
