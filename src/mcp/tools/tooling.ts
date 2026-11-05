@@ -282,6 +282,8 @@ export function registerToolingTools(server: McpServer): void {
       const report = runHealthScan({
         autoRotate: params.autoRotate,
         projectPaths: params.projectPaths ?? [process.cwd()],
+        // Rotations are MCP writes: same key policy, same audit attribution.
+        writeSource: "mcp",
       });
       return text(JSON.stringify(report, null, 2));
     },
