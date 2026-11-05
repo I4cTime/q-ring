@@ -4,6 +4,220 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-11-05
+
+### Added
+- **Redaction catches encoded and sliced secrets, and names the key.** The
+  shared engine behind `qring exec`, `qring run` and the MCP airlock
+  (`src/core/redaction.ts`) now also matches each secret's base64 (standard
+  and URL-safe, any alignment), hex, URL-encoded and JSON-escaped forms, and
+  any run of 16 or more characters of its credential part: the `user:password`
+  of a connection string, the path and query of a webhook URL, the signature
+  of a JWT, the body lines of a PEM, the string values of a JSON credential,
+  the whole value otherwise. Every hit is replaced by
+  `[QRING:REDACTED:<KEY>]`; `[QRING:REDACTED]` stays the fallback when the
+  key is unknown. Limits: encoded forms for values up to 256 characters,
+  slices for credential parts up to 1024 characters, repeated-character runs
+  are not sliced. Inside a JSON credential only values under secret-like key
+  names (key, token, password, private, refresh, ...) or PEM values are
+  sliced. The airlock matches whole values and their encoded forms but does
+  not slice: tool results are agent-shaped text, and a sliced match would
+  let an agent read a secret out one character per call through any tool
+  that echoes its input (see the threat model). Streaming output now flushes
+  as soon as it is written instead of lagging by the longest secret (#121,
+  #122, #123).
+- **MCP resources for introspection, zero new tools.** `qring://policy` (the
+  project's policy as the agent may see it), `qring://rotation` (the
+  `rotate:due` list, most overdue first) and `qring://canaries` join
+  `qring://sessions`. Canaries are hidden unless the server starts with
+  `QRING_MCP_EXPOSE_CANARIES=1`: which keys are canaries is the thing the
+  feature protects. The tool count stays at 46 (#131).
+- **Claude Code plugin: always-on rules.** The plugin has no rules component
+  and does not load a plugin-root CLAUDE.md, so the secret-hygiene and
+  q-ring-workflow rules now arrive through the SessionStart hook on startup,
+  `/clear` and compaction (not on `resume`, where the transcript already has
+  them). Ready-made copies ship under `claude-code-plugin/rules/` for
+  `~/.claude/rules/`. Both are generated from the Cursor rules by
+  `plugin:gen-skills`, and CI fails on drift (#127).
+- **The 1.0 stability contract.** `docs/stability.md` lists what is frozen as
+  of 0.19 (the CLI, the 46 tool schemas, resource URIs, the `.q-ring.json`
+  policy format, the ring format, environment variables, exit codes, both
+  redaction tokens), what stays experimental, the semver promise from 1.0,
+  the deprecation policy and the support window (#134).
+- **Audit pass 2 report**: `docs/audits/2026-11-audit-pass-2.md`, with
+  seventeen fixed findings (see Security), the surfaces examined and found
+  sound, and twelve design items carried to 0.20 (#133).
+- `QRING_ALLOW_PRIVATE_HOOKS` is the canonical name of the private-address
+  override (the old `Q_RING_` spelling still works, see Deprecated).
+  `QRING_SILENCE_DEPRECATIONS=1` silences deprecation warnings.
+
+### Changed
+- The redaction token names the key: `[QRING:REDACTED:DATABASE_URL]`. Match
+  the `[QRING:REDACTED` prefix if you grep for it.
+- The airlock withholds a tool result as an error when no redaction set can
+  be built, and `qring exec` / `qring run` refuse to spawn in that case,
+  instead of passing output through unredacted. A single unreadable secret
+  (for example a template naming a missing key) is skipped with a
+  counts-only note; it no longer disables redaction for every other secret.
+- A corrupt `.q-ring.json` (not valid JSON, not an object, unreadable) now
+  fails closed everywhere policy is enforced, and the diagnostic surfaces
+  report it instead of crashing: `qring doctor` (which also honours
+  `--project-path` now), `qring policy` (exit 1, `{ policyError }` with
+  `--json`), `qring status` and the dashboard, the MCP `check_policy` tool,
+  and every MCP resource.
+- `qring ci:validate --json` exits 1 when a secret fails, as documented.
+  `qring mcp approvals` honours the root `--json` flag.
+- Shell and signal hooks registered over MCP start disabled; arm one with
+  `qring hook enable <id>`.
+- With a `readableKeys` allowlist, MCP writes are limited to those keys too.
+- `qring exec` / `qring run` refuse an unknown `--profile` name.
+- `exec_with_secrets` over MCP injects only the keys the project manifest
+  declares, or, without a manifest, only credential-shaped names
+  (`MY_CONFIG` and `LOG_LEVEL` are skipped and listed by name in the
+  result). Declare the keys you need under `secrets` in `.q-ring.json`. The
+  CLI is unchanged.
+
+### Deprecated
+Each prints one `q-ring: deprecated:` line on stderr per process and is
+removed in 1.0 (details and replacements in `docs/stability.md`):
+- `qring approve <key> --list`: use `qring approvals`.
+- The bare `--json` shapes of `context`, `ci:validate` and `policy`: 1.0
+  moves them to the `{ ok, data }` wrapper the other commands use.
+- Teleport v1 bundles without an `iter` field (made before 0.12.0).
+- Agent memory stores under the pre-0.14 machine-derived key.
+- `QRING_CANARY_ALERTS_PATH`: use `QRING_CONFIG_DIR`.
+- `Q_RING_ALLOW_PRIVATE_HOOKS`: use `QRING_ALLOW_PRIVATE_HOOKS`.
+
+### Fixed
+- **A stale policy could be served.** The `.q-ring.json` cache was keyed on
+  mtime alone, and `clearPolicyCache` did not clear it, so two writes inside
+  one millisecond (Windows) returned the previous policy. Both caches now key
+  on the file's content, per path (#132).
+- `qring://canaries` tied a re-planted canary to its predecessor's trip and
+  deletion events; events now count only when they follow the current
+  plant, and project, team and org canaries no longer inherit another
+  project's same-key events.
+- The Claude Code SessionStart hook built its JSON with `printf %b`, which
+  mangled backslashes; it now uses `jq`.
+
+### Security
+Fixed, then disclosed, house style since 0.12.0. All were found in the
+internal audit pass 2 (`docs/audits/2026-11-audit-pass-2.md`, findings C1 to
+C40) or on the way to it; none was reported from outside.
+- **`policy.mcp.deniedTags` is enforced.** The tag rule was validated but
+  never evaluated, so a secret carrying a denied tag stayed readable,
+  listable, exportable and deletable over MCP (C3).
+- **MCP writes respect key policy.** `set_secret`, `teleport_unpack`,
+  `import_dotenv`, `generate_secret --saveAs`, `promote_secret`,
+  `rotate_secret` and `lint_files --fix` could overwrite a key that policy
+  denies (C4).
+- **MCP shell and signal hooks start disabled.** `register_hook` could plant
+  a persistent shell command outside exec policy, or a signal hook able to
+  SIGKILL any of the user's processes (C8).
+- **Exec never injects process-control variables.** A secret named after a
+  variable that steers what a program runs turned an allowlisted command into
+  arbitrary code execution: `NODE_OPTIONS`, `LD_PRELOAD`, `PATH`,
+  `GIT_EXTERNAL_DIFF` inside `git diff`, `MAKEFLAGS` inside `make`, and so
+  on. Whole families are now denied (`GIT_*`, `SSH_*`, `MAKE*`,
+  `CARGO_*`/`RUSTC*`, the interpreter start-up variables, `LD_*`/`DYLD_*`,
+  the package managers) along with `PAGER`, `EDITOR`, `HOME`, `KUBECONFIG`
+  and similar. Credentials inside a family (`NPM_TOKEN`,
+  `CARGO_REGISTRY_TOKEN`, `SSH_PRIVATE_KEY`) still inject. These names are
+  never injected over MCP, and from the CLI only when named with `--keys`.
+  Exec profiles are not a sandbox: a caller who controls an allowed binary's
+  arguments can still run code through it (C12, C18).
+- **A corrupt `.q-ring.json` meant "no policy".** A file that exists but is
+  not valid JSON used to read as absent, so every deny rule was dropped. It
+  now fails closed.
+- **Canary identity no longer leaks** through `prevHash` gaps in MCP
+  `export_audit`, `qring://sessions/{id}` and the dashboard an agent starts
+  with `status_dashboard` (C5, C32), through `policy_deny` events when an
+  alert channel is SSRF-blocked (C6), or through silent reads in
+  `ci_validate_secrets`, which now audits each read and trips canaries (C7).
+- **`canary plant --force` starts fresh.** It no longer inherits the replaced
+  secret's stats or settings, and never copies the fake value into entangled
+  real secrets (C2).
+- **q-ring's master keys stay out of child processes.**
+  `QRING_FILE_PASSPHRASE` and `QRING_MEMORY_PASSPHRASE` are stripped from
+  exec and run children, `--inherit-env` wrapped servers and push CLIs,
+  whatever their letter case (C9, C39).
+- **Airlock redaction covers errors, progress and URIs**, not only results
+  (C10).
+- **`qring push` refuses values that would inject variables** into fly or
+  netlify (C11).
+- **Unknown exec profiles are an error**; `--profile <typo>` used to run
+  unrestricted (C1).
+- **Teleport bundles reject control characters** in key names, scopes and
+  recipient ids (C13).
+- **The file backend writes atomically**; a failed write can no longer
+  destroy the store (C14).
+- **Wrap tool-name globs match across newlines**, and the airlock rate
+  limiter tracks at most 1024 tool names (C15).
+- **SSRF-blocked hook URLs are logged as scheme and host only** (C16).
+- **Environment names are looked up by own property**, so `constructor` and
+  similar names never resolve to prototype members (C17).
+- **Entanglement honours `deniedTags`** in both directions: MCP writes do not
+  propagate into a tag-denied key, and `entangle_secrets` refuses links that
+  touch one (C19).
+- **Bulk MCP writers no longer abort halfway.** `import_dotenv`,
+  `teleport_unpack` and `lint_files --fix` check every key first, write the
+  allowed ones and list the protected ones as skipped with a reason
+  (`importDotenv` gains `skippedByPolicy`). `lint --fix` leaves a file
+  byte-identical when none of its fixes applied and keeps each line's own
+  line ending when it rewrites one (C20 to C22, C31, C34).
+- **`agent_scan` auto-rotation over MCP honours the MCP write policy.**
+  Protected keys are never rotated and are reported in `rotationSkipped`
+  (C23).
+- **Blocked canary alert deliveries are no longer counted as trips.** They
+  are recorded as `canary_alert` and hidden from agents (C24).
+- **A delete across scopes checks every copy first**, so a policy denial
+  deletes nothing (C25, C26).
+- **Exec never injects bash functions or network-hijack variables.** A key
+  that is not a plain identifier, such as `BASH_FUNC_ls%%` (which bash
+  imports as a function, also as `/bin/sh`), is never injected. Proxy and TLS
+  trust-store variables (`HTTPS_PROXY`, `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`
+  and similar) and the pip, composer, gem, bundler, nix, dotnet and OpenSSL
+  families are denied like the other process-control names, as are the
+  `TAR_OPTIONS`, `CFLAGS`/`LDFLAGS`, `CGO_*`, `GOAUTH`, `MAVEN_OPTS`-style
+  JVM options, `RSYNC_RSH`, `KUBECTL_EXTERNAL_DIFF` and the
+  uv/poetry/conda/gcloud/gh families. A key whose name is not a plain
+  environment variable name, such as `stripe-key`, is no longer injected by
+  exec or run (which now applies the same rule to manifest keys and `.env`
+  names); rename it (C27, C36, C37).
+- **Over MCP, exec injects only the keys the project manifest declares.**
+  When `.q-ring.json` lists secrets, `exec_with_secrets` injects that set
+  (intersected with `keys` when given), read from the pinned project root
+  rather than a caller-chosen path, the same least-privilege set `qring run`
+  uses, so a key an agent planted with `set_secret` is inert unless the
+  operator declared it. Without a manifest the tool injects only
+  credential-shaped names (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*_PASSWORD`,
+  `*_URL`, `*_DSN` and similar) and lists what it skipped, by name, in its
+  result; declare a manifest to lift that rule. The denylist above stays as
+  defence in depth on every path; for the CLI operator path, where the
+  operator chooses the keys, it is best effort and cannot be complete (C36,
+  C40).
+- **`get_project_context` and agent-started dashboards no longer show canary
+  records.** A tripped canary's key no longer appears in their recent
+  activity (C28).
+- **An MCP write cannot shadow a protected secret from another scope.** A
+  project-scope write is refused when a global (or any other resolvable)
+  copy of the key is denied by key or tag policy (C29).
+- **Entangled secrets share deny tags.** When one side of an entanglement
+  carries a tag that `policy.mcp.deniedTags` lists, at link time or on any
+  later write, the partner takes the tag too, so a link made before a secret
+  was tagged can no longer keep copying its value into a key an agent can
+  read (C33).
+- **Re-setting a secret keeps its tags and description.** `qring set KEY
+  value` without `--tags` used to drop the existing tags, so rotating a
+  protected value from the CLI silently removed its `prod` tag and the
+  deniedTags protection with it. `--clear-tags` (and `clearTags` on
+  `set_secret`) removes them on purpose; combining it with new tags is
+  refused on both paths (C35, C38).
+- **Known limitation, documented, not fixed:** on Linux a child of exec or
+  run can read the parent's original environment block through
+  `/proc/<ppid>/environ`, passphrases included. A file- or keyring-held
+  passphrase is planned for 0.20 (q-ring#156).
+
 ## [0.18.0] — 2026-09-27
 
 ### Added
