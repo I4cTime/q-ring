@@ -247,8 +247,8 @@ describe("nested secrets (review #4)", () => {
   });
 });
 
-describe("per-value slice limit (review #5)", () => {
-  it(`slices values up to ${SLICE_MAX_LENGTH} chars, matches longer ones verbatim only`, () => {
+describe("per-part slice limit", () => {
+  it(`slices parts up to ${SLICE_MAX_LENGTH} chars, matches longer opaque values verbatim only`, () => {
     resetRedactionNotes();
     const write = muteStderr();
     try {
@@ -267,13 +267,63 @@ describe("per-value slice limit (review #5)", () => {
       new RedactionSet([{ name: "OVER", value: over }]);
       expect(write).toHaveBeenCalledTimes(1);
       const msg = String(write.mock.calls[0][0]);
-      expect(msg).toContain("1 secret value(s)");
+      expect(msg).toContain("1 credential part(s)");
       expect(msg).not.toContain("OVER");
       expect(msg).not.toContain(over.slice(0, 16));
     } finally {
       write.mockRestore();
       resetRedactionNotes();
     }
+  });
+
+  it("a 1500-char opaque token is matched verbatim but not sliced", () => {
+    const write = muteStderr();
+    try {
+      const blob = fakeSecret(1500, 61);
+      const set = new RedactionSet([{ name: "BLOB", value: blob }]);
+      expect(set.slicing).toBe(false);
+      expect(set.redact(`b=${blob};`)).toBe(`b=${tok("BLOB")};`);
+      expect(set.redact(`s ${blob.slice(700, 740)} e`)).toBe(`s ${blob.slice(700, 740)} e`);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  it("a realistic 2.3 KB service-account JSON slices its key body and token fields", () => {
+    // Fake key material, assembled at runtime so secret scanning has nothing to flag.
+    const body = Array.from({ length: 25 }, (_, i) => fakeSecret(64, 700 + i));
+    const pem = ["-----BEGIN PRIVATE KEY-----", ...body, "-----END PRIVATE KEY-----", ""].join(
+      "\n",
+    );
+    const account = {
+      type: "service_account",
+      project_id: "demo-project-123456",
+      private_key_id: fakeSecret(40, 760).toLowerCase(),
+      private_key: pem,
+      client_email: "deployer@demo-project-123456.iam.gserviceaccount.com",
+      client_id: "104857364829105738291",
+      auth_uri: "https://accounts.google.com/o/oauth2/auth",
+      token_uri: "https://oauth2.googleapis.com/token",
+      auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+      client_x509_cert_url:
+        "https://www.googleapis.com/robot/v1/metadata/x509/deployer%40demo-project-123456.iam.gserviceaccount.com",
+      universe_domain: "googleapis.com",
+      refresh_token: fakeSecret(48, 761),
+    };
+    const value = JSON.stringify(account, null, 2);
+    expect(value.length).toBeGreaterThan(2200);
+    expect(value.length).toBeLessThan(2600);
+
+    const set = new RedactionSet([{ name: "GCP_SA_JSON", value }]);
+    expect(set.redact(`key: ${body[12].slice(20, 55)}...`)).toBe(`key: ${tok("GCP_SA_JSON")}...`);
+    expect(set.redact(`token=${account.refresh_token.slice(4, 28)}&`)).toBe(
+      `token=${tok("GCP_SA_JSON")}&`,
+    );
+    expect(set.redact(`whole: ${value}`)).toBe(`whole: ${tok("GCP_SA_JSON")}`);
+    // Public structure stays: the token URI and the client email domain.
+    expect(set.redact("POST https://oauth2.googleapis.com/token")).toBe(
+      "POST https://oauth2.googleapis.com/token",
+    );
   });
 
   it("a long PEM in the set never turns off slicing for a short API key", () => {

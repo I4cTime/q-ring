@@ -91,7 +91,7 @@ export interface ExecResult {
  * lives in redaction.ts (shared with the MCP airlock): verbatim values longer
  * than 5 chars, their base64/hex/URL/JSON-encoded forms (values up to 256
  * chars), and any run of 16+ consecutive characters of a value's
- * credential-bearing part (values up to 1024 chars). Hits become
+ * credential-bearing parts (parts up to 1024 chars). Hits become
  * `[QRING:REDACTED:<KEY>]` (`[QRING:REDACTED]` when the key is unknown). This
  * is a safety net, NOT a guarantee: a child that transforms a secret in other
  * ways (encrypts, compresses, prints under 16 chars of it) gets through.

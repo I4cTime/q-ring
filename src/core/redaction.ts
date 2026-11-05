@@ -16,12 +16,13 @@
  *    still matches; padding is ignored), lowercase and uppercase hex of the
  *    UTF-8 bytes, `encodeURIComponent`, and the JSON-string-escaped body
  *    (with and without escaped forward slashes).
- * 3. Slices of it (#122), for values up to SLICE_MAX_LENGTH chars: any run of
- *    16 or more consecutive characters of the value's credential-bearing part
- *    (see sliceRegions: the userinfo of a URL, the signature of a JWT, the body
- *    of a PEM block, the long string values of a JSON object), extended left
- *    and right while the text still follows it and replaced whole. Windows
- *    that are repeated-character runs (`0000000000000000`) are ignored.
+ * 3. Slices of it (#122): any run of 16 or more consecutive characters of one
+ *    of the value's credential-bearing parts (see sliceRegions: the userinfo
+ *    of a URL, the signature of a JWT, the body lines of a PEM block, the long
+ *    string values of a JSON object; an opaque value is one part), extended
+ *    left and right while the text still follows it and replaced whole. Parts
+ *    longer than SLICE_MAX_LENGTH chars are not sliced, and windows that are
+ *    repeated-character runs (`0000000000000000`) are ignored.
  *
  * Every hit is replaced by `[QRING:REDACTED:<KEY_NAME>]` naming the keyring
  * key the value came from (#123); `[QRING:REDACTED]` when the name is unknown.
@@ -43,8 +44,16 @@ export const SLICE_WINDOW = 16;
 /** Values longer than this get no encoded forms (verbatim and slices only). */
 export const DERIVE_MAX_LENGTH = 256;
 
-/** Values longer than this are not sliced (verbatim, plus encoded if short enough). */
+/**
+ * Credential parts (see sliceRegions) longer than this are not sliced; a whole
+ * opaque value counts as one part. The limit is per part, so a 2.3 KB
+ * service-account JSON still slices its 64-char PEM lines and token fields,
+ * while a single 5 KB opaque blob is matched verbatim only.
+ */
 export const SLICE_MAX_LENGTH = 1024;
+
+/** Values longer than this are not parsed for structure: the whole value is one part. */
+export const STRUCTURE_MAX_LENGTH = 64 * 1024;
 
 /**
  * Slice windows with less variety than this are ignored, so repeated-character
@@ -443,18 +452,15 @@ export class RedactionSet {
         }
       }
 
-      if (value.length > SLICE_MAX_LENGTH) {
-        tooLongToSlice++;
-        continue;
-      }
       let regions: string[];
       try {
-        regions = sliceRegions(value);
+        regions = value.length > STRUCTURE_MAX_LENGTH ? [value] : sliceRegions(value);
       } catch {
         regions = [value];
       }
       for (const text of regions) {
-        if (text.length >= SLICE_WINDOW) this.regions.push({ text, token });
+        if (text.length > SLICE_MAX_LENGTH) tooLongToSlice++;
+        else if (text.length >= SLICE_WINDOW) this.regions.push({ text, token });
       }
     }
 
@@ -462,8 +468,8 @@ export class RedactionSet {
       longValueNoted = true;
       // Counts only: never a value or a key name.
       process.stderr.write(
-        `[QRING] redaction: ${tooLongToSlice} secret value(s) longer than ${SLICE_MAX_LENGTH} chars ` +
-          `are matched verbatim only (no slice matching)\n`,
+        `[QRING] redaction: ${tooLongToSlice} credential part(s) longer than ${SLICE_MAX_LENGTH} chars ` +
+          `are not slice-matched (their values are still matched verbatim)\n`,
       );
     }
 
