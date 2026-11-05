@@ -458,7 +458,7 @@ qring hook test <id>
 
 Hooks are fire-and-forget: a failing hook never blocks secret operations. The hook registry is stored at `~/.config/q-ring/hooks.json`.
 
-**SSRF protection:** HTTP hook URLs targeting private/loopback IP ranges (`127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `::1`, `fc00::/7`) are blocked by default. DNS is checked up front *and* re-validated at connect time, so a hostname can't pass the check then rebind to a private address before the socket opens. To allow hooks targeting local services (e.g. during development), set the environment variable `Q_RING_ALLOW_PRIVATE_HOOKS=1`.
+**SSRF protection:** HTTP hook URLs targeting private/loopback IP ranges (`127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `::1`, `fc00::/7`) are blocked by default. DNS is checked up front *and* re-validated at connect time, so a hostname can't pass the check then rebind to a private address before the socket opens. To allow hooks targeting local services (e.g. during development), set the environment variable `QRING_ALLOW_PRIVATE_HOOKS=1` (the older spelling `Q_RING_ALLOW_PRIVATE_HOOKS=1` still works until 1.0, with a deprecation warning).
 
 ### Configurable Rotation
 
@@ -1250,7 +1250,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full guide (dev environment, conv
 
 ## Stability
 
-0.19 is the release candidate for 1.0. The CLI commands and flags, the MCP tool names and input schemas, the MCP resource URIs, the `.q-ring.json` format, the keyring record format, the environment variables, the exit codes and the `[QRING:REDACTED]` token are frozen; from 1.0 they change only as semver allows, and anything removed is deprecated with a warning for at least one minor first. [docs/stability.md](docs/stability.md) lists exactly what is frozen, what stays experimental, what is deprecated in 0.19, and which versions receive fixes.
+0.19 is the release candidate for 1.0. The CLI commands and flags, the MCP tool names and input schemas, the MCP resource URIs, the `.q-ring.json` format, the keyring record format, the environment variables, the exit codes and the `[QRING:REDACTED]` / `[QRING:REDACTED:<KEY>]` tokens are frozen; from 1.0 they change only as semver allows, and anything removed is deprecated with a warning for at least one minor first (silence the warnings with `QRING_SILENCE_DEPRECATIONS=1`). [docs/stability.md](docs/stability.md) lists exactly what is frozen, what stays experimental, what is deprecated in 0.19, and which versions receive fixes.
 
 ## 🔒 Security
 

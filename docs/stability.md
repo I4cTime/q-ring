@@ -332,9 +332,11 @@ Every variable q-ring reads (grep of `src/` for `process.env`):
 | `QRING_NOTIFY` | `off`, `0` or `false` disables approval and canary desktop notifications | `src/core/notify.ts` |
 | `QRING_DEBUG` | Any value: full stack traces from the CLI, traces for dropped audit writes | `src/index.ts`, `src/core/observer.ts` |
 | `QRING_WRAP_TIMEOUT_MS` | Airlock ceiling for one downstream call (default 600 000) | `src/core/wrap.ts` |
-| `Q_RING_ALLOW_PRIVATE_HOOKS` | `1` lets hooks, validation and HTTP JIT reach private and loopback addresses | `src/core/ssrf.ts` |
+| `QRING_ALLOW_PRIVATE_HOOKS` | `1` lets hooks, validation and HTTP JIT reach private and loopback addresses | `src/core/ssrf.ts` |
 | `NO_COLOR` | Disables colour output | `src/utils/colors.ts` |
-| `QRING_CANARY_ALERTS_PATH` | Canary webhook registry file; deprecated, see below | `src/core/canary-webhooks.ts` |
+| `QRING_SILENCE_DEPRECATIONS` | `1` silences the one-line deprecation warnings | `src/core/deprecation.ts` |
+| `Q_RING_ALLOW_PRIVATE_HOOKS` | Old spelling of `QRING_ALLOW_PRIVATE_HOOKS`; still works, deprecated, see below | `src/core/ssrf.ts` |
+| `QRING_CANARY_ALERTS_PATH` | Canary webhook registry file; still works, deprecated, see below | `src/core/canary-webhooks.ts` |
 
 Variables q-ring **sets** for children, also frozen: `QRING_HOOK_KEY`,
 `QRING_HOOK_ACTION` and `QRING_HOOK_SCOPE` for shell hooks
@@ -352,19 +354,31 @@ Variables q-ring **sets** for children, also frozen: `QRING_HOOK_KEY`,
 
 `mcp wrap` exits `0` when the host disconnects or on SIGTERM/SIGINT.
 
-Known gap: `qring ci:validate --json` exits `0` even when a secret fails
-validation (the human-output path exits `1`). The README documents exit `1`
-on failure, so the `--json` behaviour is a defect, not part of the contract.
+`ci:validate` exits `1` on a failed secret with and without `--json`.
 
 ### Redaction token
 
 Known secret values in `exec` / `run` output and in airlock results are
-replaced with the literal `[QRING:REDACTED]` (`src/core/exec.ts`,
-`src/core/wrap-redact.ts`). The token is frozen. 0.19 has no per-key form;
-a keyed variant (for example `[QRING:REDACTED:<KEY>]`) could only arrive as
-an opt-in in a minor, never as a change to the default. Redaction is
-exact-match against values the ring knows; `exec` / `run` skip values of 5
-characters or fewer.
+replaced with a redaction token. Both forms are frozen as of 0.19:
+
+- `[QRING:REDACTED]`
+- `[QRING:REDACTED:<KEY>]`, where `<KEY>` is the name of the q-ring key
+  whose value was replaced
+
+Tools that post-process redacted output can match both on the
+`[QRING:REDACTED` prefix. Redaction is exact-match against values the ring
+knows (`src/core/exec.ts`, `src/core/wrap-redact.ts`); `exec` / `run` skip
+values of 5 characters or fewer.
+
+### Known defect scheduled for 0.19
+
+`qring exec --profile <name>` and `qring run --profile <name>` accept any
+name. An unknown one (a typo such as `restrcted`) becomes an empty profile
+with no restrictions instead of an error (`getProfile` in
+`src/core/exec.ts`). The MCP `exec_with_secrets` tool is not affected: its
+`profile` input only accepts `unrestricted`, `restricted` and `ci`. This
+fails open, so it is a defect, not frozen behaviour; it is fixed before the
+0.19 tag, after which an unknown profile name is an error.
 
 ## Experimental (not frozen)
 
@@ -395,7 +409,7 @@ CHANGELOG.
   the locally generated format and the `provider` / `message` fields of the
   result are not.
 - **Bare JSON outputs outside the envelope.** `qring setup --json`,
-  `qring mcp approvals --json` (which also ignores the root `--json`) and
+  `qring mcp approvals --json` and
   `qring agent --once` print a bare payload. Their shapes may change until
   they move to the `{ "ok": true, "data": … }` envelope.
 - **The status dashboard's HTTP API.** `/api/status` and the SSE stream
@@ -449,9 +463,12 @@ Only a **major** release may remove or rename a frozen command, flag, tool,
 parameter, resource URI, policy key, environment variable or exit code;
 make an optional input required; change the type or meaning of an existing
 input or output field; change a stored format so that data written by the
-previous major can no longer be read; or raise the minimum Node.js version
-(`engines.node`, `>=18` in 0.19). Anything removed in a major was
-deprecated first, under the policy below.
+previous major can no longer be read; or raise the minimum Node.js version.
+Anything removed in a major was deprecated first, under the policy below.
+
+**Node.js floor.** `engines.node` is `>=18` in 0.19. Node 18 is end of
+life, so 1.0 may raise the floor to `>=20`; after 1.0, only a major raises
+it.
 
 **Security exception.** A fix for a vulnerability may tighten frozen
 behaviour in any release (refuse something that used to be allowed), as
@@ -463,9 +480,11 @@ is listed under `Security` in the CHANGELOG with what to do about it.
 1. A deprecated item keeps working for **at least one minor release**
    after the release that deprecates it.
 2. While deprecated, using it prints **one line to stderr, once per
-   process**, naming the replacement and the removal version. Warnings
-   never go to stdout (so `--json` consumers are unaffected) and never
-   contain a secret value.
+   process**, starting `q-ring: deprecated:` and naming the replacement and
+   the removal version (`warnDeprecated` in `src/core/deprecation.ts`).
+   Warnings never go to stdout (so `--json` consumers and the MCP stdio
+   stream are unaffected) and never contain a secret value. Set
+   `QRING_SILENCE_DEPRECATIONS=1` to silence them.
 3. Every deprecation is listed in this document under the release that
    deprecates it, and in the CHANGELOG under `Deprecated`.
 4. Removal happens **only in a major release**. Items deprecated in 0.19
@@ -474,17 +493,19 @@ is listed under `Security` in the CHANGELOG with what to do about it.
 
 ## Deprecated in 0.19
 
-Status: proposed. The one-line warnings are not wired yet; each entry
-becomes final when its warning ships in 0.19. Every entry is backed by the
-code or the CHANGELOG at the location given.
+Each item below still works in 0.19, prints a one-line
+`q-ring: deprecated: …` warning on stderr the first time it is used in a
+process (silence with `QRING_SILENCE_DEPRECATIONS=1`), and is **removed in
+1.0**. The CHANGELOG lists the same items under `Deprecated`.
 
-| What | Replacement | Planned removal | Where |
-| --- | --- | --- | --- |
-| `qring approve <key> --list` (needs a throwaway `<key>` and duplicates a whole command) | `qring approvals` (also supports `--json`) | 1.0 | `src/cli/commands/security.ts:25` (flag), `:34` (branch); replacement at `:85` |
-| Bare `--json` output of `qring context`, `qring ci:validate` and `qring policy`, documented as "legacy shapes … kept for backward compatibility" | The `{ "ok": true, "data": … }` envelope every other `--json` command uses | 1.0 (these three switch to the envelope) | `src/cli/commands/project.ts:35`, `src/cli/commands/validation.ts:346`, `src/cli/commands/security.ts:123`; `docs/cli-mcp-parity.md:99` |
-| Teleport v1 bundles with no `iter` field (packed before 0.12.0, PBKDF2 at 100 000 iterations) | Re-pack with current q-ring (v1 bundles now record `iter`, 210 000) or use v2 recipient packs | 1.0 | `src/core/teleport.ts:39`, `:189`; `CHANGELOG.md:557` |
-| Reading agent memory encrypted under the machine-derived key (stores written before 0.14.0) | The OS-keyring key (a store is re-encrypted under it on first read where a keyring exists) or `QRING_MEMORY_PASSPHRASE` | 1.0 | `src/core/memory.ts:77`, `:160`–`:180`; `CHANGELOG.md:416` |
-| `QRING_CANARY_ALERTS_PATH` (undocumented; only the test suite sets it) | `QRING_CONFIG_DIR` (the registry becomes `<dir>/canary-alerts.json`) | 1.0 | `src/core/canary-webhooks.ts:64`; `src/__tests__/core/canary-webhooks.test.ts:58` |
+| What | Replacement | Removed in | Warning | Evidence |
+| --- | --- | --- | --- | --- |
+| `qring approve <key> --list` (needs a throwaway `<key>` and duplicates a whole command) | `qring approvals` (also supports `--json`) | 1.0 | `src/cli/commands/security.ts:36` | flag at `src/cli/commands/security.ts:26`; replacement at `:90` |
+| Bare `--json` output of `qring context`, `qring ci:validate` and `qring policy` | The `{ "ok": true, "data": … }` wrapper every other `--json` command uses; 1.0 switches these three to it, and the shape is unchanged until then | 1.0 | `src/cli/commands/project.ts:36`, `src/cli/commands/validation.ts:347`, `src/cli/commands/security.ts:128` | documented as "legacy shapes … kept for backward compatibility" in `docs/cli-mcp-parity.md:99` |
+| Teleport v1 bundles with no `iter` field (packed before 0.12.0, PBKDF2 at 100 000 iterations) | Re-pack with current q-ring (v1 bundles record `iter`, 210 000) or use v2 recipient packs (`qring teleport pack --to`) | 1.0 | `src/core/teleport.ts:191` (on unpack) | `src/core/teleport.ts:40`; `CHANGELOG.md:557` |
+| Agent memory encrypted under the machine-derived key (stores written before 0.14.0) | The OS-keyring key (the store is re-encrypted under it on first read where a keyring exists) or `QRING_MEMORY_PASSPHRASE` | 1.0 | `src/core/memory.ts:173` (on read or migration) | `src/core/memory.ts:78`; `CHANGELOG.md:416` |
+| `QRING_CANARY_ALERTS_PATH` (undocumented; the test suite was its only user) | `QRING_CONFIG_DIR` (the registry is `<dir>/canary-alerts.json`) | 1.0 | `src/core/canary-webhooks.ts:67` (when set) | `src/core/canary-webhooks.ts:65` |
+| `Q_RING_ALLOW_PRIVATE_HOOKS` (the only variable without the `QRING_` prefix) | `QRING_ALLOW_PRIVATE_HOOKS=1`; either name enables the override in 0.19 | 1.0 | `src/core/ssrf.ts:29` (when only the old name is set) | `privateTargetsAllowed` at `src/core/ssrf.ts:26` |
 
 Considered and **kept** (not deprecated):
 
