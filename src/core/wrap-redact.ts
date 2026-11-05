@@ -7,9 +7,19 @@
  * into the agent transcript, which is the obvious exfiltration hole in the
  * airlock. This module builds the set of known secret VALUES (with the key
  * each came from) and scrubs them out of results before they leave the
- * airlock, using the same engine as `qring exec` (redaction.ts): verbatim,
- * base64/hex/URL/JSON-encoded, and 16+ char slices, each replaced with
+ * airlock, using the same engine as `qring exec` (redaction.ts): whole values
+ * and their base64/hex/URL/JSON-encoded forms, each replaced with
  * `[QRING:REDACTED:<KEY>]`.
+ *
+ * No slice matching here, deliberately. The agent on the other side chooses
+ * the text it sends to a wrapped tool, and many tools echo their input (echo,
+ * write-then-read, a search repeating the query). Slice extension stops at
+ * the first char that no longer follows the secret, so lines of the form
+ * "known 16-char prefix + candidate char" would come back redacted for the
+ * right candidate and untouched for the rest: a per-char oracle that
+ * recovers an unknown secret one call per char. Whole-value and encoded
+ * matching answer only "is this the entire secret?", which leaks nothing an
+ * attacker can build on.
  *
  * Values are read silently (no audit "read", no access counter, no canary
  * trip) with CLI-source semantics, exactly like `qring exec`'s redaction set.
@@ -140,13 +150,13 @@ export function createRedactor(opts: KeyringOptions = {}): Redactor {
       );
     }
     try {
-      set = new RedactionSet(entries);
+      set = new RedactionSet(entries, { slices: false });
       failed = false;
     } catch {
       // A full build should never fail on one bad value, but if it does, fall
       // back to verbatim-only matching of the same values — never to nothing.
       try {
-        set = new RedactionSet(entries, { verbatimOnly: true });
+        set = new RedactionSet(entries, { verbatimOnly: true, slices: false });
         failed = false;
       } catch {
         // Fail closed; retried on the next result.

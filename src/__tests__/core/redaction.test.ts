@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   RedactionSet,
   RedactionStream,
+  SLICE_WINDOW,
   DERIVE_MAX_LENGTH,
   SLICE_MAX_LENGTH,
   sliceRegions,
@@ -158,13 +159,17 @@ describe("slice regions of structured secrets (review #3)", () => {
     expect(sliceRegions(pem)).toEqual(body);
   });
 
-  it("JSON object: long string values, recursively, not keys or structure", () => {
+  it("JSON object: string values under credential-named keys, recursively", () => {
     const json = JSON.stringify({
-      type: "service_account",
-      client_email: "short@x.io",
-      nested: { secret: "s3cr3t-value-0123456789", list: ["https://u:passw0rd-long-enough@h/x"] },
+      type: "service_account_type",
+      client_email: "someone@example-project.iam.gserviceaccount.com",
+      nested: {
+        secret: "s3cr3t-value-0123456789",
+        credentials: ["https://u:passw0rd-long-enough@h/x"],
+        notes: "a long public description string",
+      },
+      token_uri: "https://oauth2.googleapis.com/token/exchange-endpoint",
     });
-    // "service_account" is 15 chars: under the window, not a region.
     expect(sliceRegions(json)).toEqual(["s3cr3t-value-0123456789", "u:passw0rd-long-enough"]);
   });
 
@@ -459,11 +464,21 @@ describe("JSON credentials holding a PEM (review 4 #1)", () => {
     expect(sliceRegions(escaped)).toEqual(pemBody);
   });
 
-  it("never returns an empty region list", () => {
-    expect(sliceRegions('{"a":1,"b":true}')).toEqual(['{"a":1,"b":true}']);
+  it("outside JSON, never returns an empty region list", () => {
     expect(sliceRegions("-----BEGIN X-----\n-----END X-----")).toEqual([
       "-----BEGIN X-----\n-----END X-----",
     ]);
+  });
+
+  it("a JSON value with no credential string yields no regions (still matched verbatim)", () => {
+    const value = '{"username":"admin","password":"Xk9#qL2!"}';
+    expect(sliceRegions(value)).toEqual([]);
+    expect(sliceRegions('{"a":1,"b":true}')).toEqual([]);
+    const set = new RedactionSet([{ name: "DB_LOGIN", value }]);
+    expect(set.slicing).toBe(false);
+    const unrelated = '{"username":"admin","role":"owner"}';
+    expect(set.redact(unrelated)).toBe(unrelated);
+    expect(set.redact(`cfg=${value}`)).toBe(`cfg=${tok("DB_LOGIN")}`);
   });
 });
 
@@ -511,5 +526,119 @@ describe("table size (review 4 #4)", () => {
     // An ordinary line still flushes whole.
     const s = new RedactionStream(set);
     expect(s.write("INFO all good\n")).toBe("INFO all good\n");
+  });
+});
+
+describe("public strings inside a JSON credential (review 5 #2)", () => {
+  // Fake key material, assembled at runtime so secret scanning has nothing to flag.
+  const body = Array.from({ length: 25 }, (_, i) => fakeSecret(64, 800 + i));
+  const pem = ["-----BEGIN PRIVATE KEY-----", ...body, "-----END PRIVATE KEY-----", ""].join("\n");
+  const account = {
+    type: "service_account",
+    project_id: "demo-project-123456",
+    private_key_id: fakeHex(40, 860),
+    private_key: pem,
+    client_email: "deployer@demo-project-123456.iam.gserviceaccount.com",
+    client_id: "104857364829105738291",
+    auth_uri: "https://accounts.google.com/o/oauth2/auth",
+    token_uri: "https://oauth2.googleapis.com/token",
+    auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+    client_x509_cert_url:
+      "https://www.googleapis.com/robot/v1/metadata/x509/deployer%40demo-project-123456.iam.gserviceaccount.com",
+    universe_domain: "googleapis.com",
+    refresh_token: fakeSecret(48, 861),
+  };
+  const set = new RedactionSet([{ name: "GCP_SA_JSON", value: JSON.stringify(account, null, 2) }]);
+
+  it("leaves gcloud output and Google's public cert URL untouched", () => {
+    const gcloud =
+      "DISPLAY NAME  EMAIL                                                 DISABLED\n" +
+      "deployer      deployer@demo-project-123456.iam.gserviceaccount.com  False";
+    expect(set.redact(gcloud)).toBe(gcloud);
+    const certs =
+      "fetching https://www.googleapis.com/oauth2/v1/certs and " +
+      "https://www.googleapis.com/robot/v1/metadata/x509/deployer%40demo-project-123456.iam.gserviceaccount.com";
+    expect(set.redact(certs)).toBe(certs);
+  });
+
+  it("still slices the private key body, private_key_id and refresh_token", () => {
+    expect(set.redact(`k ${body[3].slice(10, 45)} k`)).toBe(`k ${tok("GCP_SA_JSON")} k`);
+    expect(set.redact(`id ${account.private_key_id.slice(2, 30)} id`)).toBe(
+      `id ${tok("GCP_SA_JSON")} id`,
+    );
+    expect(set.redact(`rt ${account.refresh_token.slice(10, 40)} rt`)).toBe(
+      `rt ${tok("GCP_SA_JSON")} rt`,
+    );
+  });
+
+  it("a PEM is sliced whatever key it sits under", () => {
+    expect(sliceRegions(JSON.stringify({ blob: pem }))).toEqual(body);
+  });
+});
+
+describe("slices: false (review 5 #1)", () => {
+  it("builds no slice tables: whole values and encoded forms only", () => {
+    const S = fakeSecret(40, 900);
+    const set = new RedactionSet([{ name: "K", value: S }], { slices: false });
+    expect(set.slicing).toBe(false);
+    expect(set.redact(`v=${S}`)).toBe(`v=${tok("K")}`);
+    expect(set.redact(`b=${Buffer.from(S).toString("base64")}`)).toMatch(/^b=\[QRING:REDACTED:K\]/);
+    expect(set.redact(`s=${S.slice(0, 30)}`)).toBe(`s=${S.slice(0, 30)}`);
+  });
+});
+
+describe("overlapping slices of different secrets (review 5 #4)", () => {
+  it("finds a run of another secret that starts inside a hit", () => {
+    const k0 = fakeSecret(40, 910);
+    // k2's 20th char is k0's first, so a k2 run can end where a k0 run begins.
+    const k2 = `${fakeSecret(19, 911)}${k0[0]}${fakeSecret(20, 912)}`;
+    const set = new RedactionSet([
+      { name: "K0", value: k0 },
+      { name: "K2", value: k2 },
+    ]);
+    const text = `x ${k2.slice(0, 20)}${k0.slice(1, 16)} y`;
+    const out = set.redact(text);
+    expect(out).toBe(`x ${tok("K2")} y`);
+    expect(out).not.toContain(k0.slice(1, 16));
+    const streamed = stream(set, [text.slice(0, 13), text.slice(13)]).out;
+    expect(streamed).toBe(out);
+  });
+
+  it("seeded multi-secret fuzz: no raw 16-char run survives, streaming equals one-shot", () => {
+    let seed = 7;
+    const rnd = (n: number) => {
+      seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
+      return (seed >>> 8) % n;
+    };
+    const k0 = fakeSecret(40, 920);
+    const k1 = `${k0.slice(28)}${fakeSecret(28, 921)}`; // shares 12 chars with k0's tail
+    const k2 = `${fakeSecret(30, 922)}${k1.slice(0, 10)}`; // ends with k1's head
+    const secrets = [k0, k1, k2];
+    const set = new RedactionSet(secrets.map((value, i) => ({ name: `K${i}`, value })));
+    for (let trial = 0; trial < 200; trial++) {
+      let text = "";
+      const n = 1 + rnd(6);
+      for (let k = 0; k < n; k++) {
+        const s = secrets[rnd(3)];
+        const len = SLICE_WINDOW + rnd(s.length - SLICE_WINDOW + 1);
+        const from = rnd(s.length - len + 1);
+        text += s.slice(from, from + len) + (rnd(3) === 0 ? " " : "");
+      }
+      const once = set.redact(text);
+      for (const s of secrets) {
+        for (let o = 0; o + SLICE_WINDOW <= s.length; o++) {
+          expect(once.includes(s.slice(o, o + SLICE_WINDOW)), `trial ${trial}: ${text}`).toBe(
+            false,
+          );
+        }
+      }
+      const chunks: string[] = [];
+      for (let p = 0; p < text.length;) {
+        const len = 1 + rnd(25);
+        chunks.push(text.slice(p, p + len));
+        p += len;
+      }
+      expect(stream(set, chunks).out, `trial ${trial}: ${JSON.stringify(chunks)}`).toBe(once);
+    }
   });
 });

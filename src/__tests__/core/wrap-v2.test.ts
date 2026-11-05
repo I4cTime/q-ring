@@ -169,13 +169,37 @@ describe("airlock v2: result redaction", () => {
     expect((got.messages[0].content as { text: string }).text).not.toContain(SECRET);
   });
 
-  it("scrubs encoded and sliced forms with the same named token", () => {
+  it("scrubs encoded forms with the same named token, but never slices", () => {
     const redactor = createRedactor({ projectPath: projectDir });
     const b64 = Buffer.from(`user:${SECRET}`).toString("base64");
     expect(redactor.text(`Basic ${b64}`)).toContain(REDACTED);
     expect(redactor.text(`Basic ${b64}`)).not.toContain(b64.slice(8, 30));
     expect(redactor.text(`hex ${Buffer.from(SECRET).toString("hex")}`)).toBe(`hex ${REDACTED}`);
-    expect(redactor.text(`first 20: ${SECRET.slice(0, 20)}...`)).toBe(`first 20: ${REDACTED}...`);
+    // No slice matching in the airlock (it would be a per-char oracle).
+    expect(redactor.text(`first 20: ${SECRET.slice(0, 20)}...`)).toBe(
+      `first 20: ${SECRET.slice(0, 20)}...`,
+    );
+  });
+
+  it("is not a per-char oracle: echoed prefix+candidate lines come back unchanged", async () => {
+    const { host } = await buildAirlock({ redact: true });
+    // An agent knows a 16+ char prefix and probes the next char through an
+    // echoing tool. Every candidate, right or wrong, must come back as sent.
+    const known = SECRET.slice(0, 20);
+    const candidates = "abcdefghijklmnopqrstuvwxyz0123456789-_".split("");
+    expect(candidates).toContain(SECRET[20]);
+    const probe = candidates.map((c) => `${known}${c}`).join("\n");
+    const out = text(await host.callTool({ name: "echo", arguments: { msg: probe } }));
+    expect(out).toBe(`echo: ${probe}`);
+    expect(out).not.toContain("[QRING:REDACTED");
+
+    // The whole secret, or its base64, is still redacted.
+    const whole = text(await host.callTool({ name: "echo", arguments: { msg: `k=${SECRET}` } }));
+    expect(whole).toBe(`echo: k=${REDACTED}`);
+    const b64 = Buffer.from(SECRET).toString("base64");
+    const enc = text(await host.callTool({ name: "echo", arguments: { msg: `b=${b64}` } }));
+    expect(enc).toContain(REDACTED);
+    expect(enc).not.toContain(b64.slice(0, 40));
   });
 
   it("fails closed: a result that cannot be redacted is withheld, never passed through", async () => {

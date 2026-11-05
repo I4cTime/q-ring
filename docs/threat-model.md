@@ -153,13 +153,29 @@ keychain the same way q-ring does; no local tool changes that.
   up to 256 chars), and any run of 16+ consecutive characters of the
   credential-bearing parts of one (parts up to 1024 chars; for a URL
   the userinfo, for a JWT the signature, for PEM the body, for JSON
-  each long string value read the same way; repeated-character runs
-  never count), as `[QRING:REDACTED:<KEY_NAME>]`. The MCP airlock
-  scrubs wrapped-server results with the same engine and fails
-  closed: if the redaction set cannot be built, or no secret values
-  could be listed at all, results are withheld, and `exec` refuses to
-  spawn. A single secret that cannot be read (a template naming a
-  missing key, a failing JIT provider) is left out of the set.
+  the string values under credential-named keys and any PEM value,
+  read the same way; repeated-character runs never count), as `[QRING:REDACTED:<KEY_NAME>]`. The MCP airlock
+  scrubs wrapped-server results with the same engine, but for whole
+  values and their encoded forms only (see below), and fails closed:
+  if the redaction set cannot be built, or no secret values could be
+  listed at all, results are withheld, and `exec` refuses to spawn. A
+  single secret that cannot be read (a template naming a missing key,
+  a failing JIT provider) is left out of the set.
+- **Why exec slices and the airlock does not.** Slice matching
+  extends a hit while the text still follows the secret and stops at
+  the first char that does not, so it reveals, for any text the caller
+  chose, whether that text continues the secret. In the airlock the
+  caller is the agent, and many wrapped tools echo their input (echo,
+  write-then-read, a search that repeats the query): sending lines of
+  "known 16-char prefix + candidate char" and seeing which one comes
+  back as a token recovers an unknown secret one char per call. The
+  airlock therefore matches only whole values and their encoded
+  forms, which answer nothing short of "this is the entire secret".
+  In `exec` / `run` the child process already holds the secrets in
+  its environment and can print any piece of them, including pieces
+  under 16 chars, so the oracle adds no exposure there; slicing only
+  adds protection against accidental truncation (a debug print of the
+  first 20 chars, a cut-off log line).
 - Profiles gate what may run: `restricted` denies network tools *and*
   interpreters/shells (`python`, `node`, `sh`, …), because
   `python -c '…'` is a network tool. `ci` and `unrestricted` widen

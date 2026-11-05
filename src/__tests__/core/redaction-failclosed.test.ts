@@ -122,9 +122,11 @@ describe("createRedactor never runs with an empty set after a failed build", () 
     setSecret("STRIPE_KEY", SECRET, { scope: "global", silent: true });
   });
 
-  it("full build", () => {
+  it("full build (whole values and encoded forms; the airlock never slices)", () => {
     const r = createRedactor();
-    expect(r.text(`x ${SECRET.slice(0, 20)} y`)).toBe("x [QRING:REDACTED:STRIPE_KEY] y");
+    const hex = Buffer.from(SECRET).toString("hex");
+    expect(r.text(`x ${hex} y`)).toBe("x [QRING:REDACTED:STRIPE_KEY] y");
+    expect(r.text(`x ${SECRET.slice(0, 20)} y`)).toBe(`x ${SECRET.slice(0, 20)} y`);
   });
 
   it("falls back to verbatim-only when the full build fails", () => {

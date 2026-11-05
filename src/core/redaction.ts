@@ -76,6 +76,14 @@ export interface RedactionSetOptions {
    * full build fails, so a bad value can never leave the set empty.
    */
   verbatimOnly?: boolean;
+  /**
+   * false: no slice matching (no window table, no slice-derived hold-back),
+   * only whole values and their encoded forms. The airlock uses this: where
+   * an untrusted caller can choose text that is scrubbed and read the result
+   * back, slice extension (which stops at the first mismatching char) answers
+   * "is the next char of this secret X?" one char at a time.
+   */
+  slices?: boolean;
 }
 
 /** The replacement token for a key name (fallback when the name is unknown). */
@@ -91,6 +99,12 @@ export interface RedactionMatch {
   start: number;
   end: number;
   token: string;
+}
+
+/** A slice hit, with the region and alignment (pos - offset) it followed. */
+interface SliceHit extends RedactionMatch {
+  region: number;
+  delta: number;
 }
 
 interface Pattern {
@@ -157,22 +171,44 @@ export function derivedForms(value: string): string[] {
 const JWT_RE = /^eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.([A-Za-z0-9_-]+)$/;
 const URL_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\/\/([^/?#\s]*)(\S*)$/;
 
-function collectJsonStrings(node: unknown, out: string[], depth: number): void {
+/**
+ * JSON keys whose string values may hold a credential. `cert` excludes
+ * `cert_url`; any key that names a URL or URI (`token_uri`,
+ * `auth_provider_x509_cert_url`) is excluded too, since those are public
+ * endpoints even under a credential-sounding name.
+ */
+const CREDENTIAL_KEY_RE =
+  /key|secret|token|password|passwd|pwd|credential|private|auth|signature|refresh|access|cert(?!_url)/i;
+const URL_KEY_RE = /ur[il]$/i;
+const PEM_RE = /-----BEGIN [^-\n]+-----/;
+
+function isCredentialKey(key: string): boolean {
+  return CREDENTIAL_KEY_RE.test(key) && !URL_KEY_RE.test(key);
+}
+
+/**
+ * Collect slice regions from a parsed JSON node. A string is a candidate only
+ * when the key it sits under names a credential (`qualifies`), or when it is
+ * a PEM block whatever its key; every other string (`client_email`,
+ * `project_id`, `type`, public URLs) yields nothing.
+ */
+function collectJsonStrings(node: unknown, out: string[], depth: number, qualifies: boolean): void {
   if (depth > 20) return;
   if (typeof node === "string") {
-    // Each long string value is a value in its own right: a PEM yields its
-    // body lines, a URL its credential part, a plain token itself.
-    if (node.length >= SLICE_WINDOW) out.push(...sliceRegions(node, depth + 1));
+    if (node.length < SLICE_WINDOW) return;
+    if (qualifies || PEM_RE.test(node)) out.push(...sliceRegions(node, depth + 1));
   } else if (Array.isArray(node)) {
-    for (const n of node) collectJsonStrings(n, out, depth + 1);
+    // Array elements inherit the array's key.
+    for (const n of node) collectJsonStrings(n, out, depth + 1, qualifies);
   } else if (node && typeof node === "object") {
-    for (const v of Object.values(node as Record<string, unknown>)) {
-      collectJsonStrings(v, out, depth + 1);
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      collectJsonStrings(v, out, depth + 1, isCredentialKey(k));
     }
   }
 }
 
-function structuredRegions(value: string, depth: number): string[] {
+/** Regions of a value, and whether it parsed as a JSON object or array. */
+function structuredRegions(value: string, depth: number): { regions: string[]; json: boolean } {
   const trimmed = value.trim();
 
   // JSON first: in compact JSON a PEM's newlines are the two chars `\n`, so
@@ -181,54 +217,61 @@ function structuredRegions(value: string, depth: number): string[] {
     try {
       const parsed: unknown = JSON.parse(trimmed);
       if (parsed && typeof parsed === "object") {
-        const out: string[] = [];
-        collectJsonStrings(parsed, out, depth);
-        return out;
+        const regions: string[] = [];
+        // A top-level array of strings is a list of opaque values.
+        collectJsonStrings(parsed, regions, depth, Array.isArray(parsed));
+        return { regions, json: true };
       }
     } catch {
       // Not JSON: try the other shapes.
     }
   }
 
-  if (/-----BEGIN [^-\n]+-----/.test(value)) {
+  if (PEM_RE.test(value)) {
     // Real newlines, or the literal two-char `\n` of a PEM pasted into .env.
-    return value
+    const regions = value
       .split(/\r?\n|\\n/)
       .map((l) => l.trim())
       .filter((l) => l.length > 0 && !l.startsWith("-----") && !l.includes(":"));
+    return { regions, json: false };
   }
 
   const jwt = JWT_RE.exec(trimmed);
-  if (jwt) return [jwt[1]];
+  if (jwt) return { regions: [jwt[1]], json: false };
 
   const url = URL_RE.exec(trimmed);
   if (url) {
     const authority = url[1];
     const at = authority.lastIndexOf("@");
-    if (at >= 0) return [authority.slice(0, at)];
-    return url[2] ? [url[2]] : [];
+    if (at >= 0) return { regions: [authority.slice(0, at)], json: false };
+    return { regions: url[2] ? [url[2]] : [], json: false };
   }
 
-  return [value];
+  return { regions: [value], json: false };
 }
 
 /**
  * The credential-bearing parts of a value, which are what slice matching
  * looks for. Public structure is left out so it never matches unrelated text:
  *
- * - JSON object or array: each string value of 16+ chars, through these same
- *   rules (a `private_key` PEM gives its body lines), never keys or structure.
+ * - JSON object or array: string values under credential-named keys (key,
+ *   secret, token, password, private, auth, ...; not URL/URI keys), and any
+ *   PEM value, each through these same rules. Nothing else: no keys, no
+ *   structure, no `client_email`. A JSON value with no such string yields no
+ *   regions at all (it is still matched whole, verbatim).
  * - PEM: the base64 body lines, armor and header lines removed.
  * - JWT: the signature segment only (header and payload are shared shapes).
  * - URL with userinfo: the userinfo (`user:password`) only.
  * - URL without userinfo: the path + query, scheme and host stripped.
  * - Anything else: the whole value.
  *
- * Never empty: when a shape yields nothing, the whole value is the region.
+ * Outside JSON, never empty: when a shape yields nothing, the whole value is
+ * the region.
  */
 export function sliceRegions(value: string, depth = 0): string[] {
-  const out = structuredRegions(value, depth);
-  return out.length > 0 ? out : [value];
+  const { regions, json } = structuredRegions(value, depth);
+  if (json || regions.length > 0) return regions;
+  return [value];
 }
 
 // ── Hashing ──────────────────────────────────────────────────────────────
@@ -451,6 +494,7 @@ export class RedactionSet {
           if (!patternMap.has(form)) patternMap.set(form, token);
         }
       }
+      if (options.slices === false) continue;
 
       let regions: string[];
       try {
@@ -580,45 +624,50 @@ export class RedactionSet {
   }
 
   private findSlices(text: string, start: number, out: RedactionMatch[]): void {
-    let i = start;
-    let h = 0;
-    // Position h was computed for. h is rolled forward only from i - 1; -2 can
-    // never equal i - 1, so it forces a fresh hash (start, after a jump).
-    let hashAt = -2;
+    // Every position is examined (not resuming after a hit), so a run of a
+    // different secret, or another alignment of the same one, that starts
+    // inside a hit is still found; mergeMatches joins the overlaps. Windows
+    // that only re-find an earlier hit (same region, same alignment, still
+    // inside it) are skipped, which keeps a long hit linear.
     const last = text.length - SLICE_WINDOW;
-
-    while (i <= last) {
-      if (hashAt === i - 1) {
+    if (start > last) return;
+    let h = windowHash(text, start);
+    const active: SliceHit[] = [];
+    for (let i = start; i <= last; i++) {
+      if (i > start) {
         h =
           (Math.imul(h - Math.imul(text.charCodeAt(i - 1), HASH_DROP), HASH_BASE) +
             text.charCodeAt(i + SLICE_WINDOW - 1)) |
           0;
-      } else {
-        h = windowHash(text, i);
       }
-      hashAt = i;
-
-      const hit = filterHas(this.winFilter, h) ? this.extend(text, i, h >>> 0) : null;
+      if (!filterHas(this.winFilter, h)) continue;
+      for (let a = active.length - 1; a >= 0; a--) {
+        if (active[a].end <= i) active.splice(a, 1);
+      }
+      const hit = this.extend(text, i, h >>> 0, active);
       if (hit) {
-        out.push(hit);
-        i = hit.end;
-        hashAt = -2;
-      } else {
-        i++;
+        out.push({ start: hit.start, end: hit.end, token: hit.token });
+        active.push(hit);
       }
     }
   }
 
-  /** Longest run around a window (hash `h`) at `pos` that still follows a region. */
-  private extend(text: string, pos: number, h: number): RedactionMatch | null {
-    let best: RedactionMatch | null = null;
+  /**
+   * Longest run around a window (hash `h`) at `pos` that still follows a
+   * region, ignoring alignments an `active` hit already covers.
+   */
+  private extend(text: string, pos: number, h: number, active: SliceHit[]): SliceHit | null {
+    let best: SliceHit | null = null;
     for (
       let k = lowerBound(this.winHash, h);
       k < this.winHash.length && this.winHash[k] === h;
       k++
     ) {
       const offset = this.winOffset[k];
-      const { text: value, token } = this.regions[this.winRegion[k]];
+      const region = this.winRegion[k];
+      const delta = pos - offset;
+      if (active.some((a) => a.region === region && a.delta === delta)) continue;
+      const { text: value, token } = this.regions[region];
       // Verify (the hash can collide).
       let ok = true;
       for (let k = 0; k < SLICE_WINDOW; k++) {
@@ -646,7 +695,7 @@ export class RedactionSet {
       }
       const start = pos - left;
       const end = pos + right;
-      if (!best || end - start > best.end - best.start) best = { start, end, token };
+      if (!best || end - start > best.end - best.start) best = { start, end, token, region, delta };
     }
     return best;
   }
