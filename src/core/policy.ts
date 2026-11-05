@@ -8,7 +8,7 @@
 
 import { join } from "node:path";
 import { z } from "zod";
-import { clearConfigCache, readProjectConfig, type ProjectConfig } from "./collapse.js";
+import { clearConfigCache, readProjectConfigState, type ProjectConfigState } from "./collapse.js";
 
 /**
  * Strict schema for the `.q-ring.json` `policy` object. `.strict()` at every
@@ -92,12 +92,12 @@ export interface PolicyDecision {
   policySource: string;
 }
 
-// Keyed on the config object readProjectConfig returns. That object is reused
+// Keyed on the state object readProjectConfigState returns. That object is reused
 // exactly while the file's text is unchanged and replaced when it changes, so
 // this cache can never outlive an edit (an mtime key could, #132).
 let cachedPolicy:
-  | { path: string; config: ProjectConfig | null; policy: PolicyConfig; error?: undefined }
-  | { path: string; config: ProjectConfig | null; error: PolicyConfigError; policy?: undefined }
+  | { path: string; state: ProjectConfigState; policy: PolicyConfig; error?: undefined }
+  | { path: string; state: ProjectConfigState; error: PolicyConfigError; policy?: undefined }
   | null = null;
 
 /**
@@ -124,17 +124,30 @@ function resolvePolicyPath(projectPath?: string): string {
 
 export function loadPolicy(projectPath?: string): PolicyConfig {
   const pp = resolvePolicyPath(projectPath);
-  const config = readProjectConfig(pp);
-  if (cachedPolicy && cachedPolicy.path === pp && cachedPolicy.config === config) {
+  const state = readProjectConfigState(pp);
+  if (cachedPolicy && cachedPolicy.path === pp && cachedPolicy.state === state) {
     if (cachedPolicy.error) throw cachedPolicy.error;
     return cachedPolicy.policy;
   }
 
+  if (state.state === "invalid") {
+    // The file exists but cannot be parsed, so whatever policy it holds is
+    // unknown. Treating that as "no policy" would fail open.
+    const error = new PolicyConfigError(
+      `Invalid config: ${state.path} ${state.reason} — refusing to run under an ` +
+        `unparseable security policy (fail closed). Fix the file and retry.`,
+    );
+    console.error(`q-ring: ${error.message}`);
+    cachedPolicy = { path: pp, state, error };
+    throw error;
+  }
+
+  const config = state.config;
   const rawPolicy = (config as { policy?: unknown } | null)?.policy;
 
   if (rawPolicy === undefined || rawPolicy === null) {
     const policy: PolicyConfig = {};
-    cachedPolicy = { path: pp, config, policy };
+    cachedPolicy = { path: pp, state, policy };
     return policy;
   }
 
@@ -150,11 +163,11 @@ export function loadPolicy(projectPath?: string): PolicyConfig {
     // Loud, and cached so it keeps throwing on every call until the file's
     // content changes (a dropped deny rule must never silently allow access).
     console.error(`q-ring: ${error.message}`);
-    cachedPolicy = { path: pp, config, error };
+    cachedPolicy = { path: pp, state, error };
     throw error;
   }
 
-  cachedPolicy = { path: pp, config, policy: parsed.data };
+  cachedPolicy = { path: pp, state, policy: parsed.data };
   return parsed.data;
 }
 

@@ -99,36 +99,73 @@ export interface ProjectConfig {
 // of equal length keeps the inode and size, and mtime resolution can be coarse.
 // The file is a few hundred bytes, so reading it and comparing strings is cheap;
 // what the cache saves is the JSON parse and, in loadPolicy, the schema check.
-// Callers get the same object back while the text is unchanged, which is what
-// loadPolicy keys its own cache on.
-const ABSENT = Symbol("absent");
-let configCache: {
-  path: string;
-  raw: string | typeof ABSENT;
-  config: ProjectConfig | null;
-} | null = null;
+// Callers get the same state object back while the text is unchanged, which is
+// what loadPolicy keys its own cache on.
+export type ProjectConfigState =
+  | { state: "absent"; path: string; config: null; raw: null }
+  | { state: "invalid"; path: string; config: null; raw: string | null; reason: string }
+  | { state: "ok"; path: string; config: ProjectConfig; raw: string };
 
-export function readProjectConfig(projectPath?: string): ProjectConfig | null {
-  const configPath = join(projectPath ?? process.cwd(), ".q-ring.json");
-  let raw: string | typeof ABSENT = ABSENT;
+let configCache: ProjectConfigState | null = null;
+
+/**
+ * Read `.q-ring.json` and say whether it is absent, present but unusable, or
+ * valid. Policy enforcement needs the distinction (a corrupt file must fail
+ * closed); environment detection does not, so it uses readProjectConfig.
+ */
+export function readProjectConfigState(projectPath?: string): ProjectConfigState {
+  const path = join(projectPath ?? process.cwd(), ".q-ring.json");
+  let raw: string;
   try {
-    raw = readFileSync(configPath, "utf8");
-  } catch {
-    // absent or unreadable: ABSENT is a stable sentinel
-  }
-  if (configCache && configCache.path === configPath && configCache.raw === raw) {
-    return configCache.config;
-  }
-  let config: ProjectConfig | null = null;
-  if (raw !== ABSENT) {
-    try {
-      config = JSON.parse(raw) as ProjectConfig;
-    } catch {
-      config = null; // invalid config
+    raw = readFileSync(path, "utf8");
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      if (configCache?.path === path && configCache.state === "absent") return configCache;
+      configCache = { state: "absent", path, config: null, raw: null };
+      return configCache;
     }
+    // Present but unreadable (EACCES, EISDIR, ...): unusable, so invalid. The
+    // read is retried on every call, so this clears as soon as it succeeds.
+    const reason = `cannot be read (${code ?? String(err)})`;
+    if (
+      configCache?.path === path &&
+      configCache.state === "invalid" &&
+      configCache.raw === null &&
+      configCache.reason === reason
+    ) {
+      return configCache;
+    }
+    configCache = { state: "invalid", path, config: null, raw: null, reason };
+    return configCache;
   }
-  configCache = { path: configPath, raw, config };
-  return config;
+  if (configCache && configCache.path === path && configCache.raw === raw) {
+    return configCache;
+  }
+  let parsed: unknown;
+  let reason: string | null = null;
+  try {
+    parsed = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      reason = "is not a JSON object";
+    }
+  } catch (err) {
+    reason = `is not valid JSON (${(err as Error).message})`;
+  }
+  configCache =
+    reason === null
+      ? { state: "ok", path, config: parsed as ProjectConfig, raw }
+      : { state: "invalid", path, config: null, raw, reason };
+  return configCache;
+}
+
+/**
+ * The parsed `.q-ring.json`, or null when it is absent or unusable. A corrupt
+ * file deliberately reads as "no config" here so env detection keeps working;
+ * policy enforcement goes through readProjectConfigState and fails closed.
+ */
+export function readProjectConfig(projectPath?: string): ProjectConfig | null {
+  return readProjectConfigState(projectPath).config;
 }
 
 export interface CollapseContext {
