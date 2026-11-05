@@ -15,7 +15,7 @@ approval gates.
   `qring://sessions/{id}` (agent view — canary trips stripped, hidden when
   policy denies `audit_log`) both build on `listAgentSessions` in
   `src/core/sessions.ts`. Resources, not tools, by the standing rule; the
-  tool count stays at 44.
+  tool count stays at 46.
 - **Airlock policy:** `policy.wrap` (`src/core/policy.ts`) is enforced only
   by `qring mcp wrap` — the q-ring MCP server itself is governed by
   `policy.mcp`. `qring mcp approve` grants use the same HMAC-verified approval

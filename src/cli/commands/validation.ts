@@ -344,6 +344,8 @@ export function registerValidationCommands(program: Command): void {
 
       if (wantsJsonOutput(program, cmd)) {
         console.log(JSON.stringify(report, null, 2));
+        // Same CI-gate contract as the human output: exit 1 on failure.
+        if (!report.allValid) process.exitCode = 1;
       } else {
         console.log(
           c.bold(`\n  CI Secret Validation: ${report.results.length} secrets\n`),
