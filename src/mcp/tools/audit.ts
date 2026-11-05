@@ -2,7 +2,13 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { toolAnnotations } from "../tool-annotations.js";
 import { z } from "zod";
 import { listSecrets } from "../../core/keyring.js";
-import { queryAudit, detectAnomalies, verifyAuditChain, exportAudit } from "../../core/observer.js";
+import {
+  queryAudit,
+  detectAnomalies,
+  verifyAuditChain,
+  exportAudit,
+  AGENT_HIDDEN_ACTIONS,
+} from "../../core/observer.js";
 import { text, opts, enforceToolPolicy, commonSchemas } from "./_shared.js";
 
 const { teamId, orgId, scope, projectPath } = commonSchemas;
@@ -70,7 +76,7 @@ export function registerAuditTools(server: McpServer): void {
         action: params.action,
         agent: params.agent,
       })
-        .filter((e) => e.action !== "canary")
+        .filter((e) => !AGENT_HIDDEN_ACTIONS.includes(e.action))
         .slice(0, params.limit);
 
       if (events.length === 0) return text("No audit events found");
@@ -235,7 +241,7 @@ export function registerAuditTools(server: McpServer): void {
         until: params.until,
         format: params.format,
         // Same rationale as audit_log: trip records stay operator-facing.
-        excludeActions: ["canary"],
+        excludeActions: [...AGENT_HIDDEN_ACTIONS],
       });
       return text(output);
     },

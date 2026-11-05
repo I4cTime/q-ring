@@ -168,6 +168,36 @@ describe("canary visibility", () => {
   });
 });
 
+describe("blocked canary alert deliveries", () => {
+  it("are not trips: the operator's trip count is unchanged, and agents never see them", () => {
+    setAuditAgentLabel("cursor@9");
+    logAudit({ action: "read", key: "AWS_TRAP", scope: "q-ring:global", source: "mcp" });
+    logAudit({
+      action: "canary",
+      key: "AWS_TRAP",
+      scope: "q-ring:global",
+      source: "mcp",
+      detail: "CANARY TRIPPED",
+    });
+    logAudit({
+      action: "canary_alert",
+      key: "AWS_TRAP",
+      scope: "q-ring:global",
+      source: "mcp",
+      detail: "delivery blocked (http://10.0.0.5)",
+    });
+
+    const [operator] = listAgentSessions();
+    expect(operator.countsByAction.canary).toBe(1);
+    expect(operator.countsByAction.canary_alert).toBe(1);
+
+    const [agentView] = listAgentSessionsForAgents();
+    expect(agentView.countsByAction.canary_alert).toBeUndefined();
+    expect(agentView.eventCount).toBe(1);
+    expect(JSON.stringify(agentView)).not.toContain("delivery blocked");
+  });
+});
+
 describe("listAgentSessions", () => {
   it("applies agent filter and limit, and ignores list events", () => {
     setAuditAgentLabel("cursor@1");

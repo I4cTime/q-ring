@@ -100,7 +100,15 @@ export type AuditAction =
   | "rotate"
   | "push"
   | "canary"
+  | "canary_alert"
   | "wrap";
+
+/**
+ * Actions no agent-facing surface may show: canary trips and canary alert
+ * delivery records (both name a canary). MCP audit_log, export_audit and the
+ * qring://sessions resources drop them; the operator's CLI keeps them.
+ */
+export const AGENT_HIDDEN_ACTIONS: readonly AuditAction[] = ["canary", "canary_alert"];
 
 export interface AuditEvent {
   timestamp: string;

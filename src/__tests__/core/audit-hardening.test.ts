@@ -153,6 +153,24 @@ describe("MCP audit surface", () => {
     expect(textOut).toContain('"read"');
   });
 
+  it("audit_log and export_audit hide blocked canary alert deliveries", async () => {
+    logAudit({
+      action: "canary_alert",
+      key: "ALERTED_TRAP",
+      scope: "global",
+      source: "hook",
+      detail: "delivery blocked (http://10.0.0.5)",
+    });
+    const host = await connectHost();
+    const log = await host.callTool({ name: "audit_log", arguments: { limit: 100 } });
+    const exported = await host.callTool({ name: "export_audit", arguments: { format: "json" } });
+    for (const res of [log, exported]) {
+      const out = (res.content as Array<{ text: string }>)[0].text;
+      expect(out).not.toContain("ALERTED_TRAP");
+      expect(out).not.toContain("delivery blocked");
+    }
+  });
+
   it("export_audit carries no hash chain that would point at a removed trip", async () => {
     setSecret("REAL_ONE", "real-value-1", { scope: "global", source: "cli" });
     plantCanary("CHAIN_TRAP", { format: "github" });

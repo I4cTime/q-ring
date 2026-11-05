@@ -21,7 +21,7 @@
  * summary is computed, and the summary never leaks a canary key name.
  */
 
-import { queryAudit, type AuditEvent, type AuditAction } from "./observer.js";
+import { queryAudit, AGENT_HIDDEN_ACTIONS, type AuditEvent, type AuditAction } from "./observer.js";
 
 export interface AgentSession {
   /** Stable id: the airlock correlationId, or `${pid}-${agent slug}` */
@@ -151,7 +151,7 @@ export function buildSessions(
  */
 export function agentVisibleEvents(events: AuditEvent[]): AuditEvent[] {
   return events
-    .filter((e) => e.action !== "canary")
+    .filter((e) => !AGENT_HIDDEN_ACTIONS.includes(e.action))
     .map(({ prevHash: _prevHash, ...rest }) => rest);
 }
 

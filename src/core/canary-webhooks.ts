@@ -140,6 +140,16 @@ export function setCanaryAlertEnabled(id: string, enabled: boolean): boolean {
   return true;
 }
 
+/** `scheme://host[:port]` of an alert URL, for the audit log. */
+function alertOrigin(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return "unparseable URL";
+  }
+}
+
 /** Redact a webhook URL for display — the path usually IS the credential. */
 export function describeAlertUrl(url: string): string {
   try {
@@ -219,16 +229,17 @@ async function sendOne(
   const base = { channelId: channel.id, type: channel.type };
   const ssrfBlock = await checkSSRF(channel.url);
   if (ssrfBlock) {
-    // Recorded as a "canary" event, which every agent-facing audit view
-    // drops. As a policy_deny naming the key it reached MCP audit_log on
-    // every trip (a self-hosted ntfy on the LAN is blocked by default), so
-    // an agent could read which keys are canaries. No `key` field either:
-    // canary trip counters match on it, and this is not a trip.
+    // Its own "canary_alert" action: hidden from every agent-facing audit
+    // view like a trip (as a policy_deny naming the key it reached MCP
+    // audit_log on every trip, and a LAN ntfy is blocked by default), but
+    // not a trip, so trip and session counts do not include it. Scheme and
+    // host only: webhook paths and ntfy topics are credentials.
     logAudit({
-      action: "canary",
+      action: "canary_alert",
+      key: event.key,
       scope: event.scope,
       source: "hook",
-      detail: `canary alert SSRF blocked: ${describeAlertUrl(channel.url)} (trip on "${event.key}")`,
+      detail: `delivery blocked (${alertOrigin(channel.url)})`,
     });
     return { ...base, success: false, message: ssrfBlock };
   }
