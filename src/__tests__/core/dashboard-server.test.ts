@@ -120,6 +120,20 @@ describe("dashboard server auth + security headers", () => {
     expect(html).toContain("chain intact"); // client bundle renders the badge
   });
 
+  it("ships the canary card and the chain status pill in the client bundle", async () => {
+    const res = await fetch(`${base}/?token=${dash.token}`);
+    const html = await res.text();
+    expect(html).toContain(".canary-card");
+    expect(html).toContain("qring canary plant <KEY>");
+    expect(html).toContain("broken at #");
+  });
+
+  it("includes the canaries list in the operator snapshot", async () => {
+    const res = await fetch(`${base}/api/status?token=${dash.token}`);
+    const snap = (await res.json()) as { canaries: unknown };
+    expect(Array.isArray(snap.canaries)).toBe(true);
+  });
+
   it("sends security headers on every response", async () => {
     for (const url of [`${base}/`, `${base}/?token=${dash.token}`]) {
       const res = await fetch(url);

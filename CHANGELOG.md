@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Canary card on the status dashboard.** The page `qring status` serves
+  now shows the planted canaries in the site's three states: none planted
+  (one line on what a canary is and the `qring canary plant <KEY>` hint),
+  armed (each key with a pulsing dot) and tripped in the last 24 hours (a
+  danger border and "Tripped by <source>" with the time). The snapshot behind
+  it gains a `canaries` field (`key`, `scope`, `plantedAt`, `trips`,
+  `lastTripAt`, `lastTripBy`), built from the canary flags in the vault and
+  the `canary` events in the audit window. A dashboard started by an MCP
+  agent (`status_dashboard`) gets an empty `canaries` array and does not
+  render the card, the same way its audit feed already drops canary events
+  (#164).
+
+### Changed
+- **Status dashboard wears the Quantum skin.** The browser UI behind
+  `qring status` now reads as the same product as the redesigned site: the
+  palette, radii and motion come from one constant, `DASHBOARD_TOKENS` in
+  `src/core/dashboard-tokens.ts`, which mirrors the site's `globals.css` and
+  renders the page's `:root` block, and no other dashboard file holds a
+  colour literal (a test checks). Cards are flat (bg-card, 1 px border,
+  16 px radius) with no blobs, glass blur or entrance animation; the cyan to
+  violet gradient and glow are kept for the brand mark. The KPI strip is a
+  row of tiles like the site's stats, the Audit Log card carries the chain
+  status pill (`intact`, or `broken at #n`) and a console-style feed, and the
+  Policy card shows each rule's mode as a chip. The layout is responsive at
+  768 px and 480 px with no horizontal overflow, and pulses and transitions
+  stop under `prefers-reduced-motion`. Binding, the per-launch token, the
+  CSP and the self-contained page are unchanged (#164).
+
 ### Removed
 - **Smithery publishing is gone from the release pipeline.** Smithery shut
   down its API and accounts on 2026-10-31, so the publish job could only
