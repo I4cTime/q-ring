@@ -90,6 +90,24 @@ export interface HookSnapshot {
   matchSummary: string;
 }
 
+/**
+ * One planted canary for the operator's dashboard. Trips are counted over the
+ * audit window (24h): `trips` is the number of `canary` audit events for this
+ * key in the window, `lastTripAt` / `lastTripBy` describe the newest one.
+ * Never sent to an agent-view dashboard (the field is an empty array there).
+ */
+export interface CanarySnapshot {
+  key: string;
+  scope: string;
+  /** When the canary was planted (its envelope's createdAt) */
+  plantedAt?: string;
+  /** Trips (canary audit events) for this key in the audit window */
+  trips: number;
+  lastTripAt?: string;
+  /** Source of the newest trip, with the agent label when one was stamped */
+  lastTripBy?: string;
+}
+
 export interface ManifestSnapshot {
   /** Total declared keys in `.q-ring.json` `secrets` */
   declared: number;
@@ -235,6 +253,11 @@ export interface DashboardSnapshot {
   hooks: HookSnapshot[];
   /** Agent memory key count */
   memoryKeys: number;
+  /**
+   * Planted canaries with their trips in the audit window. Operator surface
+   * only: always an empty array on an agent-view dashboard.
+   */
+  canaries: CanarySnapshot[];
   /** Audit hash-chain integrity (same data as `qring audit:verify`) */
   auditChain: {
     intact: boolean;
@@ -281,9 +304,7 @@ function toSecretSnapshot(entry: {
     requiresApproval: envelope?.meta.requiresApproval,
     jitProvider: envelope?.meta.jitProvider,
     hasRotationFormat: !!envelope?.meta.rotationFormat,
-    rotation: rotationStatus(
-      envelope?.meta ?? { createdAt: "", updatedAt: "" },
-    ),
+    rotation: rotationStatus(envelope?.meta ?? { createdAt: "", updatedAt: "" }),
   };
 }
 
@@ -406,6 +427,45 @@ function buildAuditMetrics(events: AuditEvent[]): AuditMetrics {
 }
 
 /**
+ * Canaries from the entries collectSnapshot already listed (the same filter
+ * as listCanaries() in canary.ts, without a second pass over the keyring),
+ * joined with the `canary` trip events in the audit window.
+ */
+function buildCanaries(
+  entries: { key: string; scope: string; envelope?: QuantumEnvelope }[],
+  auditWindow: AuditEvent[],
+): CanarySnapshot[] {
+  const out: CanarySnapshot[] = [];
+  for (const entry of entries) {
+    const meta = entry.envelope?.meta;
+    if (!meta?.canary) continue;
+    const trips = auditWindow.filter(
+      (e) =>
+        e.action === "canary" &&
+        e.key === entry.key &&
+        (e.scope === undefined || e.scope === entry.scope),
+    );
+    let last: AuditEvent | undefined;
+    for (const e of trips) {
+      if (!last || e.timestamp > last.timestamp) last = e;
+    }
+    out.push({
+      key: entry.key,
+      scope: entry.scope,
+      ...(meta.createdAt ? { plantedAt: meta.createdAt } : {}),
+      trips: trips.length,
+      ...(last
+        ? {
+            lastTripAt: last.timestamp,
+            lastTripBy: last.agent ? `${last.source} (${last.agent})` : last.source,
+          }
+        : {}),
+    });
+  }
+  return out;
+}
+
+/**
  * @param agentView drop the actions agents must never see (canary trips and
  *   alert records). Set for a dashboard an MCP agent started: it holds the
  *   URL and token, so it can read every snapshot.
@@ -502,6 +562,10 @@ export function collectSnapshot(agentView = false): DashboardSnapshot {
     approvals,
     hooks: hookEntries,
     memoryKeys: listMemory().length,
+    // An agent-view dashboard never learns which keys are canaries: the
+    // projection already drops canary actions, and this list is the other
+    // way a tripwire could be read off the page.
+    canaries: agentView ? [] : buildCanaries(entries, auditWindow),
     auditChain: (() => {
       const chain = verifyAuditChain();
       return {
@@ -556,7 +620,7 @@ export function startDashboardServer(options: DashboardServerOptions = {}): {
   // host any local user/process could otherwise read key names, the audit log,
   // and approvals. Every route requires this token (passed as ?token=).
   const token = randomBytes(24).toString("base64url");
-  const html = getDashboardHtml(token);
+  const html = getDashboardHtml(token, { agentView: options.agentView === true });
 
   function broadcast() {
     const snapshot = collectSnapshot(options.agentView);

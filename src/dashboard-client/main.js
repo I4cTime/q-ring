@@ -5,9 +5,11 @@
  * and inlined into the served HTML. Reads its auth token from window.__QRING__.
  *
  * Rendering is component + VDOM based: the SSE stream only updates the data,
- * Preact diffs the DOM, so entrance animations (.card cardReveal) run once on
- * mount and the page no longer "reloads" on every 5s tick. Input focus/caret
- * and scroll positions are preserved automatically because DOM nodes persist.
+ * Preact diffs the DOM, so the page never "reloads" on the 5s tick. Input
+ * focus/caret and scroll positions are preserved because DOM nodes persist.
+ *
+ * Styling: the Quantum skin of the q-ring site. Every colour is a CSS
+ * variable from src/core/dashboard-tokens.ts; no hex or rgba literal here.
  */
 import { h, render } from "preact";
 import { useState, useEffect, useRef, useMemo, useCallback } from "preact/hooks";
@@ -15,12 +17,16 @@ import htm from "htm";
 
 const html = htm.bind(h);
 
-const TOKEN = (window.__QRING__ && window.__QRING__.token) || "";
+const CONFIG = window.__QRING__ || {};
+const TOKEN = CONFIG.token || "";
+// Started for an MCP agent: operator-only cards (Canary) are not rendered.
+const AGENT_VIEW = CONFIG.agentView === true;
 const Q = TOKEN ? "?token=" + encodeURIComponent(TOKEN) : "";
 
-/* --- SVG icon library (neon gradient via #neon-grad in the page) --- */
+/* --- SVG icon library (stroke follows the CSS colour; the brand mark alone
+   uses the #neon-grad gradient) --- */
 const ic = (path) =>
-  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="url(#neon-grad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' +
   path +
   "</svg>";
 const icons = {
@@ -41,6 +47,10 @@ const icons = {
   memory: ic('<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="2" x2="9" y2="4"/><line x1="15" y1="2" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="22"/><line x1="15" y1="20" x2="15" y2="22"/><line x1="20" y1="9" x2="22" y2="9"/><line x1="20" y1="14" x2="22" y2="14"/><line x1="2" y1="9" x2="4" y2="9"/><line x1="2" y1="14" x2="4" y2="14"/>'),
   folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
   search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
+  canary: ic('<path d="M16 7h.01"/><path d="M3.4 18H12a8 8 0 0 0 8-8V7a4 4 0 0 0-7.28-2.3L2 20"/><path d="m20 7 2 .5-2 .5"/><path d="M10 18v3"/><path d="M14 17.75V21"/><path d="M7 18a6 6 0 0 0 3.84-10.61"/>'),
+  siren: ic('<path d="M7 18v-6a5 5 0 1 1 10 0v6"/><path d="M5 21a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-1a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2z"/><path d="M21 12h1"/><path d="M18.5 4.5 18 5"/><path d="M2 12h1"/><path d="M12 2v1"/><path d="m4.93 4.93.71.71"/>'),
+  shieldOk: ic('<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>'),
+  shieldX: ic('<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m14.5 9.5-5 5"/><path d="m9.5 9.5 5 5"/>'),
   lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
 };
 
@@ -105,19 +115,19 @@ function fmtDuration(seconds) {
 const Ico = ({ svg }) =>
   html`<span style="display:contents" dangerouslySetInnerHTML=${{ __html: svg }} />`;
 
-function CardTitle({ icon, title, aside, asideStyle }) {
+function CardTitle({ icon, title, aside, asideStyle, children }) {
   return html`<div class="card-title">
-    <${Ico} svg=${icon} />${title}
+    <${Ico} svg=${icon} />${title}${children}
     ${aside != null
       ? html`<span class="title-aside" style=${asideStyle || ""}>${aside}</span>`
       : null}
   </div>`;
 }
 
-function Card({ delay = 0, wide = false, style = "", children }) {
-  const cls = "card" + (wide ? " grid-wide" : "");
-  const st = "animation-delay:" + delay + "ms" + (style ? ";" + style : "");
-  return html`<div class=${cls} style=${st}>${children}</div>`;
+// Flat card: bg-card, 1 px border, radius 16 (no entrance animation).
+function Card({ wide = false, cls = "", style = "", children }) {
+  const className = "card" + (wide ? " grid-wide" : "") + (cls ? " " + cls : "");
+  return html`<div class=${className} style=${style || null}>${children}</div>`;
 }
 
 function Empty({ children, cta }) {
@@ -194,19 +204,19 @@ function KpiStrip({ snap }) {
     { label: "Reads (24h)", icon: icons.audit, value: reads, sub: writes + " writes · " + denied + " denied", cls: "" },
     { label: "Anomalies", icon: icons.anomaly, value: anomalies, sub: anomalies ? "investigate now" : "all clear", cls: anomalies ? "danger" : "green" },
   ];
-  return html`<section class="kpi-strip">
+  return html`<section class="kpi-strip" aria-label="At a glance">
     ${items.map(
       (k) => html`<div class="kpi" key=${k.label}>
-        <div class="kpi-label"><${Ico} svg=${k.icon} />${k.label}</div>
+        <div class="kpi-label">${k.label}</div>
         <div class="kpi-value ${k.cls}">${k.value}</div>
-        <div class="kpi-sub">${k.sub}</div>
+        <div class="kpi-sub" title=${k.sub}>${k.sub}</div>
       </div>`,
     )}
   </section>`;
 }
 
 /* --- Overview cards --- */
-function HealthCard({ snap, delay }) {
+function HealthCard({ snap }) {
   const h = snap.health;
   const total = h.total || 1;
   const r = 42, circ = 2 * Math.PI * r;
@@ -217,14 +227,16 @@ function HealthCard({ snap, delay }) {
     { v: h.noDecay, c: "var(--text-dim)" },
   ];
   let offset = 0;
+  // Zero-length slices are skipped: with round caps they would draw a dot.
   const rings = slices.map((sl, i) => {
+    if (!sl.v) return null;
     const len = (sl.v / total) * circ;
     const ring = html`<circle key=${i} cx="50" cy="50" r=${r} fill="none" stroke=${sl.c} stroke-width="12" stroke-dasharray=${len + " " + (circ - len)} stroke-dashoffset=${-offset} stroke-linecap="round" opacity="0.85" />`;
     offset += len;
     return ring;
   });
   const sc = snap.scopes || { global: 0, project: 0, team: 0, org: 0 };
-  return html`<${Card} delay=${delay}>
+  return html`<${Card}>
     <${CardTitle} icon=${icons.health} title="Health Summary" aside=${h.healthy + "/" + h.total + " healthy"} />
     <div class="health-row">
       <div class="donut-wrap">
@@ -249,9 +261,9 @@ function HealthCard({ snap, delay }) {
   <//>`;
 }
 
-function EnvCard({ snap, delay }) {
+function EnvCard({ snap }) {
   const env = snap.environment;
-  return html`<${Card} delay=${delay}>
+  return html`<${Card}>
     <${CardTitle} icon=${icons.environment} title="Environment" />
     ${env
       ? html`<div class="env-status"><span class="env-big env-pill ${envClass(env.env)}">${env.env}</span><span class="env-source">detected via ${env.source}</span></div>`
@@ -259,21 +271,21 @@ function EnvCard({ snap, delay }) {
   <//>`;
 }
 
-function ManifestCard({ snap, delay }) {
+function ManifestCard({ snap }) {
   const m = snap.manifest;
   if (!m) {
-    return html`<${Card} delay=${delay}>
+    return html`<${Card}>
       <${CardTitle} icon=${icons.manifest} title="Manifest" />
-      <${Empty} cta=${html`$ qring wizard <name>`}>No <code>.q-ring.json</code> manifest in this project.<//>
+      <${Empty} cta=${"$ qring wizard <name>"}>No <code>.q-ring.json</code> manifest in this project.<//>
     <//>`;
   }
   const ok = m.required - m.missing.length - m.expired.length - m.stale.length;
   const okPct = m.required ? Math.max(0, Math.round((ok / m.required) * 100)) : 100;
-  const fillCol = m.missing.length ? "var(--danger)" : m.expired.length || m.stale.length ? "var(--warning)" : "var(--green)";
+  const fillCol = m.missing.length ? "var(--danger)" : m.expired.length || m.stale.length ? "var(--warning)" : "var(--success)";
   const group = (label, keys, cls) =>
     html`<div class="label">${label} (${keys.length})</div><div>${keys.map((k) => html`<span class="key-pill ${cls}" key=${k}>${k}</span>`)}</div>`;
   const hasIssues = m.missing.length || m.expired.length || m.stale.length;
-  return html`<${Card} delay=${delay}>
+  return html`<${Card}>
     <${CardTitle} icon=${icons.manifest} title="Manifest" aside=${m.required + " required / " + m.declared + " declared"} />
     <div class="manifest-bars">
       <div class="manifest-row"><span style="min-width:54px">healthy</span><div class="manifest-bar"><div class="manifest-fill" style=${"width:" + okPct + "%;background:" + fillCol}></div></div><span>${okPct}%</span></div>
@@ -287,48 +299,55 @@ function ManifestCard({ snap, delay }) {
   <//>`;
 }
 
-function PolicyCard({ snap, delay }) {
+function PolicyCard({ snap }) {
   const p = snap.policy || { counts: {} };
   const c = p.counts || {};
   const has = p.hasMcpPolicy || p.hasExecPolicy || p.hasSecretPolicy;
   if (p.policyError) {
-    return html`<${Card} delay=${delay}>
+    return html`<${Card}>
       <${CardTitle} icon=${icons.policy} title="Policy" />
       <${Empty} cta=${html`fix <code>.q-ring.json</code>; every policy gate refuses until then`}>${p.policyError}<//>
     <//>`;
   }
   if (!has) {
-    return html`<${Card} delay=${delay}>
+    return html`<${Card}>
       <${CardTitle} icon=${icons.policy} title="Policy" />
       <${Empty} cta=${html`add <code>policy</code> to <code>.q-ring.json</code>`}>No governance policy declared.<//>
     <//>`;
   }
-  const Row = ({ label, value }) =>
-    html`<div class="policy-row"><span class="policy-label">${label}</span><span class="policy-value ${value ? "" : "zero"}">${value || "—"}</span></div>`;
+  // Read-only echo of the site's PolicyPanel: one row per rule, its mode as
+  // a small segment chip (allow / approve / deny / require / limit). A rule
+  // with nothing declared dims its row.
+  const Row = ({ label, value, mode }) =>
+    html`<li class="policy-row ${value ? "" : "off"}">
+      <span class="policy-label" title=${label}>${label}</span>
+      <span class="policy-value ${value ? "" : "zero"}">${value || "—"}</span>
+      <span class="policy-seg"><span class="seg-chip ${mode}">${mode}</span></span>
+    </li>`;
   const aside = [p.hasMcpPolicy ? "mcp" : "", p.hasExecPolicy ? "exec" : "", p.hasSecretPolicy ? "secrets" : ""].filter(Boolean).join(" · ") || "none";
-  return html`<${Card} delay=${delay}>
+  return html`<${Card}>
     <${CardTitle} icon=${icons.policy} title="Policy" aside=${aside} />
-    <div class="policy-rows">
-      <${Row} label="MCP allow tools" value=${c.allowTools} />
-      <${Row} label="MCP deny tools" value=${c.denyTools} />
-      <${Row} label="Denied keys" value=${c.deniedKeys} />
-      <${Row} label="Denied tags" value=${c.deniedTags} />
-      <${Row} label="Exec allow" value=${c.allowCommands} />
-      <${Row} label="Exec deny" value=${c.denyCommands} />
-      <${Row} label="Tag → approval" value=${c.requireApprovalForTags} />
-      <${Row} label="Tag → rotation" value=${c.requireRotationFormatForTags} />
-      ${p.maxTtlSeconds ? html`<${Row} label="Max TTL" value=${fmtDuration(p.maxTtlSeconds)} />` : null}
-      ${p.maxRuntimeSeconds ? html`<${Row} label="Max exec runtime" value=${fmtDuration(p.maxRuntimeSeconds)} />` : null}
-    </div>
+    <ul class="policy-rows" aria-label="Policy rules (read-only)">
+      <${Row} label="MCP tools" value=${c.allowTools} mode="allow" />
+      <${Row} label="MCP tools" value=${c.denyTools} mode="deny" />
+      <${Row} label="Keys" value=${c.deniedKeys} mode="deny" />
+      <${Row} label="Tags" value=${c.deniedTags} mode="deny" />
+      <${Row} label="Exec commands" value=${c.allowCommands} mode="allow" />
+      <${Row} label="Exec commands" value=${c.denyCommands} mode="deny" />
+      <${Row} label="Tags needing approval" value=${c.requireApprovalForTags} mode="approve" />
+      <${Row} label="Tags needing a rotation format" value=${c.requireRotationFormatForTags} mode="require" />
+      ${p.maxTtlSeconds ? html`<${Row} label="Max TTL" value=${fmtDuration(p.maxTtlSeconds)} mode="limit" />` : null}
+      ${p.maxRuntimeSeconds ? html`<${Row} label="Max exec runtime" value=${fmtDuration(p.maxRuntimeSeconds)} mode="limit" />` : null}
+    </ul>
   <//>`;
 }
 
 /* --- Quantum cards --- */
-function DecayCard({ snap, delay }) {
+function DecayCard({ snap }) {
   const withDecay = (snap.secrets || [])
     .filter((x) => x.decay && x.decay.timeRemaining)
     .sort((a, b) => (a.decay.secondsRemaining || 0) - (b.decay.secondsRemaining || 0));
-  return html`<${Card} delay=${delay}>
+  return html`<${Card}>
     <${CardTitle} icon=${icons.decay} title="Decay Timers" aside=${withDecay.length + " tracked"} />
     ${!withDecay.length
       ? html`<${Empty} cta="$ qring set KEY --ttl 86400">No secrets with decay configured.<//>`
@@ -345,7 +364,7 @@ function DecayCard({ snap, delay }) {
   <//>`;
 }
 
-function RotationCard({ snap, delay }) {
+function RotationCard({ snap }) {
   const all = snap.secrets || [];
   const scheduled = all.filter((x) => x.rotation && x.rotation.state !== "unscheduled");
   const due = scheduled
@@ -354,7 +373,7 @@ function RotationCard({ snap, delay }) {
   const overdue = due.filter((x) => x.rotation.state === "overdue").length;
   const aside = due.length ? due.length + " due · " + overdue + " overdue" : scheduled.length + " scheduled";
   const asideStyle = overdue ? "color:var(--danger)" : due.length ? "color:var(--warning)" : "";
-  return html`<${Card} delay=${delay}>
+  return html`<${Card}>
     <${CardTitle} icon=${icons.rotate} title="Rotation Reminders" aside=${aside} asideStyle=${asideStyle} />
     ${!scheduled.length
       ? html`<${Empty} cta="$ qring set KEY --rotate-every 90">No rotation reminders configured.<//>`
@@ -373,9 +392,9 @@ function RotationCard({ snap, delay }) {
   <//>`;
 }
 
-function SuperpositionCard({ snap, delay }) {
+function SuperpositionCard({ snap }) {
   const sup = (snap.secrets || []).filter((x) => x.type === "superposition" && x.environments && x.environments.length);
-  return html`<${Card} delay=${delay}>
+  return html`<${Card}>
     <${CardTitle} icon=${icons.superposition} title="Superposition" aside=${sup.length + " multi-env"} />
     ${!sup.length
       ? html`<${Empty} cta="$ qring set KEY --env prod">No secrets in superposition.<//>`
@@ -386,7 +405,7 @@ function SuperpositionCard({ snap, delay }) {
   <//>`;
 }
 
-function EntanglementCard({ snap, delay }) {
+function EntanglementCard({ snap }) {
   const pairs = snap.entanglements || [];
   const seen = new Set();
   const unique = pairs.filter((p) => {
@@ -418,7 +437,7 @@ function EntanglementCard({ snap, delay }) {
   });
   const trunc = (s) => (s.length > 14 ? s.slice(0, 12) + "…" : s);
 
-  return html`<${Card} delay=${delay}>
+  return html`<${Card}>
     <${CardTitle} icon=${icons.entangle} title="Entanglement" aside=${unique.length + " pair" + (unique.length === 1 ? "" : "s") + " · " + nodeNames.length + " keys"} />
     ${!unique.length
       ? html`<${Empty} cta="$ qring entangle KEY_A KEY_B">No entangled secrets.<//>`
@@ -444,12 +463,12 @@ function EntanglementCard({ snap, delay }) {
   <//>`;
 }
 
-function TunnelsCard({ snap, delay }) {
+function TunnelsCard({ snap }) {
   const tunnels = snap.tunnels || [];
-  return html`<${Card} delay=${delay}>
+  return html`<${Card}>
     <${CardTitle} icon=${icons.tunnel} title="Quantum Tunnels" aside=${tunnels.length + " live"} />
     ${!tunnels.length
-      ? html`<${Empty} cta=${html`$ qring tunnel create <value>`}>No active tunnels.<//>`
+      ? html`<${Empty} cta=${"$ qring tunnel create <value>"}>No active tunnels.<//>`
       : html`<div class="tunnel-list">${tunnels.map((t) => {
           const rem = t.expiresAt ? Math.max(0, Math.floor((t.expiresAt - Date.now()) / 1000)) : null;
           return html`<div class="tunnel-card" key=${t.id}>${t.id}<div class="tunnel-meta">
@@ -461,9 +480,9 @@ function TunnelsCard({ snap, delay }) {
 }
 
 /* --- Governance cards --- */
-function ApprovalsCard({ snap, delay }) {
+function ApprovalsCard({ snap }) {
   const list = snap.approvals || [];
-  return html`<${Card} delay=${delay}>
+  return html`<${Card}>
     <${CardTitle} icon=${icons.approve} title="Approvals" aside=${list.filter((a) => a.valid).length + " valid"} />
     ${!list.length
       ? html`<${Empty} cta=${'$ qring approve KEY --for 1800 --reason "..."'}>No active approvals.<//>`
@@ -478,9 +497,9 @@ function ApprovalsCard({ snap, delay }) {
   <//>`;
 }
 
-function HooksCard({ snap, delay }) {
+function HooksCard({ snap }) {
   const list = snap.hooks || [];
-  return html`<${Card} delay=${delay}>
+  return html`<${Card}>
     <${CardTitle} icon=${icons.hook} title="Hooks" aside=${list.filter((h) => h.enabled).length + " enabled / " + list.length} />
     ${!list.length
       ? html`<${Empty} cta=${'$ qring hook add --tag payments --action rotate --exec "..."'}>No hooks registered.<//>`
@@ -492,8 +511,8 @@ function HooksCard({ snap, delay }) {
   <//>`;
 }
 
-function MemoryCard({ snap, delay }) {
-  return html`<${Card} delay=${delay}>
+function MemoryCard({ snap }) {
+  return html`<${Card}>
     <${CardTitle} icon=${icons.memory} title="Agent Memory" />
     <div class="empty" style="display:flex;align-items:baseline;gap:8px;font-style:normal">
       <span style="font-size:1.6rem;font-weight:700;color:var(--text-primary);font-family:var(--font-display)">${snap.memoryKeys || 0}</span>
@@ -502,12 +521,51 @@ function MemoryCard({ snap, delay }) {
   <//>`;
 }
 
+/* --- Canary (operator view only) --- */
+// The site's CanaryCard, three states: none planted, armed, tripped in the
+// audit window. The snapshot field is empty on an agent-view dashboard and
+// the card is not rendered there at all.
+function CanaryCard({ snap }) {
+  const list = snap.canaries || [];
+  const tripped = list
+    .filter((c) => c.trips > 0)
+    .sort((a, b) => String(b.lastTripAt || "").localeCompare(String(a.lastTripAt || "")));
+  const state = !list.length ? "none" : tripped.length ? "tripped" : "armed";
+  const aside = !list.length
+    ? "none planted"
+    : tripped.length
+      ? tripped.length + " tripped · 24h"
+      : list.length + " armed";
+  return html`<${Card} cls=${"canary-card " + state}>
+    <${CardTitle} icon=${state === "tripped" ? icons.siren : icons.canary} title="Canary" aside=${aside} asideStyle=${state === "tripped" ? "color:var(--danger)" : ""} />
+    <p class="card-lede">A fake key planted as bait. Nothing honest ever reads it, so any read is an alarm.</p>
+    <div role="status">
+      ${state === "none"
+        ? html`<${Empty} cta=${"$ qring canary plant <KEY>"}>No canaries planted.<//>`
+        : html`${tripped.length
+            ? html`<div class="canary-trip">
+                <span class="canary-trip-by">Tripped by ${tripped[0].lastTripBy || "an unknown reader"}</span>
+                <span class="canary-trip-detail"><code>${tripped[0].key}</code> was read at ${fmtTime(tripped[0].lastTripAt)} (${fmtRelative(tripped[0].lastTripAt)}). The read is in the audit chain.</span>
+              </div>`
+            : null}
+            <ul class="canary-list" aria-label="Planted canaries">
+              ${list.map((c) => html`<li class="canary-item ${c.trips ? "tripped" : ""}" key=${c.scope + ":" + c.key}>
+                <span class="canary-dot" aria-hidden="true"></span>
+                <span class="canary-state" style=${c.trips ? "color:var(--danger)" : ""}>${c.trips ? "Tripped:" : "Armed:"}</span>
+                <span class="canary-key" title=${c.key}>${c.key}</span>
+                <span class="canary-meta">${c.trips ? c.trips + " trip" + (c.trips === 1 ? "" : "s") : c.plantedAt ? "planted " + fmtRelative(c.plantedAt) : c.scope}</span>
+              </li>`)}
+            </ul>`}
+    </div>
+  <//>`;
+}
+
 /* --- Anomalies --- */
-function AnomaliesCard({ snap, delay }) {
+function AnomaliesCard({ snap }) {
   const list = snap.anomalies || [];
   if (!list.length) {
-    return html`<${Card} delay=${delay} wide=${true}>
-      <${CardTitle} icon=${icons.anomaly} title="Anomaly Alerts" aside="all clear" asideStyle="color:var(--green)" />
+    return html`<${Card} wide=${true}>
+      <${CardTitle} icon=${icons.anomaly} title="Anomaly Alerts" aside="all clear" asideStyle="color:var(--success)" />
       <${Empty}>No anomalies detected — quantum field is stable.<//>
     <//>`;
   }
@@ -516,7 +574,7 @@ function AnomaliesCard({ snap, delay }) {
     : t === "burst" ? "$ qring audit --key … --action read"
     : t === "unusual-hour" ? '$ qring audit --action read --since "1am"'
     : "$ qring audit --limit 100";
-  return html`<${Card} delay=${delay} wide=${true}>
+  return html`<${Card} wide=${true}>
     <${CardTitle} icon=${icons.anomaly} title="Anomaly Alerts" aside=${list.length + " active"} asideStyle="color:var(--danger)" />
     <div class="anomaly-list">${list.map((a, i) => html`<div class="anomaly-card" key=${i}>
       <div class="anomaly-type">${a.type}</div>
@@ -616,7 +674,7 @@ function SecretsSection({ snap, query, setQuery, sort, setSort, searchRef }) {
 }
 
 /* --- Agent sessions --- */
-function SessionsCard({ snap, delay }) {
+function SessionsCard({ snap }) {
   const list = snap.sessions || [];
   const [open, setOpen] = useState({});
   const toggle = (id) => setOpen((o) => ({ ...o, [id]: !o[id] }));
@@ -624,7 +682,7 @@ function SessionsCard({ snap, delay }) {
     const secs = Math.max(0, Math.round((new Date(s.endedAt) - new Date(s.startedAt)) / 1000));
     return fmtDuration(secs);
   };
-  return html`<${Card} delay=${delay} wide=${true}>
+  return html`<${Card} wide=${true}>
     <${CardTitle} icon=${icons.audit} title="Agent Sessions (24h)" aside=${list.length + " session" + (list.length === 1 ? "" : "s")} />
     ${!list.length
       ? html`<${Empty} cta=${"$ qring audit:sessions"}>No agent activity in the last 24h. Sessions appear once an MCP client or airlock touches the ring.<//>`
@@ -641,12 +699,7 @@ function SessionsCard({ snap, delay }) {
           ${open[s.id]
             ? html`<div class="session-detail">
                 <div class="session-keys">${s.keys.length ? "keys: " + s.keys.join(", ") : "no keys touched"}</div>
-                <div class="audit-feed">${(s.recent || []).map((e, i) => html`<div class="audit-row" key=${i}>
-                  <span class="audit-ts" title=${e.timestamp}>${fmtTime(e.timestamp)}</span>
-                  <span class="audit-action ${e.action}">${e.action}</span>
-                  <span></span>
-                  <span><span class="audit-key">${e.key || "—"}</span> <span class="audit-detail">${e.detail || ""}</span></span>
-                </div>`)}</div>
+                <div class="audit-feed">${(s.recent || []).map((e, i) => html`<${AuditRow} e=${e} key=${i} />`)}</div>
               </div>`
             : null}
         </div>`)}</div>`}
@@ -654,7 +707,29 @@ function SessionsCard({ snap, delay }) {
 }
 
 /* --- Audit log --- */
-function AuditCard({ snap, delay, filter, setFilter }) {
+// One transcript line, like the site's ConsolePanel: time, action chip,
+// source chip, then the key and detail.
+function AuditRow({ e }) {
+  return html`<div class="audit-row">
+    <span class="audit-ts" title=${e.timestamp}>${fmtTime(e.timestamp)}</span>
+    <span class="audit-action ${e.action}">${e.action}</span>
+    <span class="audit-source">${e.source || ""}</span>
+    <span class="audit-line" title=${(e.key || "") + (e.detail ? " " + e.detail : "")}><span class="audit-key">${e.key || "—"}</span> <span class="audit-detail">${e.detail || ""}</span></span>
+  </div>`;
+}
+
+// The site's AuditChain status pill: "intact" or "broken at #n", computed
+// from the same verification as qring audit:verify.
+function ChainPill({ chain }) {
+  const ok = chain.intact;
+  const label = ok
+    ? "chain intact · " + chain.totalEvents + " events verified (same check as qring audit:verify)"
+    : "chain broken at event #" + chain.brokenAt + " · " + chain.validEvents + "/" + chain.totalEvents + " valid";
+  return html`<span class="chain-badge ${ok ? "ok" : "broken"}" role="status" title=${label} aria-label=${label}>
+      <${Ico} svg=${ok ? icons.shieldOk : icons.shieldX} />${ok ? "intact" : "broken at #" + chain.brokenAt}
+    </span><span class="chain-count">${chain.totalEvents} events</span>`;
+}
+function AuditCard({ snap, filter, setFilter }) {
   const events = snap.audit || [];
   const m = snap.auditMetrics || { byAction: {}, bySource: {} };
   const filtered = events.filter((e) => {
@@ -671,14 +746,12 @@ function AuditCard({ snap, delay, filter, setFilter }) {
   const allSources = ["cli", "mcp", "agent", "ci", "hook", "api"];
   const toggle = (field, val) => setFilter({ ...filter, [field]: filter[field] === val ? "" : val });
   const chain = snap.auditChain;
-  return html`<${Card} delay=${delay} wide=${true}>
-    <${CardTitle} icon=${icons.audit} title="Audit Log (24h)" aside=${filtered.length + " of " + events.length + " shown · window " + (m.windowSeconds || 86400) / 3600 + "h"} />
-    ${chain && chain.totalEvents > 0
-      ? html`<div class="chain-badge ${chain.intact ? "ok" : "broken"}" title="Hash-chain integrity — same check as qring audit:verify">
-          ${chain.intact
-            ? html`⛓ chain intact · ${chain.totalEvents} events verified`
-            : html`⛓ chain BROKEN at event #${chain.brokenAt} · ${chain.validEvents}/${chain.totalEvents} valid — run $ qring audit:verify`}
-        </div>`
+  return html`<${Card} wide=${true}>
+    <${CardTitle} icon=${icons.audit} title="Audit Log (24h)" aside=${filtered.length + " of " + events.length + " shown · window " + (m.windowSeconds || 86400) / 3600 + "h"}>
+      ${chain ? html`<${ChainPill} chain=${chain} />` : null}
+    <//>
+    ${chain && !chain.intact
+      ? html`<div class="chain-note">${chain.validEvents}/${chain.totalEvents} events valid · run $ qring audit:verify</div>`
       : null}
     <div class="audit-actions-strip">
       ${allActions.filter((a) => m.byAction[a]).length
@@ -694,12 +767,7 @@ function AuditCard({ snap, delay, filter, setFilter }) {
     </div>
     ${!filtered.length
       ? html`<${Empty}>No audit events match the filter.<//>`
-      : html`<div class="audit-feed">${filtered.slice(0, 80).map((e, i) => html`<div class="audit-row" key=${i}>
-          <span class="audit-ts" title=${e.timestamp}>${fmtTime(e.timestamp)}</span>
-          <span class="audit-action ${e.action}">${e.action}</span>
-          <span class="audit-source">${e.source}</span>
-          <span><span class="audit-key">${e.key || "—"}</span> <span class="audit-detail">${e.detail || ""}</span></span>
-        </div>`)}</div>`}
+      : html`<div class="audit-feed" role="log" aria-label="Audit events, newest first">${filtered.slice(0, 80).map((e, i) => html`<${AuditRow} e=${e} key=${i} />`)}</div>`}
   <//>`;
 }
 
@@ -770,30 +838,31 @@ function App() {
     <${Header} snap=${snap} paused=${paused} connState=${connState} onPause=${() => setPaused((p) => !p)} onRefresh=${forceRefresh} lastUpdate=${lastUpdate} />
     <${KpiStrip} snap=${snap} />
     <section class="grid">
-      <${HealthCard} snap=${snap} delay=${0} />
-      <${EnvCard} snap=${snap} delay=${60} />
-      <${ManifestCard} snap=${snap} delay=${120} />
-      <${PolicyCard} snap=${snap} delay=${180} />
+      <${HealthCard} snap=${snap} />
+      <${EnvCard} snap=${snap} />
+      <${ManifestCard} snap=${snap} />
+      <${PolicyCard} snap=${snap} />
     </section>
     <${SecretsSection} snap=${snap} query=${query} setQuery=${setQuery} sort=${sort} setSort=${setSort} searchRef=${searchRef} />
     <section class="grid">
-      <${DecayCard} snap=${snap} delay=${0} />
-      <${RotationCard} snap=${snap} delay=${60} />
-      <${SuperpositionCard} snap=${snap} delay=${120} />
-      <${EntanglementCard} snap=${snap} delay=${180} />
-      <${TunnelsCard} snap=${snap} delay=${240} />
+      <${DecayCard} snap=${snap} />
+      <${RotationCard} snap=${snap} />
+      <${SuperpositionCard} snap=${snap} />
+      <${EntanglementCard} snap=${snap} />
+      <${TunnelsCard} snap=${snap} />
     </section>
     <section class="grid">
-      <${ApprovalsCard} snap=${snap} delay=${0} />
-      <${HooksCard} snap=${snap} delay=${60} />
-      <${MemoryCard} snap=${snap} delay=${120} />
+      <${ApprovalsCard} snap=${snap} />
+      <${HooksCard} snap=${snap} />
+      ${AGENT_VIEW ? null : html`<${CanaryCard} snap=${snap} />`}
+      <${MemoryCard} snap=${snap} />
     </section>
     <section class="grid">
-      <${SessionsCard} snap=${snap} delay=${0} />
+      <${SessionsCard} snap=${snap} />
     </section>
     <section class="grid">
-      <${AnomaliesCard} snap=${snap} delay=${0} />
-      <${AuditCard} snap=${snap} delay=${60} filter=${auditFilter} setFilter=${setAuditFilter} />
+      <${AnomaliesCard} snap=${snap} />
+      <${AuditCard} snap=${snap} filter=${auditFilter} setFilter=${setAuditFilter} />
     </section>
     <p class="foot">
       <span>${"q-ring v" + snap.version + " · snapshot " + fmtTime(snap.timestamp) + " · " + (m.total || 0) + " audit events in last 24h"}</span>

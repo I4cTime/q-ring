@@ -927,10 +927,11 @@ What you get:
 - **Secrets table** — searchable, sortable view of every secret (key, scope, env, type, decay, tags, last read), with quick chips for `expired`, `stale`, and `protected` filters. Press `/` to focus the search box.
 - **Quantum cards** — decay timers, superposition states, entanglement pairs, and active quantum tunnels.
 - **Approvals & hooks** — live list of valid (and tampered) approval grants and every registered hook with its match summary.
+- **Canary** — planted honeytokens, armed or tripped in the last 24 hours, with who tripped them (hidden on a dashboard an MCP agent starts).
 - **Agent sessions (24h)** — one expandable row per MCP client or airlock session: agent label, source, window, event and denial counts, recent events.
 - **Agent memory** — count of encrypted memory keys persisted at `~/.config/q-ring/agent-memory.enc`.
 - **Anomaly alerts** — burst reads, off-hours access, tampered audit chain, and other suspicious patterns.
-- **Audit log (24h)** — filterable feed with action chips (`read`/`write`/`delete`/`export`), source chips (`cli`/`mcp`/`hook`/`agent`), and a free-text filter.
+- **Audit log (24h)** — hash-chain status pill (`intact` / `broken at #n`) and a filterable feed with action chips (`read`/`write`/`delete`/`export`), source chips (`cli`/`mcp`/`hook`/`agent`), and a free-text filter.
 
 Top-bar controls let you **pause** SSE updates (handy while reading the audit feed), **refresh** on demand, or jump to the raw JSON snapshot at `/api/status`. Keyboard shortcuts: `/` focus secrets search · `P` pause · `R` refresh.
 

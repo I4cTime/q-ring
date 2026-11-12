@@ -23,6 +23,14 @@ import { resetFakeKeyring } from "../helpers/fake-keyring.js";
 type Snapshot = {
   audit: Record<string, unknown>[];
   anomalies: { events: Record<string, unknown>[] }[];
+  canaries: {
+    key: string;
+    scope: string;
+    plantedAt?: string;
+    trips: number;
+    lastTripAt?: string;
+    lastTripBy?: string;
+  }[];
 };
 
 let auditDir: string;
@@ -41,12 +49,16 @@ beforeEach(async () => {
   getSecret("REAL_KEY", { scope: "global", source: "mcp" });
 
   // The dashboard the status_dashboard MCP tool starts.
-  dash = startDashboardServer({ port: 0, agentView: true });
+  await startDashboard(true);
+});
+
+async function startDashboard(agentView: boolean): Promise<void> {
+  dash = startDashboardServer({ port: 0, agentView });
   await new Promise<void>((resolve) => dash.server.once("listening", resolve));
   const addr = dash.server.address();
   if (addr === null || typeof addr === "string") throw new Error("no address");
   base = `http://127.0.0.1:${addr.port}`;
-});
+}
 
 afterEach(() => {
   dash.close();
@@ -66,6 +78,8 @@ function assertNoChain(snap: Snapshot): void {
   const json = JSON.stringify(snap.audit);
   expect(json).not.toContain("CANARY TRIPPED");
   expect(json).not.toContain("canary");
+  // The canaries list is the other way a tripwire could be read off the page.
+  expect(snap.canaries).toEqual([]);
 }
 
 describe("an agent-view dashboard ships no hash-chain links", () => {
@@ -87,5 +101,36 @@ describe("an agent-view dashboard ships no hash-chain links", () => {
     controller.abort();
     const frame = buffer.split("\n\n")[0].replace(/^data: /, "");
     assertNoChain(JSON.parse(frame) as Snapshot);
+  });
+});
+
+describe("an agent-view dashboard hides the Canary card", () => {
+  it("tells the client it is an agent view", async () => {
+    const res = await fetch(`${base}/?token=${dash.token}`);
+    expect(await res.text()).toContain("agentView:true");
+  });
+});
+
+describe("the operator's dashboard lists canaries with their trips", () => {
+  it("reports the planted canary, its trip count and who tripped it", async () => {
+    // Same vault and audit as above, served as the operator's `qring status`.
+    dash.close();
+    await startDashboard(false);
+
+    const res = await fetch(`${base}/api/status?token=${dash.token}`);
+    const snap = (await res.json()) as Snapshot;
+    expect(snap.canaries).toHaveLength(1);
+    const [canary] = snap.canaries;
+    expect(canary.key).toBe("TRAP_KEY");
+    expect(canary.scope).toBe("global");
+    expect(typeof canary.plantedAt).toBe("string");
+    expect(canary.trips).toBe(1);
+    expect(typeof canary.lastTripAt).toBe("string");
+    expect(canary.lastTripBy).toMatch(/^mcp/);
+    // The real key is not a canary.
+    expect(snap.canaries.map((c) => c.key)).not.toContain("REAL_KEY");
+
+    const page = await fetch(`${base}/?token=${dash.token}`);
+    expect(await page.text()).toContain("agentView:false");
   });
 });
