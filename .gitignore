@@ -23,6 +23,7 @@ package-lock.json
 !src/cli/commands/security.ts
 !src/mcp/tools/secrets.ts
 !src/services/list-secrets-filter.ts
+!src/core/dashboard-tokens.ts
 !src/__tests__/**/*secret*
 !src/__tests__/**/*token*
 !src/__tests__/**/*credential*
