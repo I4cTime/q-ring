@@ -54,7 +54,7 @@ export function getDashboardHtml(token: string, options: DashboardHtmlOptions = 
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <meta name="color-scheme" content="dark"/>
-<title>q-ring — quantum status</title>
+<title>q-ring - quantum status</title>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 ${tokensToCssVars()}

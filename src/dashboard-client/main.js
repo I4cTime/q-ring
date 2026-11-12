@@ -1,5 +1,5 @@
 /**
- * q-ring status dashboard — browser client (Preact + htm).
+ * q-ring status dashboard - browser client (Preact + htm).
  *
  * Bundled into `src/core/dashboard-client.ts` by scripts/build-dashboard-client.mjs
  * and inlined into the served HTML. Reads its auth token from window.__QRING__.
@@ -91,9 +91,9 @@ function fmtTime(ts) {
   );
 }
 function fmtRelative(ts) {
-  if (!ts) return "—";
+  if (!ts) return "-";
   const diff = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
-  if (isNaN(diff)) return "—";
+  if (isNaN(diff)) return "-";
   if (diff < 5) return "just now";
   if (diff < 60) return diff + "s ago";
   if (diff < 3600) return Math.floor(diff / 60) + "m ago";
@@ -101,7 +101,7 @@ function fmtRelative(ts) {
   return Math.floor(diff / 86400) + "d ago";
 }
 function fmtDuration(seconds) {
-  if (seconds == null) return "—";
+  if (seconds == null) return "-";
   if (seconds < 0) return "expired";
   if (seconds < 60) return seconds + "s";
   if (seconds < 3600) return Math.floor(seconds / 60) + "m";
@@ -321,7 +321,7 @@ function PolicyCard({ snap }) {
   const Row = ({ label, value, mode }) =>
     html`<li class="policy-row ${value ? "" : "off"}">
       <span class="policy-label" title=${label}>${label}</span>
-      <span class="policy-value ${value ? "" : "zero"}">${value || "—"}</span>
+      <span class="policy-value ${value ? "" : "zero"}">${value || "-"}</span>
       <span class="policy-seg"><span class="seg-chip ${mode}">${mode}</span></span>
     </li>`;
   const aside = [p.hasMcpPolicy ? "mcp" : "", p.hasExecPolicy ? "exec" : "", p.hasSecretPolicy ? "secrets" : ""].filter(Boolean).join(" · ") || "none";
@@ -566,7 +566,7 @@ function AnomaliesCard({ snap }) {
   if (!list.length) {
     return html`<${Card} wide=${true}>
       <${CardTitle} icon=${icons.anomaly} title="Anomaly Alerts" aside="all clear" asideStyle="color:var(--success)" />
-      <${Empty}>No anomalies detected — quantum field is stable.<//>
+      <${Empty}>No anomalies detected - quantum field is stable.<//>
     <//>`;
   }
   const hintFor = (t) =>
@@ -649,14 +649,14 @@ function SecretsSection({ snap, query, setQuery, sort, setSort, searchRef }) {
             <tbody>${filtered.map((r) => {
               const env = r.type === "superposition"
                 ? (r.environments || []).map((e) => html`<span class="env-pill ${envClass(e)}" style="margin-right:3px" key=${e}>${e}${e === r.defaultEnv ? " ✓" : ""}</span>`)
-                : html`<span class="env-pill env-default">—</span>`;
+                : html`<span class="env-pill env-default">-</span>`;
               const decayCell = r.decay && r.decay.timeRemaining
                 ? (() => {
                     const pct = Math.min(r.decay.lifetimePercent, 100);
                     const col = decayColor(pct, r.decay.isExpired);
                     return html`<span class="mini-decay"><span class="mini-decay-bar"><span class="mini-decay-fill" style=${"width:" + pct + "%;background:" + col}></span></span><span class="mini-decay-time" style=${"color:" + col}>${r.decay.isExpired ? "expired" : r.decay.timeRemaining}</span></span>`;
                   })()
-                : html`<span class="mini-decay-time">—</span>`;
+                : html`<span class="mini-decay-time">-</span>`;
               const tags = r.tags || [];
               return html`<tr key=${r.scope + ":" + r.key}>
                 <td class="col-key" title=${r.key}>${r.key}${r.requiresApproval ? html`<span class="protected-icon" title="requires approval for MCP read"><${Ico} svg=${icons.lock} /></span>` : null}</td>
@@ -714,7 +714,7 @@ function AuditRow({ e }) {
     <span class="audit-ts" title=${e.timestamp}>${fmtTime(e.timestamp)}</span>
     <span class="audit-action ${e.action}">${e.action}</span>
     <span class="audit-source">${e.source || ""}</span>
-    <span class="audit-line" title=${(e.key || "") + (e.detail ? " " + e.detail : "")}><span class="audit-key">${e.key || "—"}</span> <span class="audit-detail">${e.detail || ""}</span></span>
+    <span class="audit-line" title=${(e.key || "") + (e.detail ? " " + e.detail : "")}><span class="audit-key">${e.key || "-"}</span> <span class="audit-detail">${e.detail || ""}</span></span>
   </div>`;
 }
 
@@ -824,7 +824,7 @@ function App() {
     return () => document.removeEventListener("keydown", onKey);
   }, [forceRefresh]);
 
-  const lastUpdate = snap ? "updated " + fmtRelative(snap.timestamp) : "—";
+  const lastUpdate = snap ? "updated " + fmtRelative(snap.timestamp) : "-";
 
   if (!snap) {
     return html`<div class="container">
