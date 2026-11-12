@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.19.1] — 2026-11-12
+
 ### Added
 - **Canary card on the status dashboard.** The page `qring status` serves
   now shows the planted canaries in the site's three states: none planted
@@ -32,6 +34,9 @@ All notable changes to this project will be documented in this file.
   768 px and 480 px with no horizontal overflow, and pulses and transitions
   stop under `prefers-reduced-motion`. Binding, the per-launch token, the
   CSP and the self-contained page are unchanged (#164).
+- **The npm propagation waits are now 15 minutes.** Both waits in
+  `publish.yml` and the one in `update-homebrew.yml` allowed 5 minutes;
+  0.19.0 needed about 6 and both jobs had to be re-run (#160).
 
 ### Removed
 - **Smithery publishing is gone from the release pipeline.** Smithery shut
@@ -42,11 +47,6 @@ All notable changes to this project will be documented in this file.
   MCPB bundle is still built and attached to every GitHub release for
   Claude Desktop; the `publish.yml` job is now `mcpb` and the dispatch input
   `smithery_only` is now `mcpb_only` (#160).
-
-### Changed
-- **The npm propagation waits are now 15 minutes.** Both waits in
-  `publish.yml` and the one in `update-homebrew.yml` allowed 5 minutes;
-  0.19.0 needed about 6 and both jobs had to be re-run (#160).
 
 ## [0.19.0] — 2026-11-05
 
