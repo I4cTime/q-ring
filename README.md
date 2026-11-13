@@ -1,5 +1,7 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/I4cTime/q-ring/main/assets/social-card-optimized.jpg" alt="q-ring — never paste an API key into .env again" width="100%" />
+  <a href="https://qring.i4c.studio">
+    <img src="https://raw.githubusercontent.com/I4cTime/q-ring/main/assets/social-card-1200x630.jpg" alt="q-ring - your agent needs the key. It never needs to see it. Free, open-source CLI and MCP server. Local only." width="100%" />
+  </a>
 </div>
 
 # q-ring
@@ -915,7 +917,9 @@ qring agent --once
 
 ### Quantum Status Dashboard — Live Monitoring
 
-Launch a real-time dashboard in your browser that turns the entire quantum subsystem into one glanceable page. It's a single self-contained HTML page served locally — no cloud, no config, fully offline — built as a Preact + htm app (runtime bundled and inlined). It streams updates every 5 seconds via Server-Sent Events and diffs the DOM in place, so data refreshes without re-running entrance animations and your search input, caret, and scroll position are preserved across ticks.
+Launch a real-time dashboard in your browser that turns the entire quantum subsystem into one glanceable page. It's a single self-contained HTML page served locally — no cloud, no config, fully offline — built as a Preact + htm app (runtime bundled and inlined). It streams updates every 5 seconds via Server-Sent Events and diffs the DOM in place, so data refreshes without a flash and your search input, caret, and scroll position are preserved across ticks.
+
+Since 0.19.1 the page wears the same Quantum skin as [qring.i4c.studio](https://qring.i4c.studio): one token set (`src/core/dashboard-tokens.ts`, mirrored from the site's stylesheet) drives the palette, radii and motion, cards are flat with a 1 px border, the KPI strip is a row of tiles, and the layout holds at 768 px and 480 px with no horizontal scroll. Pulses and transitions stop under `prefers-reduced-motion`.
 
 What you get:
 
@@ -923,15 +927,15 @@ What you get:
 - **Health summary** — donut chart of healthy / stale / expired / no-decay secrets plus per-scope counts (global / project / team / org).
 - **Environment** — wavefunction collapse details: detected env, source, branch, and any project context.
 - **Manifest** — `.q-ring.json` summary with declared / required / missing / expired / stale keys.
-- **Policy** — at-a-glance view of MCP, exec, and secret policies (allow/deny tools, deny keys/tags, allow/deny commands, approval & rotation requirements).
+- **Policy** — at-a-glance view of MCP, exec, and secret policies (allow/deny tools, deny keys/tags, allow/deny commands, approval & rotation requirements), each rule's mode shown as a chip.
 - **Secrets table** — searchable, sortable view of every secret (key, scope, env, type, decay, tags, last read), with quick chips for `expired`, `stale`, and `protected` filters. Press `/` to focus the search box.
 - **Quantum cards** — decay timers, superposition states, entanglement pairs, and active quantum tunnels.
 - **Approvals & hooks** — live list of valid (and tampered) approval grants and every registered hook with its match summary.
-- **Canary** — planted honeytokens, armed or tripped in the last 24 hours, with who tripped them (hidden on a dashboard an MCP agent starts).
+- **Canary** — your planted honeytokens in three states: none yet (a one-line explainer and the `qring canary plant <KEY>` hint), armed (each key with a pulsing dot), or tripped in the last 24 hours (danger border, who tripped it and when). A dashboard an MCP agent starts never renders this card, the same way its audit feed drops canary events.
 - **Agent sessions (24h)** — one expandable row per MCP client or airlock session: agent label, source, window, event and denial counts, recent events.
 - **Agent memory** — count of encrypted memory keys persisted at `~/.config/q-ring/agent-memory.enc`.
 - **Anomaly alerts** — burst reads, off-hours access, tampered audit chain, and other suspicious patterns.
-- **Audit log (24h)** — hash-chain status pill (`intact` / `broken at #n`) and a filterable feed with action chips (`read`/`write`/`delete`/`export`), source chips (`cli`/`mcp`/`hook`/`agent`), and a free-text filter.
+- **Audit log (24h)** — hash-chain status pill (`intact` / `broken at #n`) and a console-style feed with action chips (`read`/`write`/`delete`/`export`), source chips (`cli`/`mcp`/`hook`/`agent`), and a free-text filter.
 
 Top-bar controls let you **pause** SSE updates (handy while reading the audit feed), **refresh** on demand, or jump to the raw JSON snapshot at `/api/status`. Keyboard shortcuts: `/` focus secrets search · `P` pause · `R` refresh.
 
@@ -1036,7 +1040,7 @@ q-ring includes a full MCP server with 46 tools for AI agent integration.
 | `verify_audit_chain` | Recompute the audit hash chain and report the first break point if tampered |
 | `export_audit` | Export audit events as jsonl, json, or csv for archival/SIEM |
 | `health_check` | Read-only scope sweep: decay/stale/expired counts plus current anomalies |
-| `status_dashboard` | Start a local SSE dashboard with live KPIs, secrets, hooks, and audit feed (returns a token-gated `127.0.0.1` URL) |
+| `status_dashboard` | Start a local SSE dashboard with live KPIs, secrets, hooks, and audit feed (returns a token-gated `127.0.0.1` URL; the canary card and canary audit events are hidden from a dashboard an agent starts) |
 | `agent_scan` | Multi-project health pass with optional `autoRotate` for expired secrets |
 
 ### Governance & Policy Tools
