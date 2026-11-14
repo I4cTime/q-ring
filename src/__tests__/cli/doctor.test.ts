@@ -13,6 +13,7 @@ import { sniffDefaultKeyring } from "../../cli/commands/doctor.js";
 import { clearPolicyCache } from "../../core/policy.js";
 import { createEnvelope } from "../../core/envelope.js";
 import { globalService } from "../../core/scope.js";
+import { queryAudit } from "../../core/observer.js";
 import { FakeEntry, resetFakeKeyring } from "../helpers/fake-keyring.js";
 
 interface Check {
@@ -142,8 +143,14 @@ describe.runIf(process.platform === "linux")("qring doctor keyring storage forma
     rmSync(dataHome, { recursive: true, force: true });
   });
 
-  const storageCheck = async () => {
-    const report = JSON.parse(await runDoctor("--json")) as { data: { checks: Check[] } };
+  type StorageCheck = Check & {
+    converted?: { key: string; scope: string }[];
+    convertFailed?: { key: string; scope: string }[];
+  };
+  const storageCheck = async (...extra: string[]) => {
+    const report = JSON.parse(await runDoctor("--json", ...extra)) as {
+      data: { checks: StorageCheck[] };
+    };
     return report.data.checks.find((c) => c.name === "keyring storage format")!;
   };
 
@@ -168,8 +175,10 @@ describe.runIf(process.platform === "linux")("qring doctor keyring storage forma
     const check = await storageCheck();
     expect(check.status).toBe("warn");
     expect(check.detail).toContain("passwordless and kept as plain text");
-    expect(check.detail).toContain("AT_RISK (global)");
-    expect(check.detail).toContain("qring get AT_RISK");
+    expect(check.detail).toContain("still at risk: AT_RISK (global)");
+    expect(check.detail).toContain("run `qring doctor --fix` to convert them");
+    expect(check.detail).not.toContain("qring get");
+    expect(check.converted).toBeUndefined();
     expect(check.detail).toContain("LOST (global) - value lost, set it again");
     expect(check.detail).not.toContain("FINE");
   });
@@ -179,6 +188,44 @@ describe.runIf(process.platform === "linux")("qring doctor keyring storage forma
     writeFileSync(join(dataHome, "keyrings", "login.keyring"), "[keyring]\n");
     const check = await storageCheck();
     expect(check.status).toBe("warn");
-    expect(check.detail).toContain("no stored entries are at risk");
+    expect(check.detail).toContain("no entries at risk in global scope and this project");
+  });
+
+  it("--fix converts at-risk entries before the backend probe and reports them", async () => {
+    mkdirSync(join(dataHome, "keyrings"));
+    writeFileSync(join(dataHome, "keyrings", "login.keyring"), "[keyring]\n");
+    new FakeEntry(globalService(), "AT_RISK").setPassword(JSON.stringify(createEnvelope('a"b')));
+    new FakeEntry(globalService(), "LOST").setPassword("");
+    const order: string[] = [];
+    const realSet = FakeEntry.prototype.setPassword;
+    vi.spyOn(FakeEntry.prototype, "setPassword").mockImplementation(function (
+      this: FakeEntry,
+      password: string,
+    ) {
+      order.push((this as unknown as { account: string }).account);
+      return realSet.call(this, password);
+    });
+
+    const check = await storageCheck("--fix");
+
+    expect(order.indexOf("AT_RISK")).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf("AT_RISK")).toBeLessThan(order.indexOf("PROBE"));
+    expect(check.status).toBe("warn");
+    expect(check.converted).toEqual([{ key: "AT_RISK", scope: "global" }]);
+    expect(check.convertFailed).toEqual([]);
+    expect(check.detail).toContain("converted to the safe form: AT_RISK (global)");
+    expect(check.detail).not.toContain("still at risk");
+    expect(check.detail).toContain("already empty: LOST (global)");
+    expect(new FakeEntry(globalService(), "AT_RISK").getPassword()).not.toContain("\\");
+    expect(queryAudit({}).some((e) => e.key === "AT_RISK" && e.detail === "storage form converted")).toBe(true);
+  });
+
+  it("keeps the displayed order of the checks", async () => {
+    const report = JSON.parse(await runDoctor("--json", "--fix")) as { data: { checks: Check[] } };
+    expect(report.data.checks.map((c) => c.name).slice(0, 3)).toEqual([
+      "node runtime",
+      "keyring backend",
+      "keyring storage format",
+    ]);
   });
 });

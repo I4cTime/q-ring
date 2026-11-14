@@ -74,3 +74,32 @@ describe("CLI on a key whose stored value is empty", () => {
     expect(fakeKeyringDump().get(`${globalService()}\0LOST_KEY`)).toContain("fresh-value");
   });
 });
+
+describe("qring list on a key whose stored value is empty", () => {
+  it("marks the row in the table", async () => {
+    const lines: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map(String).join(" "));
+    });
+    await run("list", "-g");
+    const row = lines.find((l) => l.includes("LOST_KEY"));
+    expect(row).toContain("empty - value lost");
+  });
+
+  it("adds emptyStored: true to its --json entry only", async () => {
+    const out: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array) => {
+      out.push(String(chunk));
+      return true;
+    });
+    vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+      out.push(args.map(String).join(" "));
+    });
+    new FakeEntry(globalService(), "GOOD_KEY").setPassword("plain-legacy");
+    await run("list", "-g", "--json");
+    const parsed = JSON.parse(out.join("")) as unknown;
+    const entries = (Array.isArray(parsed) ? parsed : (parsed as { data: unknown[] }).data) as Record<string, unknown>[];
+    expect(entries.find((e) => e.key === "LOST_KEY")?.emptyStored).toBe(true);
+    expect(entries.find((e) => e.key === "GOOD_KEY")).not.toHaveProperty("emptyStored");
+  });
+});

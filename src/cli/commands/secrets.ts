@@ -310,6 +310,7 @@ export function registerSecretsCommands(program: Command): void {
             accessCount: safeNum(e.envelope?.meta.accessCount),
             entangledCount: safeNum(e.envelope?.meta.entangled?.length),
             decay: e.decay ?? null,
+            ...(e.emptyStored ? { emptyStored: true } : {}),
           })),
         )
       ) {
@@ -344,6 +345,10 @@ export function registerSecretsCommands(program: Command): void {
 
         parts.push(c.dim("[") + scopeColor(scope) + c.dim("]"));
         parts.push(c.bold(key.padEnd(maxKeyLen)));
+
+        if (entry.emptyStored) {
+          parts.push(c.red("empty - value lost (see qring doctor)"));
+        }
 
         if (envs) {
           parts.push(c.magenta(`[${envs.join("|")}]`));

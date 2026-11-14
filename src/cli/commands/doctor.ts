@@ -13,7 +13,7 @@ import { homedir } from "node:os";
 import { verifyAuditChain } from "../../core/observer.js";
 import { getPolicySummary, PolicyConfigError } from "../../core/policy.js";
 import { countLegacyApprovals } from "../../core/approval.js";
-import { findStorageRisks } from "../../core/keyring.js";
+import { findStorageRisks, convertStorageRisks } from "../../core/keyring.js";
 import { activeBackend } from "../../core/backend.js";
 import { c, SYMBOLS } from "../../utils/colors.js";
 import { emitJson } from "../helpers.js";
@@ -26,6 +26,10 @@ interface CheckResult {
   name: string;
   status: CheckStatus;
   detail: string;
+  /** `--fix` on the keyring storage format check: keys rewritten in the safe form. */
+  converted?: { key: string; scope: string }[];
+  /** `--fix` on the keyring storage format check: keys whose rewrite failed. */
+  convertFailed?: { key: string; scope: string }[];
 }
 
 function auditDir(): string {
@@ -222,7 +226,7 @@ export function sniffDefaultKeyring(dir: string): KeyringFileSniff {
   return { format: "unknown", name };
 }
 
-function checkKeyringStorage(projectPath: string): CheckResult {
+function checkKeyringStorage(projectPath: string, fix: boolean): CheckResult {
   const name = "keyring storage format";
   if (process.platform !== "linux") {
     return { name, status: "ok", detail: `not applicable on ${process.platform}` };
@@ -249,25 +253,41 @@ function checkKeyringStorage(projectPath: string): CheckResult {
       break;
   }
 
+  // Rewrite from one in-memory snapshot first, then report what is left.
+  const conversion = fix ? convertStorageRisks({ projectPath }) : undefined;
   const risks = findStorageRisks({ projectPath });
   const label = (r: { key: string; scope: string }) => `${r.key} (${r.scope})`;
   const escape = risks.filter((r) => r.kind === "escape");
   const empty = risks.filter((r) => r.kind === "empty");
+  // Other projects (keyed by a hash of their path), team and org scopes
+  // cannot be enumerated from here.
+  const scanned = "global scope and this project";
   const parts = [
     `default keyring "${sniff.name}" is passwordless and kept as plain text on disk; q-ring stores entries that carry escapes in a safe form`,
   ];
+  if (conversion?.converted.length) {
+    parts.push(`converted to the safe form: ${conversion.converted.map(label).join(", ")}`);
+  }
+  if (conversion?.failed.length) {
+    parts.push(`could not convert: ${conversion.failed.map(label).join(", ")}`);
+  }
   if (risks.length === 0) {
-    parts.push("no stored entries are at risk");
+    parts.push(`no entries at risk in ${scanned}`);
   }
   if (escape.length) {
     parts.push(
-      `still at risk: ${escape.map(label).join(", ")} - read each once with this version to convert it, for example \`qring get ${escape[0].key}\``,
+      `still at risk: ${escape.map(label).join(", ")} - run \`qring doctor --fix\` to convert them`,
     );
   }
   if (empty.length) {
     parts.push(`already empty: ${empty.map(label).join(", ")} - value lost, set it again`);
   }
-  return { name, status: "warn", detail: parts.join("; ") };
+  return {
+    name,
+    status: "warn",
+    detail: parts.join("; "),
+    ...(conversion ? { converted: conversion.converted, convertFailed: conversion.failed } : {}),
+  };
 }
 
 function checkMcpBinary(): CheckResult {
@@ -298,13 +318,20 @@ export function registerDoctorCommand(program: Command): void {
     .description("Diagnose the q-ring installation (keyring, audit, manifest, MCP)")
     .option("--project-path <path>", "Project path (defaults to cwd)")
     .option("--json", "Output as JSON")
+    .option(
+      "--fix",
+      "Rewrite keyring entries still at risk in a passwordless GNOME keyring in the safe form",
+    )
     .action(async (cmd) => {
       const projectPath = cmd.projectPath ?? process.cwd();
 
+      // Runs before the backend probe: the probe writes to the keyring, and a
+      // passwordless GNOME keyring can drop at-risk entries on any write.
+      const storage = checkKeyringStorage(projectPath, cmd.fix === true);
       const checks: CheckResult[] = [
         checkNode(),
         await checkKeyringBackend(),
-        checkKeyringStorage(projectPath),
+        storage,
         checkAuditLog(),
         checkManifest(projectPath),
         checkPolicy(projectPath),
