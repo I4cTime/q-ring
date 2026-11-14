@@ -35,10 +35,10 @@ q-ring stores secrets in the OS keychain via [`@napi-rs/keyring`](https://github
 
 **Fix:**
 
-1. Upgrade every q-ring install on the machine together: the global CLI, the MCP server or plugin, and anything pinned in scripts. On Linux, q-ring now stores affected entries in a backslash-free form (`{"v":1,"enc":"b64",...}`), and a version older than this fix reads that form as a plain value and returns the wrapper text instead of the secret.
+1. Upgrade every q-ring install on the machine together: the global CLI, the MCP server or plugin, and anything pinned in scripts. On Linux, q-ring now stores affected entries in a backslash-free form (`{"v":1,"enc":"b64",...}`), and a version older than this fix reads that form as a plain value: it returns the wrapper text instead of the secret and rewrites the entry around it, losing its metadata. Restart MCP servers that were already running (editors keep the old process alive).
 2. Run `qring doctor` and read the "keyring storage format" check. It lists keys still stored in the at-risk form and keys that are already empty.
-3. Read each at-risk key once with the new version (`qring get KEY`); that rewrites it in the safe form.
-4. Set each empty key again with `qring set KEY`. `set` and `delete` work on an empty key, `list` still shows it, and `export` and `exec` skip it with a warning.
+3. Run `qring doctor --fix` to rewrite every at-risk key in the safe form in one pass. Do not convert them one by one with `qring get`: each read is a keyring write, and that write can make the daemon drop the others first. The check covers global scope and the current project, so run it in each project that has its own secrets.
+4. Set each empty key again with `qring set KEY`. `set` and `delete` work on an empty key, `list` shows it marked as empty, `has` reports it as absent, and `export` and `exec` skip it with a warning.
 
 A passwordless keyring keeps secrets as plain text on disk, so disk encryption is what protects them. Set a keyring password if you want the keyring itself encrypted.
 
