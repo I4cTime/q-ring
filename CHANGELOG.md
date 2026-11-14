@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.19.2] — 2026-11-14
+
 ### Added
 - **`qring doctor` checks the keyring storage format.** The new "keyring
   storage format" check warns on Linux when the default GNOME keyring is the
