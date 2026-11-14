@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **`qring doctor` checks the keyring storage format.** The new "keyring
+  storage format" check warns on Linux when the default GNOME keyring is the
+  passwordless plain text kind, lists keys still stored in the at-risk form
+  (read each once, e.g. `qring get KEY`, to rewrite it) and keys that are
+  already empty (set them again). It reads only the first 16 bytes of the
+  keyring file.
+
+### Fixed
+- **Secrets with quotes, backslashes or newlines were lost in a passwordless
+  GNOME keyring.** That keyring stores values as plain text and reads them
+  back with escape processing, so an entry whose value, description or tag
+  held a quote, backslash, newline or control character came back empty
+  after the daemon reloaded its file, and a newline could make the daemon
+  reject the whole file. On Linux, such an envelope is now stored in a
+  backslash-free form (`{"v":1,"enc":"b64",...}`); other envelopes are
+  unchanged and every platform reads both forms. Reading a key whose stored
+  value is empty now fails with an error that points to `qring doctor`
+  instead of silently rewriting an empty envelope. Upgrade every q-ring
+  install on the machine together (CLI, MCP server, pinned scripts): older
+  versions read the safe form as a plain value.
+
 ## [0.19.1] — 2026-11-12
 
 ### Added
