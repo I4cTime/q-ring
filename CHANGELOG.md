@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **`qring doctor` checks the keyring storage format.** The new "keyring
+  storage format" check warns on Linux when the default GNOME keyring is the
+  passwordless plain text kind, lists keys still stored in the at-risk form
+  and keys that are already empty (set them again). `qring doctor --fix`
+  rewrites the at-risk entries in the safe form in one pass, without
+  printing values or counting a read. The check reads only the first 16
+  bytes of the keyring file and covers global scope and the current project.
+- **Lost keys are marked.** `qring list`, `list --json` and MCP
+  `list_secrets` flag a key whose stored value is empty (`emptyStored`), and
+  MCP `exec_with_secrets` names the keys it skipped for that reason.
+
+### Fixed
+- **Secrets with quotes, backslashes or newlines were lost in a passwordless
+  GNOME keyring.** That keyring stores values as plain text and reads them
+  back with escape processing, so an entry whose value, description or tag
+  held a quote, backslash, newline or control character came back empty
+  after the daemon reloaded its file, and a newline could make the daemon
+  reject the whole file. On Linux, such an envelope is now stored in a
+  backslash-free form (`{"v":1,"enc":"b64",...}`); other envelopes are
+  unchanged and every platform reads both forms. Reading a key whose stored
+  value is empty now fails with an error that points to `qring doctor`
+  instead of silently rewriting an empty envelope; such a key counts as
+  absent for `has`, `import --skip-existing` and `lint --fix`, so those
+  store the value again. Upgrade every q-ring install on the machine
+  together (CLI, MCP server, pinned scripts) and restart MCP servers that
+  were already running: an older version reads the safe form as a plain
+  value and rewrites the entry around it, losing its metadata.
+
 ## [0.19.1] — 2026-11-12
 
 ### Added

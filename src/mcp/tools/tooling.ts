@@ -188,7 +188,9 @@ export function registerToolingTools(server: McpServer): void {
       if (toolBlock) return toolBlock;
 
       const o = opts(params);
-      const entries = listSecrets({ ...o, silent: true });
+      // A lost key (empty stored value) is not analyzed: it would read as
+      // merely never accessed. list_secrets shows it, marked emptyStored.
+      const entries = listSecrets({ ...o, silent: true }).filter((e) => !e.emptyStored);
       // Agent-facing: never count canary trip or alert records.
       const audit = queryAudit()
         .filter((e) => !AGENT_HIDDEN_ACTIONS.includes(e.action))

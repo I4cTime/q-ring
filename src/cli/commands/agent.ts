@@ -110,7 +110,9 @@ export function registerAgentCommands(program: Command): void {
     .option("--json", "Output as JSON")
     .action((cmd) => {
       const opts = buildOpts(cmd);
-      const entries = listSecrets({ ...opts, silent: true });
+      // A lost key (empty stored value) is not analyzed: it would read as
+      // merely never accessed. `qring list` shows it, marked empty.
+      const entries = listSecrets({ ...opts, silent: true }).filter((e) => !e.emptyStored);
       const audit = queryAudit({ limit: 1000 });
 
       const accessMap = new Map<string, number>();

@@ -132,3 +132,71 @@ describe("recordAccess", () => {
     expect(env.meta.accessCount).toBe(0);
   });
 });
+
+describe("serializeEnvelope safe form", () => {
+  // A backslash or any character below U+0020.
+  // eslint-disable-next-line no-control-regex
+  const UNSAFE = /[\\\u0000-\u001f]/;
+  const decodeInner = (stored: string) =>
+    Buffer.from(JSON.parse(stored).data, "base64").toString("utf8");
+
+  it("stores a value with a newline, a double quote and a backslash without escapes", () => {
+    const value = 'line one\nsaid "hi"\\path';
+    const env = createEnvelope(value);
+    const stored = serializeEnvelope(env, { safe: true });
+    expect(UNSAFE.test(stored)).toBe(false);
+    expect(JSON.parse(stored)).toMatchObject({ v: 1, enc: "b64" });
+    expect(decodeInner(stored)).toBe(JSON.stringify(env));
+    expect(collapseValue(parseEnvelope(stored)!)).toBe(value);
+  });
+
+  it("uses the safe form when only the metadata needs an escape", () => {
+    const env = createEnvelope("plain-value", { description: 'the "prod" key' });
+    const stored = serializeEnvelope(env, { safe: true });
+    expect(UNSAFE.test(stored)).toBe(false);
+    const parsed = parseEnvelope(stored)!;
+    expect(parsed.value).toBe("plain-value");
+    expect(parsed.meta.description).toBe('the "prod" key');
+  });
+
+  it("round trips a states map whose values carry escapes", () => {
+    const states = { dev: 'a"b', prod: "c\\d\ne" };
+    const env = createEnvelope("", { states, defaultEnv: "dev" });
+    const stored = serializeEnvelope(env, { safe: true });
+    expect(UNSAFE.test(stored)).toBe(false);
+    const parsed = parseEnvelope(stored)!;
+    expect(parsed.states).toEqual(states);
+    expect(collapseValue(parsed, "prod")).toBe("c\\d\ne");
+  });
+
+  it("round trips a control character", () => {
+    const value = "bell\u0007tab\tnul\u0000end\u0003";
+    const stored = serializeEnvelope(createEnvelope(value), { safe: true });
+    expect(UNSAFE.test(stored)).toBe(false);
+    expect(collapseValue(parseEnvelope(stored)!)).toBe(value);
+  });
+
+  it("keeps an envelope that needs no escape as plain JSON, byte for byte", () => {
+    const env = createEnvelope("sk-plain-123", { description: "no escapes", tags: ["a"] });
+    expect(serializeEnvelope(env, { safe: true })).toBe(JSON.stringify(env));
+  });
+
+  it("keeps plain JSON with safe: false even when it carries escapes", () => {
+    const env = createEnvelope('multi\nline "quoted"');
+    const stored = serializeEnvelope(env, { safe: false });
+    expect(stored).toBe(JSON.stringify(env));
+    expect(collapseValue(parseEnvelope(stored)!)).toBe('multi\nline "quoted"');
+  });
+
+  it("defaults safe to Linux only", () => {
+    const env = createEnvelope("a\nb");
+    const stored = serializeEnvelope(env);
+    expect(stored === JSON.stringify(env)).toBe(process.platform !== "linux");
+  });
+
+  it("does not treat a wrapper with garbage inner data as an envelope", () => {
+    expect(parseEnvelope('{"v":1,"enc":"b64","data":"!!!not base64!!!"}')).toBeNull();
+    const notEnvelope = Buffer.from('{"value":"x"}', "utf8").toString("base64");
+    expect(parseEnvelope(`{"v":1,"enc":"b64","data":"${notEnvelope}"}`)).toBeNull();
+  });
+});

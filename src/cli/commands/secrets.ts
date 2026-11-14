@@ -7,6 +7,7 @@ import {
   listSecrets,
   exportSecrets,
   getEnvelope,
+  EmptyStoredValueError,
   isValidRotateEveryDays,
   MAX_ROTATE_EVERY_DAYS,
   type SetSecretOptions,
@@ -125,7 +126,15 @@ export function registerSecretsCommands(program: Command): void {
       // A canary flag survives overwrites by design (an agent must not be
       // able to launder a tripwire away) — warn the operator so a real
       // credential doesn't quietly inherit the alarm.
-      const priorEnvelope = getEnvelope(key, opts);
+      // A key whose stored value is empty (lost) can be set again: there is
+      // no prior envelope to inherit from.
+      let priorEnvelope: ReturnType<typeof getEnvelope>;
+      try {
+        priorEnvelope = getEnvelope(key, opts);
+      } catch (err) {
+        if (!(err instanceof EmptyStoredValueError)) throw err;
+        priorEnvelope = null;
+      }
       if (priorEnvelope?.envelope.meta.canary) {
         console.error(
           c.yellow(
@@ -301,6 +310,7 @@ export function registerSecretsCommands(program: Command): void {
             accessCount: safeNum(e.envelope?.meta.accessCount),
             entangledCount: safeNum(e.envelope?.meta.entangled?.length),
             decay: e.decay ?? null,
+            ...(e.emptyStored ? { emptyStored: true } : {}),
           })),
         )
       ) {
@@ -335,6 +345,10 @@ export function registerSecretsCommands(program: Command): void {
 
         parts.push(c.dim("[") + scopeColor(scope) + c.dim("]"));
         parts.push(c.bold(key.padEnd(maxKeyLen)));
+
+        if (entry.emptyStored) {
+          parts.push(c.red("empty - value lost (see qring doctor)"));
+        }
 
         if (envs) {
           parts.push(c.magenta(`[${envs.join("|")}]`));

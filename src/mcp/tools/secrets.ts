@@ -12,6 +12,7 @@ import {
   entangleSecrets,
   disentangleSecrets,
   exportSecrets,
+  EmptyStoredValueError,
 } from "../../core/keyring.js";
 import { checkDecay } from "../../core/envelope.js";
 import { rotationStatus } from "../../core/rotation.js";
@@ -68,7 +69,7 @@ export function registerSecretTools(server: McpServer): void {
     [
       "[secrets] List secret keys and quantum metadata in the requested scope, never the values.",
       "Use to discover what secrets exist before reading or writing; pair with `inspect_secret` for full metadata on one key, `analyze_secrets` for usage trends, or `health_check` for decay/anomaly summaries.",
-      "Read-only; safe to call repeatedly. Returns JSON `{ ok, data: { entries: [...] } }` where each entry has scope, key, stateKeys (env names if superposed), expired, stale, lifetimePercent, timeRemaining, entangledCount, accessCount.",
+      "Read-only; safe to call repeatedly. Returns JSON `{ ok, data: { entries: [...] } }` where each entry has scope, key, stateKeys (env names if superposed), expired, stale, lifetimePercent, timeRemaining, entangledCount, accessCount, and emptyStored: true when the stored value is empty (lost by the OS keyring; reading it fails, set it again).",
     ].join(" "),
     {
       scope,
@@ -129,6 +130,7 @@ export function registerSecretTools(server: McpServer): void {
         timeRemaining: e.decay?.timeRemaining ?? null,
         entangledCount: e.envelope?.meta.entangled?.length ?? 0,
         accessCount: e.envelope?.meta.accessCount ?? 0,
+        ...(e.emptyStored ? { emptyStored: true } : {}),
       }));
 
       return text(JSON.stringify({ ok: true, data: { entries: rows } }, null, 2));
@@ -221,7 +223,15 @@ export function registerSecretTools(server: McpServer): void {
       const o = opts(params);
 
       if (params.env) {
-        const existing = getEnvelope(params.key, o);
+        // A key whose stored value is empty (lost) can be set again: there
+        // is no prior envelope to merge states from.
+        let existing: ReturnType<typeof getEnvelope>;
+        try {
+          existing = getEnvelope(params.key, o);
+        } catch (err) {
+          if (!(err instanceof EmptyStoredValueError)) throw err;
+          existing = null;
+        }
         const states = existing?.envelope?.states ?? {};
         states[params.env] = params.value;
 

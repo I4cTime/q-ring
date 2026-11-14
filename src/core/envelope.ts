@@ -166,9 +166,26 @@ export function createEnvelope(
   };
 }
 
+/**
+ * True when `parsed` is the safe form `{ v: 1, enc: "b64", data }` that
+ * serializeEnvelope writes on Linux for an envelope whose JSON carries a
+ * backslash escape (see docs/stability.md, "Storage").
+ */
+function isSafeWrapper(parsed: unknown): parsed is { v: 1; enc: "b64"; data: string } {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false;
+  const o = parsed as Record<string, unknown>;
+  return o.v === 1 && o.enc === "b64" && typeof o.data === "string";
+}
+
 export function parseEnvelope(raw: string): QuantumEnvelope | null {
   try {
-    const parsed: unknown = JSON.parse(raw);
+    let parsed: unknown = JSON.parse(raw);
+    // Safe form, read on every platform. A wrapper whose inner text is not a
+    // valid envelope is not an envelope: it falls to the plain-value path
+    // like any other non-envelope string.
+    if (isSafeWrapper(parsed)) {
+      parsed = JSON.parse(Buffer.from(parsed.data, "base64").toString("utf8"));
+    }
     const r = QuantumEnvelopeSchema.safeParse(parsed);
     if (r.success) {
       return r.data as QuantumEnvelope;
@@ -196,8 +213,26 @@ export function wrapLegacy(rawValue: string): QuantumEnvelope {
   };
 }
 
-export function serializeEnvelope(envelope: QuantumEnvelope): string {
-  return JSON.stringify(envelope);
+/**
+ * Serialize an envelope for the OS keyring. On Linux (`safe` defaults to
+ * `process.platform === "linux"`), an envelope whose JSON text contains a
+ * backslash is stored in the safe form
+ * `{"v":1,"enc":"b64","data":"<base64 of the UTF-8 envelope JSON>"}`, which
+ * contains no backslash and no control character: a passwordless GNOME
+ * keyring unescapes each secret when it reads its plain text file back,
+ * which empties a value carrying an escape. JSON.stringify never emits a raw
+ * control character, so the backslash test covers quotes, backslashes,
+ * newlines, control characters and lone surrogates. Every other envelope is
+ * stored as plain JSON, as before.
+ */
+export function serializeEnvelope(
+  envelope: QuantumEnvelope,
+  opts: { safe?: boolean } = {},
+): string {
+  const json = JSON.stringify(envelope);
+  const safe = opts.safe ?? process.platform === "linux";
+  if (!safe || !json.includes("\\")) return json;
+  return JSON.stringify({ v: 1, enc: "b64", data: Buffer.from(json, "utf8").toString("base64") });
 }
 
 /**

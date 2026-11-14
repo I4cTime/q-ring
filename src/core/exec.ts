@@ -18,7 +18,7 @@ import {
 } from "./child-env.js";
 import { StringDecoder } from "node:string_decoder";
 import { Transform } from "node:stream";
-import { listSecrets, getSecret, type KeyringOptions } from "./keyring.js";
+import { listSecrets, getSecret, EmptyStoredValueError, type KeyringOptions } from "./keyring.js";
 import { checkDecay } from "./envelope.js";
 import { checkExecPolicy, getExecMaxRuntime, getPolicyRoot } from "./policy.js";
 import { readProjectConfig } from "./collapse.js";
@@ -313,19 +313,44 @@ export async function execCommand(opts: ExecOptions): Promise<ExecResult> {
     note = noManifestNote(skipped);
   }
 
+  // A lost value is skipped, not injected as "" and not allowed to fail the
+  // whole run. It can be empty in the listing, or be emptied by the keyring
+  // between the listing and the read (a passwordless GNOME keyring drops an
+  // at-risk entry when it reloads its file, which a write can trigger).
+  const emptyKeys: string[] = [];
+  const skipEmpty = (key: string) => {
+    emptyKeys.push(key);
+    if ((opts.source ?? "cli") !== "mcp") {
+      process.stderr.write(
+        `[QRING] not injecting "${key}": its stored value is empty, likely lost by the OS keyring (see qring doctor)\n`,
+      );
+    }
+  };
+
   for (const entry of entries) {
+    if (entry.emptyStored) {
+      skipEmpty(entry.key);
+      continue;
+    }
     if (entry.envelope) {
       const decay = checkDecay(entry.envelope);
       if (decay.isExpired) continue;
     }
 
-    const val = getSecret(entry.key, {
-      scope: entry.scope,
-      projectPath: opts.projectPath,
-      env: opts.env,
-      source: opts.source ?? "cli",
-      silent: false, // Log access for execution
-    });
+    let val: string | null;
+    try {
+      val = getSecret(entry.key, {
+        scope: entry.scope,
+        projectPath: opts.projectPath,
+        env: opts.env,
+        source: opts.source ?? "cli",
+        silent: false, // Log access for execution
+      });
+    } catch (err) {
+      if (!(err instanceof EmptyStoredValueError)) throw err;
+      skipEmpty(entry.key);
+      continue;
+    }
 
     if (val !== null) {
       envMap[entry.key] = val;
@@ -333,6 +358,11 @@ export async function execCommand(opts: ExecOptions): Promise<ExecResult> {
         secretsToRedact.set(val, entry.key);
       }
     }
+  }
+
+  if (emptyKeys.length && (opts.source ?? "cli") === "mcp") {
+    const emptyNote = `not injected, stored value empty (likely lost by the OS keyring): ${emptyKeys.join(", ")}`;
+    note = note ? `${note}; ${emptyNote}` : emptyNote;
   }
 
   const result = await spawnRedacted({

@@ -3,7 +3,7 @@
 Start with the built-in self-check — it covers the most common failures in one shot:
 
 ```bash
-qring doctor          # keyring backend, audit log, manifest, policy, qring-mcp on PATH
+qring doctor          # keyring backend and storage format, audit log, manifest, policy, qring-mcp on PATH
 qring doctor --json   # same, machine-readable
 ```
 
@@ -26,6 +26,21 @@ q-ring stores secrets in the OS keychain via [`@napi-rs/keyring`](https://github
 
 - **Linux desktop:** make sure the login keyring is unlocked (it usually unlocks with your session). KDE users need `ksecretservice` or GNOME Keyring installed.
 - **Docker:** containers have no OS keychain — the Docker image is for the MCP protocol surface and experiments, not durable storage (see the README's Docker section).
+
+## A secret reads back empty on Linux (passwordless GNOME keyring)
+
+**Symptom:** `qring get KEY` fails with `Secret "KEY" (global scope): the stored value is empty, likely lost by the OS keyring. Run `qring doctor` to check the keyring, then set the secret again.` With an older q-ring the same entry reads as an empty value.
+
+**Cause:** a GNOME keyring without a password is stored as a plain text file. The daemon writes each value raw but reads the file back with escape processing, so a q-ring entry whose stored JSON contained a backslash escape (a quote, backslash, newline or control character in the value, description or a tag) came back empty the next time the daemon reloaded its file. That is often right after the next write to the keyring, at the latest on a daemon restart or reboot. A newline escape could make the daemon reject the whole file and leave every secret in that keyring unreadable. Encrypted GNOME keyrings, KWallet, macOS Keychain, Windows Credential Manager and the file backend are not affected.
+
+**Fix:**
+
+1. Upgrade every q-ring install on the machine together: the global CLI, the MCP server or plugin, and anything pinned in scripts. On Linux, q-ring now stores affected entries in a backslash-free form (`{"v":1,"enc":"b64",...}`), and a version older than this fix reads that form as a plain value: it returns the wrapper text instead of the secret and rewrites the entry around it, losing its metadata. Restart MCP servers that were already running (editors keep the old process alive).
+2. Run `qring doctor` and read the "keyring storage format" check. It lists keys still stored in the at-risk form and keys that are already empty.
+3. Run `qring doctor --fix` to rewrite every at-risk key in the safe form in one pass. Do not convert them one by one with `qring get`: each read is a keyring write, and that write can make the daemon drop the others first. The check covers global scope and the current project, so run it in each project that has its own secrets.
+4. Set each empty key again with `qring set KEY`. `set` and `delete` work on an empty key, `list` shows it marked as empty, `has` reports it as absent, and `export` and `exec` skip it with a warning.
+
+A passwordless keyring keeps secrets as plain text on disk, so disk encryption is what protects them. Set a keyring password if you want the keyring itself encrypted.
 
 ## MCP server not connecting (Cursor / Kiro / Claude Code)
 
