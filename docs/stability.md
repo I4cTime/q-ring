@@ -295,11 +295,17 @@ and, for a newline escape, makes the daemon reject the whole file. An
 envelope that needs no escape is stored as plain JSON, as before. Every
 platform reads both forms. A q-ring older than the release that added the
 safe form (the one after 0.19.1) reads such an entry as a plain value, the
-wrapper text, so all q-ring installs on one machine are upgraded together.
+wrapper text, and because a read writes the entry back it replaces the
+entry with a new envelope around that text, dropping its metadata. All
+q-ring installs on one machine are upgraded together, and MCP servers that
+were already running are restarted. `qring doctor --fix` rewrites entries
+that are still stored as plain JSON with a backslash into the safe form.
 
 An empty stored string is never a valid entry. Reading one fails with an
 error that names the key; it is not treated as a plain value and nothing
-is written back.
+is written back. Such a key counts as absent for `has` and for
+skip-existing checks, stays visible in `list` marked as empty, and can be
+set again or deleted.
 
 Other keychain entries q-ring owns:
 
