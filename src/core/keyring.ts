@@ -15,7 +15,6 @@ import {
   type Environment,
   createEnvelope,
   parseEnvelope,
-  isSafeForm,
   wrapLegacy,
   serializeEnvelope,
   collapseValue,
@@ -298,7 +297,15 @@ export function getSecret(
         if (isExpired) {
           const jitConfigSource = value;
           withJitEnvelopeLock(service, key, () => {
-            const latest = readEnvelope(service, key);
+            let latest: QuantumEnvelope | null;
+            try {
+              latest = readEnvelope(service, key);
+            } catch (err) {
+              // Emptied by the keyring since the read above: provision from
+              // the envelope in hand, whose write-back rescues the entry.
+              if (!(err instanceof EmptyStoredValueError)) throw err;
+              latest = envelope;
+            }
             if (!latest?.meta.jitProvider) return;
             let innerExpired = true;
             if (
@@ -334,8 +341,11 @@ export function getSecret(
     // first so a value written concurrently between our read above and this
     // write-back is preserved — the access counter is deliberately
     // last-write-wins, but the secret value must never be clobbered (B4).
+    // An entry the keyring emptied since the read above (a passwordless GNOME
+    // keyring can drop it when it reloads its file) is written back from the
+    // envelope in hand, in the safe form, which rescues it.
     if (!opts.silent) {
-      const latest = readEnvelope(service, key) ?? envelope;
+      const latest = readEnvelopeOrNull(service, key) ?? envelope;
       writeEnvelope(service, key, recordAccess(latest));
       logAudit({ action: "read", key, scope, env, source });
       // Honeytoken trip: still return the (fake) value so the reader has no
@@ -762,8 +772,8 @@ export function hasSecret(
     try {
       envelope = readEnvelope(service, key);
     } catch (err) {
-      // The key is there, its value is lost: it still exists.
-      if (err instanceof EmptyStoredValueError) return true;
+      // A lost value counts as absent: try the next scope.
+      if (err instanceof EmptyStoredValueError) continue;
       throw err;
     }
     if (envelope) {
@@ -792,7 +802,8 @@ export function secretExists(key: string, opts: KeyringOptions = {}): boolean {
     try {
       envelope = readEnvelope(service, key);
     } catch (err) {
-      if (err instanceof EmptyStoredValueError) return true;
+      // A lost value counts as absent, so skip-existing writers restore it.
+      if (err instanceof EmptyStoredValueError) continue;
       throw err;
     }
     if (envelope && !checkDecay(envelope).isExpired) return true;
@@ -879,20 +890,21 @@ export interface StorageRisk {
   /**
    * "escape": stored as plain JSON that contains a backslash, so a
    * passwordless GNOME keyring empties it the next time the daemon reloads
-   * its file (often on the next write, at the latest on restart); reading it
-   * once with this version rewrites it in the safe form.
+   * its file (often on the next write, at the latest on restart);
+   * `convertStorageRisks` (`qring doctor --fix`) rewrites it in the safe form.
    * "empty": the stored value is already empty (lost).
    */
   kind: "escape" | "empty";
 }
 
 /**
- * Scan the raw stored strings in global scope and, with a projectPath,
- * project scope for entries a plaintext keyring can damage. Returns key
- * names and scopes only, never values. Read-only: no writes, no audit
- * events, no access counts.
+ * One snapshot of the raw stored strings in global scope and, with a
+ * projectPath, that project's scope. Other projects are addressed by a hash
+ * of their path and cannot be enumerated.
  */
-export function findStorageRisks(opts: { projectPath?: string } = {}): StorageRisk[] {
+function storedSnapshot(
+  opts: { projectPath?: string },
+): { service: string; scope: Scope; key: string; raw: string }[] {
   const services: { service: string; scope: Scope }[] = [
     { service: globalService(), scope: "global" },
   ];
@@ -900,7 +912,7 @@ export function findStorageRisks(opts: { projectPath?: string } = {}): StorageRi
     services.push({ service: projectService(opts.projectPath), scope: "project" });
   }
 
-  const risks: StorageRisk[] = [];
+  const out: { service: string; scope: Scope; key: string; raw: string }[] = [];
   for (const { service, scope } of services) {
     let credentials: { account: string; password: string }[];
     try {
@@ -909,14 +921,67 @@ export function findStorageRisks(opts: { projectPath?: string } = {}): StorageRi
       continue; // keyring unavailable; the backend check reports that
     }
     for (const cred of credentials) {
-      if (cred.password === "") {
-        risks.push({ key: cred.account, scope, kind: "empty" });
-      } else if (cred.password.includes("\\") && !isSafeForm(cred.password)) {
-        risks.push({ key: cred.account, scope, kind: "escape" });
-      }
+      out.push({ service, scope, key: cred.account, raw: cred.password });
     }
   }
-  return risks.sort((a, b) => a.key.localeCompare(b.key) || a.scope.localeCompare(b.scope));
+  return out.sort((a, b) => a.key.localeCompare(b.key) || a.scope.localeCompare(b.scope));
+}
+
+/** The risk kind of one raw stored string, or null when it is safe as stored. */
+function riskKind(raw: string): StorageRisk["kind"] | null {
+  if (raw === "") return "empty";
+  // The safe form never contains a backslash, so any backslash is at risk.
+  if (raw.includes("\\")) return "escape";
+  return null;
+}
+
+/**
+ * Scan the raw stored strings (global scope and, with a projectPath, that
+ * project's scope) for entries a plaintext keyring can damage. Returns key
+ * names and scopes only, never values. Read-only: no writes, no audit
+ * events, no access counts.
+ */
+export function findStorageRisks(opts: { projectPath?: string } = {}): StorageRisk[] {
+  const risks: StorageRisk[] = [];
+  for (const { key, scope, raw } of storedSnapshot(opts)) {
+    const kind = riskKind(raw);
+    if (kind) risks.push({ key, scope, kind });
+  }
+  return risks;
+}
+
+export interface StorageConversion {
+  converted: { key: string; scope: Scope }[];
+  failed: { key: string; scope: Scope }[];
+}
+
+/**
+ * Rewrite every "escape" entry (see findStorageRisks) in the safe form, from
+ * one snapshot of the stored strings held in memory, so it succeeds even if
+ * the keyring empties the stored copy meanwhile. Bypasses getSecret: no
+ * access count, no canary alert, no template resolution, and expired
+ * entries are converted too. Never prints or returns a value. Writes one
+ * audit event per converted key. The safe form is written on Linux only
+ * (serializeEnvelope's default), the one platform where doctor calls this.
+ */
+export function convertStorageRisks(opts: { projectPath?: string } = {}): StorageConversion {
+  const result: StorageConversion = { converted: [], failed: [] };
+  for (const { service, scope, key, raw } of storedSnapshot(opts)) {
+    if (riskKind(raw) !== "escape") continue;
+    try {
+      const envelope = parseEnvelope(raw) ?? wrapLegacy(raw);
+      new Entry(service, key).setPassword(serializeEnvelope(envelope));
+      result.converted.push({ key, scope });
+    } catch {
+      result.failed.push({ key, scope });
+    }
+  }
+  // Audit after every write: an audit write touches the keyring too, and the
+  // snapshot is what each conversion is written from.
+  for (const { key, scope } of result.converted) {
+    logAudit({ action: "write", key, scope, source: "cli", detail: "storage form converted" });
+  }
+  return result;
 }
 
 /**

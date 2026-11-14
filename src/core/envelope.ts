@@ -177,18 +177,6 @@ function isSafeWrapper(parsed: unknown): parsed is { v: 1; enc: "b64"; data: str
   return o.v === 1 && o.enc === "b64" && typeof o.data === "string";
 }
 
-/**
- * True when a stored string is the safe form. Used by the storage-risk scan
- * to tell an already-converted entry from a plain one.
- */
-export function isSafeForm(raw: string): boolean {
-  try {
-    return isSafeWrapper(JSON.parse(raw));
-  } catch {
-    return false;
-  }
-}
-
 export function parseEnvelope(raw: string): QuantumEnvelope | null {
   try {
     let parsed: unknown = JSON.parse(raw);

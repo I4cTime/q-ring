@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,6 +11,7 @@ vi.mock("@napi-rs/keyring", async () => {
 import { FakeEntry, fakeKeyringDump, resetFakeKeyring } from "../helpers/fake-keyring.js";
 import {
   EmptyStoredValueError,
+  convertStorageRisks,
   deleteSecret,
   exportSecrets,
   findStorageRisks,
@@ -21,7 +22,9 @@ import {
   secretExists,
   setSecret,
 } from "../../core/keyring.js";
-import { createEnvelope, parseEnvelope, isSafeForm, collapseValue } from "../../core/envelope.js";
+import { createEnvelope, parseEnvelope, collapseValue } from "../../core/envelope.js";
+import { importDotenv } from "../../core/import.js";
+import { lintFiles } from "../../core/linter.js";
 import { globalService, projectService } from "../../core/scope.js";
 import { queryAudit } from "../../core/observer.js";
 import { execCommand } from "../../core/exec.js";
@@ -82,10 +85,39 @@ describe("a key whose stored value is empty", () => {
     expect(raw(globalService(), "LOST_KEY")).toBeUndefined();
   });
 
-  it("hasSecret and secretExists stay true", () => {
-    expect(hasSecret("LOST_KEY", { scope: "global" })).toBe(true);
-    expect(hasSecret("LOST_KEY", { scope: "global", source: "mcp" })).toBe(true);
-    expect(secretExists("LOST_KEY", { scope: "global" })).toBe(true);
+  it("hasSecret and secretExists count it as absent", () => {
+    expect(hasSecret("LOST_KEY", { scope: "global" })).toBe(false);
+    expect(hasSecret("LOST_KEY", { scope: "global", source: "mcp" })).toBe(false);
+    expect(secretExists("LOST_KEY", { scope: "global" })).toBe(false);
+  });
+
+  it("hasSecret and secretExists move on to the next scope", () => {
+    plant(projectService(project), "LOST_KEY", "");
+    setSecret("LOST_KEY", "global-copy", { scope: "global" });
+    expect(hasSecret("LOST_KEY", { projectPath: project })).toBe(true);
+    expect(secretExists("LOST_KEY", { projectPath: project })).toBe(true);
+  });
+
+  it("import --skip-existing restores it", () => {
+    const envFile = join(project, ".env");
+    writeFileSync(envFile, "LOST_KEY=restored-value\n");
+    const result = importDotenv(envFile, { scope: "global", skipExisting: true });
+    expect(result.imported).toEqual(["LOST_KEY"]);
+    expect(getSecret("LOST_KEY", { scope: "global", silent: true })).toBe("restored-value");
+  });
+
+  it("lint --fix stores the literal it removes from the source", () => {
+    const literal = "sk-abcdef1234567890abcdef1234567890";
+    const file = join(project, "app.ts");
+    writeFileSync(file, `const api_key = "${literal}";\n`);
+    const [result] = lintFiles([file], { fix: true, scope: "global", projectPath: project });
+    plant(globalService(), result.keyName, "");
+    // Re-run on a fresh copy now that the stored value is empty.
+    writeFileSync(file, `const api_key = "${literal}";\n`);
+    const [again] = lintFiles([file], { fix: true, scope: "global", projectPath: project });
+    expect(again.fixed).toBe(true);
+    expect(readFileSync(file, "utf8")).not.toContain(literal);
+    expect(getSecret(again.keyName, { scope: "global", silent: true })).toBe(literal);
   });
 
   it("listSecrets keeps the entry, marked emptyStored, without throwing", () => {
@@ -172,10 +204,110 @@ describe.runIf(process.platform === "linux")("reading an at-risk entry on Linux"
     plant(globalService(), "ESCAPED", JSON.stringify(createEnvelope(value)));
     expect(getSecret("ESCAPED", { scope: "global" })).toBe(value);
     const stored = raw(globalService(), "ESCAPED")!;
-    expect(isSafeForm(stored)).toBe(true);
+    expect(JSON.parse(stored)).toMatchObject({ v: 1, enc: "b64" });
     // eslint-disable-next-line no-control-regex
     expect(/[\\\u0000-\u001f]/.test(stored)).toBe(false);
     expect(collapseValue(parseEnvelope(stored)!)).toBe(value);
     expect(findStorageRisks().map((r) => r.key)).toEqual(["LOST_KEY"]);
+  });
+});
+
+describe("entries the keyring empties between two reads", () => {
+  /** Make Entry.getPassword return "" for `key` from its `fromCall`-th call on. */
+  const emptyAfter = (key: string, fromCall: number) => {
+    const real = FakeEntry.prototype.getPassword;
+    let calls = 0;
+    vi.spyOn(FakeEntry.prototype, "getPassword").mockImplementation(function (this: FakeEntry) {
+      const value = real.call(this);
+      if ((this as unknown as { account: string }).account !== key) return value;
+      calls++;
+      return calls >= fromCall ? "" : value;
+    });
+  };
+
+  it("exec skips a key listed healthy but empty when read", async () => {
+    setSecret("RACED_KEY", "raced-value-123", { scope: "global" });
+    emptyAfter("RACED_KEY", 1);
+    const stderr: string[] = [];
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk: string | Uint8Array) => {
+      stderr.push(String(chunk));
+      return true;
+    });
+    const result = await execCommand({
+      command: process.execPath,
+      args: ["-e", "console.log('RACED_KEY' in process.env)"],
+      projectPath: project,
+      scope: "global",
+      source: "cli",
+      captureOutput: true,
+    });
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("false");
+    expect(stderr.filter((l) => l.includes('not injecting "RACED_KEY"'))).toHaveLength(1);
+  });
+
+  it("getSecret returns the value and writes it back when the re-read finds it empty", () => {
+    const value = 'multi\nline "quoted"';
+    plant(globalService(), "RESCUED", JSON.stringify(createEnvelope(value)));
+    emptyAfter("RESCUED", 2);
+    expect(getSecret("RESCUED", { scope: "global" })).toBe(value);
+    vi.restoreAllMocks();
+    const stored = raw(globalService(), "RESCUED")!;
+    const parsed = parseEnvelope(stored)!;
+    expect(collapseValue(parsed)).toBe(value);
+    expect(parsed.meta.accessCount).toBe(1);
+    if (process.platform === "linux") {
+      expect(JSON.parse(stored)).toMatchObject({ v: 1, enc: "b64" });
+    }
+  });
+});
+
+describe("convertStorageRisks", () => {
+  it("rewrites at-risk entries from one snapshot, expired and canary ones included, without reads", () => {
+    const expired = createEnvelope('old "value"', { expiresAt: new Date(Date.now() - 60_000).toISOString() });
+    const canary = createEnvelope('fake\\token', { canary: true });
+    plant(globalService(), "EXPIRED", JSON.stringify(expired));
+    plant(globalService(), "CANARY", JSON.stringify(canary));
+    plant(globalService(), "PLAIN", JSON.stringify(createEnvelope("no-escapes")));
+    plant(projectService(project), "PROJ", "C:\\legacy");
+    const plainBefore = raw(globalService(), "PLAIN");
+    const before = new Set(queryAudit({}).map((e) => JSON.stringify(e)));
+
+    const result = convertStorageRisks({ projectPath: project });
+
+    expect(result).toEqual({
+      converted: [
+        { key: "CANARY", scope: "global" },
+        { key: "EXPIRED", scope: "global" },
+        { key: "PROJ", scope: "project" },
+      ],
+      failed: [],
+    });
+    expect(raw(globalService(), "PLAIN")).toBe(plainBefore);
+    const canaryAfter = parseEnvelope(raw(globalService(), "CANARY")!)!;
+    expect(canaryAfter.value).toBe("fake\\token");
+    expect(canaryAfter.meta.canary).toBe(true);
+    expect(canaryAfter.meta.accessCount).toBe(0);
+    expect(collapseValue(parseEnvelope(raw(globalService(), "EXPIRED")!)!)).toBe('old "value"');
+    expect(collapseValue(parseEnvelope(raw(projectService(project), "PROJ")!)!)).toBe("C:\\legacy");
+
+    const events = queryAudit({}).filter((e) => !before.has(JSON.stringify(e)));
+    expect(events.some((e) => e.action === "canary")).toBe(false);
+    expect(events.some((e) => e.action === "read")).toBe(false);
+    const converted = events.filter((e) => e.detail === "storage form converted");
+    expect(converted.map((e) => e.key).sort()).toEqual(["CANARY", "EXPIRED", "PROJ"]);
+    expect(converted.every((e) => e.action === "write")).toBe(true);
+    if (process.platform === "linux") {
+      expect(findStorageRisks({ projectPath: project }).map((r) => r.key)).toEqual(["LOST_KEY"]);
+    }
+  });
+
+  it("writes from the snapshot even when the stored copy is emptied meanwhile", () => {
+    const value = 'a "quoted" value';
+    plant(globalService(), "RACED", JSON.stringify(createEnvelope(value)));
+    vi.spyOn(FakeEntry.prototype, "getPassword").mockReturnValue("");
+    expect(convertStorageRisks().converted).toEqual([{ key: "RACED", scope: "global" }]);
+    vi.restoreAllMocks();
+    expect(collapseValue(parseEnvelope(raw(globalService(), "RACED")!)!)).toBe(value);
   });
 });
