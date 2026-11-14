@@ -284,6 +284,23 @@ that is not a valid envelope is read as a plain value (`wrapLegacy`), so
 entries written before the envelope format, or by other tools, stay
 readable; this is kept permanently.
 
+On Linux, an envelope whose JSON text contains a backslash (any escape: a
+double quote, backslash, newline or control character in a value or in
+`meta`) is stored in the **safe form** instead:
+`{ "v": 1, "enc": "b64", "data": "<base64 of the UTF-8 envelope JSON>" }`.
+The safe form contains no backslash and no control character. GNOME Keyring
+keeps a passwordless keyring as a plain text file and unescapes each secret
+when it reads the file back, which empties a value that carries an escape
+and, for a newline escape, makes the daemon reject the whole file. An
+envelope that needs no escape is stored as plain JSON, as before. Every
+platform reads both forms. A q-ring older than the release that added the
+safe form (the one after 0.19.1) reads such an entry as a plain value, the
+wrapper text, so all q-ring installs on one machine are upgraded together.
+
+An empty stored string is never a valid entry. Reading one fails with an
+error that names the key; it is not treated as a plain value and nothing
+is written back.
+
 Other keychain entries q-ring owns:
 
 | Service | Account | Holds |
