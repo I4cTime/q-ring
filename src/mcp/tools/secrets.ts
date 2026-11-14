@@ -12,6 +12,7 @@ import {
   entangleSecrets,
   disentangleSecrets,
   exportSecrets,
+  EmptyStoredValueError,
 } from "../../core/keyring.js";
 import { checkDecay } from "../../core/envelope.js";
 import { rotationStatus } from "../../core/rotation.js";
@@ -221,7 +222,15 @@ export function registerSecretTools(server: McpServer): void {
       const o = opts(params);
 
       if (params.env) {
-        const existing = getEnvelope(params.key, o);
+        // A key whose stored value is empty (lost) can be set again: there
+        // is no prior envelope to merge states from.
+        let existing: ReturnType<typeof getEnvelope>;
+        try {
+          existing = getEnvelope(params.key, o);
+        } catch (err) {
+          if (!(err instanceof EmptyStoredValueError)) throw err;
+          existing = null;
+        }
         const states = existing?.envelope?.states ?? {};
         states[params.env] = params.value;
 

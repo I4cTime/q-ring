@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -9,8 +9,11 @@ vi.mock("@napi-rs/keyring", async () => {
 });
 
 import { createProgram } from "../../cli/commands.js";
+import { sniffDefaultKeyring } from "../../cli/commands/doctor.js";
 import { clearPolicyCache } from "../../core/policy.js";
-import { resetFakeKeyring } from "../helpers/fake-keyring.js";
+import { createEnvelope } from "../../core/envelope.js";
+import { globalService } from "../../core/scope.js";
+import { FakeEntry, resetFakeKeyring } from "../helpers/fake-keyring.js";
 
 interface Check {
   name: string;
@@ -58,6 +61,7 @@ describe("qring doctor on a .q-ring.json that is not valid JSON", () => {
     expect(names).toEqual([
       "node runtime",
       "keyring backend",
+      "keyring storage format",
       "audit log",
       "project manifest",
       "governance policy",
@@ -91,5 +95,90 @@ describe("qring doctor on a .q-ring.json that is not valid JSON", () => {
     const policy = report.data.checks.find((c) => c.name === "governance policy")!;
     expect(policy.status).toBe("ok");
     expect(policy.detail).toContain("mcp");
+  });
+});
+
+describe("sniffDefaultKeyring", () => {
+  it("reports no-dir when the keyrings folder does not exist", () => {
+    expect(sniffDefaultKeyring(join(dir, "nope"))).toEqual({ format: "no-dir" });
+  });
+
+  it("detects a plaintext passwordless keyring named by the default alias", () => {
+    writeFileSync(join(dir, "default"), "Default_keyring\n");
+    writeFileSync(join(dir, "Default_keyring.keyring"), "[keyring]\ndisplay-name=Default keyring\n");
+    expect(sniffDefaultKeyring(dir)).toEqual({ format: "plaintext", name: "Default_keyring" });
+  });
+
+  it("detects the encrypted format from its magic", () => {
+    writeFileSync(join(dir, "default"), "secure");
+    writeFileSync(join(dir, "secure.keyring"), Buffer.from("GnomeKeyring\n\r\0\n\x00\x01binary", "latin1"));
+    expect(sniffDefaultKeyring(dir)).toEqual({ format: "encrypted", name: "secure" });
+  });
+
+  it("falls back to login when there is no default alias", () => {
+    writeFileSync(join(dir, "login.keyring"), "[keyring]\n");
+    expect(sniffDefaultKeyring(dir)).toEqual({ format: "plaintext", name: "login" });
+  });
+
+  it("reports a missing file and an unknown format", () => {
+    expect(sniffDefaultKeyring(dir)).toEqual({ format: "missing", name: "login" });
+    writeFileSync(join(dir, "login.keyring"), "something else");
+    expect(sniffDefaultKeyring(dir)).toEqual({ format: "unknown", name: "login" });
+  });
+});
+
+describe.runIf(process.platform === "linux")("qring doctor keyring storage format", () => {
+  let dataHome: string;
+  let savedDataHome: string | undefined;
+
+  beforeEach(() => {
+    savedDataHome = process.env.XDG_DATA_HOME;
+    dataHome = mkdtempSync(join(tmpdir(), "qring-doctor-data-"));
+    process.env.XDG_DATA_HOME = dataHome;
+  });
+
+  afterEach(() => {
+    process.env.XDG_DATA_HOME = savedDataHome;
+    rmSync(dataHome, { recursive: true, force: true });
+  });
+
+  const storageCheck = async () => {
+    const report = JSON.parse(await runDoctor("--json")) as { data: { checks: Check[] } };
+    return report.data.checks.find((c) => c.name === "keyring storage format")!;
+  };
+
+  it("is ok and not applicable without a keyrings folder", async () => {
+    const check = await storageCheck();
+    expect(check.status).toBe("ok");
+    expect(check.detail).toContain("not applicable");
+  });
+
+  it("is ok on an encrypted default keyring", async () => {
+    mkdirSync(join(dataHome, "keyrings"));
+    writeFileSync(join(dataHome, "keyrings", "login.keyring"), "GnomeKeyring\n\r\0\n");
+    expect((await storageCheck()).status).toBe("ok");
+  });
+
+  it("warns on a plaintext keyring and names the keys at risk and the keys lost", async () => {
+    mkdirSync(join(dataHome, "keyrings"));
+    writeFileSync(join(dataHome, "keyrings", "login.keyring"), "[keyring]\n");
+    new FakeEntry(globalService(), "AT_RISK").setPassword(JSON.stringify(createEnvelope('a"b')));
+    new FakeEntry(globalService(), "LOST").setPassword("");
+    new FakeEntry(globalService(), "FINE").setPassword(JSON.stringify(createEnvelope("ok")));
+    const check = await storageCheck();
+    expect(check.status).toBe("warn");
+    expect(check.detail).toContain("passwordless and kept as plain text");
+    expect(check.detail).toContain("AT_RISK (global)");
+    expect(check.detail).toContain("qring get AT_RISK");
+    expect(check.detail).toContain("LOST (global) - value lost, set it again");
+    expect(check.detail).not.toContain("FINE");
+  });
+
+  it("says so when a plaintext keyring has nothing at risk", async () => {
+    mkdirSync(join(dataHome, "keyrings"));
+    writeFileSync(join(dataHome, "keyrings", "login.keyring"), "[keyring]\n");
+    const check = await storageCheck();
+    expect(check.status).toBe("warn");
+    expect(check.detail).toContain("no stored entries are at risk");
   });
 });

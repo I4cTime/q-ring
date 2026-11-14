@@ -1,9 +1,20 @@
 import type { Command } from "commander";
-import { existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  rmSync,
+  openSync,
+  readSync,
+  closeSync,
+} from "node:fs";
 import { join, delimiter } from "node:path";
+import { homedir } from "node:os";
 import { verifyAuditChain } from "../../core/observer.js";
 import { getPolicySummary, PolicyConfigError } from "../../core/policy.js";
 import { countLegacyApprovals } from "../../core/approval.js";
+import { findStorageRisks } from "../../core/keyring.js";
+import { activeBackend } from "../../core/backend.js";
 import { c, SYMBOLS } from "../../utils/colors.js";
 import { emitJson } from "../helpers.js";
 import { PACKAGE_VERSION } from "../../version.js";
@@ -160,6 +171,105 @@ function checkLegacyApprovals(): CheckResult {
   };
 }
 
+/** Where GNOME Keyring keeps its keyring files. */
+function gnomeKeyringsDir(): string {
+  const dataHome = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
+  return join(dataHome, "keyrings");
+}
+
+export interface KeyringFileSniff {
+  /**
+   * "no-dir": no keyrings folder. "plaintext": passwordless keyring kept as
+   * a plain text file. "encrypted": the encrypted binary format. "missing":
+   * no file for the default keyring. "unknown": a file in neither format.
+   */
+  format: "no-dir" | "plaintext" | "encrypted" | "missing" | "unknown";
+  /** Default keyring name (the `default` alias file, else "login"). */
+  name?: string;
+}
+
+/**
+ * Tell the default GNOME keyring's on-disk format from the first 16 bytes
+ * of its file. Never reads or parses more of the file.
+ */
+export function sniffDefaultKeyring(dir: string): KeyringFileSniff {
+  if (!existsSync(dir)) return { format: "no-dir" };
+
+  let name = "login";
+  try {
+    const alias = readFileSync(join(dir, "default"), "utf8").trim();
+    // A name, never a path.
+    if (alias && !/[\\/]/.test(alias) && !alias.startsWith(".")) name = alias;
+  } catch {
+    // no alias file: GNOME Keyring falls back to "login"
+  }
+
+  const head = Buffer.alloc(16);
+  let read: number;
+  let fd: number | undefined;
+  try {
+    fd = openSync(join(dir, `${name}.keyring`), "r");
+    read = readSync(fd, head, 0, head.length, 0);
+  } catch {
+    return { format: "missing", name };
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+
+  const magic = head.subarray(0, read).toString("latin1");
+  if (magic.startsWith("[keyring]")) return { format: "plaintext", name };
+  if (magic.startsWith("GnomeKeyring")) return { format: "encrypted", name };
+  return { format: "unknown", name };
+}
+
+function checkKeyringStorage(projectPath: string): CheckResult {
+  const name = "keyring storage format";
+  if (process.platform !== "linux") {
+    return { name, status: "ok", detail: `not applicable on ${process.platform}` };
+  }
+  try {
+    if (activeBackend() === "file") {
+      return { name, status: "ok", detail: "file backend in use; not applicable" };
+    }
+  } catch {
+    // an unknown QRING_BACKEND is reported by the keyring backend check
+  }
+
+  const sniff = sniffDefaultKeyring(gnomeKeyringsDir());
+  switch (sniff.format) {
+    case "no-dir":
+      return { name, status: "ok", detail: "no GNOME keyring folder; not applicable" };
+    case "encrypted":
+      return { name, status: "ok", detail: `default keyring "${sniff.name}" is encrypted` };
+    case "missing":
+      return { name, status: "ok", detail: `no file for default keyring "${sniff.name}"` };
+    case "unknown":
+      return { name, status: "ok", detail: `default keyring "${sniff.name}" is in an unrecognised format` };
+    case "plaintext":
+      break;
+  }
+
+  const risks = findStorageRisks({ projectPath });
+  const label = (r: { key: string; scope: string }) => `${r.key} (${r.scope})`;
+  const escape = risks.filter((r) => r.kind === "escape");
+  const empty = risks.filter((r) => r.kind === "empty");
+  const parts = [
+    `default keyring "${sniff.name}" is passwordless and kept as plain text on disk; q-ring stores entries that carry escapes in a safe form`,
+  ];
+  if (risks.length === 0) {
+    parts.push("no stored entries are at risk");
+  }
+  if (escape.length) {
+    parts.push(
+      `still at risk: ${escape.map(label).join(", ")} - read each once with this version to convert it, for example \`qring get ${escape[0].key}\``,
+    );
+  }
+  if (empty.length) {
+    parts.push(`already empty: ${empty.map(label).join(", ")} - value lost, set it again`);
+  }
+  return { name, status: "warn", detail: parts.join("; ") };
+}
+
 function checkMcpBinary(): CheckResult {
   const exts = process.platform === "win32" ? [".cmd", ".exe", ".bat", ""] : [""];
   for (const dir of (process.env.PATH ?? "").split(delimiter)) {
@@ -194,6 +304,7 @@ export function registerDoctorCommand(program: Command): void {
       const checks: CheckResult[] = [
         checkNode(),
         await checkKeyringBackend(),
+        checkKeyringStorage(projectPath),
         checkAuditLog(),
         checkManifest(projectPath),
         checkPolicy(projectPath),

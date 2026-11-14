@@ -7,6 +7,7 @@ import {
   listSecrets,
   exportSecrets,
   getEnvelope,
+  EmptyStoredValueError,
   isValidRotateEveryDays,
   MAX_ROTATE_EVERY_DAYS,
   type SetSecretOptions,
@@ -125,7 +126,15 @@ export function registerSecretsCommands(program: Command): void {
       // A canary flag survives overwrites by design (an agent must not be
       // able to launder a tripwire away) — warn the operator so a real
       // credential doesn't quietly inherit the alarm.
-      const priorEnvelope = getEnvelope(key, opts);
+      // A key whose stored value is empty (lost) can be set again: there is
+      // no prior envelope to inherit from.
+      let priorEnvelope: ReturnType<typeof getEnvelope>;
+      try {
+        priorEnvelope = getEnvelope(key, opts);
+      } catch (err) {
+        if (!(err instanceof EmptyStoredValueError)) throw err;
+        priorEnvelope = null;
+      }
       if (priorEnvelope?.envelope.meta.canary) {
         console.error(
           c.yellow(
