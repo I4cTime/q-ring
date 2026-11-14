@@ -314,6 +314,16 @@ export async function execCommand(opts: ExecOptions): Promise<ExecResult> {
   }
 
   for (const entry of entries) {
+    // A lost value is skipped, not injected as "" and not allowed to fail
+    // the whole run (getSecret would throw EmptyStoredValueError).
+    if (entry.emptyStored) {
+      if ((opts.source ?? "cli") !== "mcp") {
+        process.stderr.write(
+          `[QRING] not injecting "${entry.key}": its stored value is empty, likely lost by the OS keyring (see qring doctor)\n`,
+        );
+      }
+      continue;
+    }
     if (entry.envelope) {
       const decay = checkDecay(entry.envelope);
       if (decay.isExpired) continue;

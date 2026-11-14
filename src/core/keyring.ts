@@ -7,6 +7,7 @@ import {
   projectService,
   teamService,
   orgService,
+  parseServiceName,
   type Scope,
 } from "./scope.js";
 import {
@@ -14,6 +15,7 @@ import {
   type Environment,
   createEnvelope,
   parseEnvelope,
+  isSafeForm,
   wrapLegacy,
   serializeEnvelope,
   collapseValue,
@@ -47,6 +49,11 @@ export interface SecretEntry {
   value?: string;
   envelope?: QuantumEnvelope;
   decay?: DecayStatus;
+  /**
+   * The stored string is empty: the value was lost (typically by the OS
+   * keyring), so there is no envelope and no decay to report.
+   */
+  emptyStored?: true;
 }
 
 export interface KeyringOptions {
@@ -111,13 +118,46 @@ export function isValidRotateEveryDays(days: number): boolean {
   return Number.isInteger(days) && days >= 1 && days <= MAX_ROTATE_EVERY_DAYS;
 }
 
+/**
+ * An entry whose stored string is empty. That is never a valid entry (see
+ * docs/stability.md, "Storage"): it is not read as a plain value and nothing
+ * is written back over it.
+ */
+export class EmptyStoredValueError extends Error {
+  constructor(
+    readonly key: string,
+    readonly scope: Scope,
+  ) {
+    super(
+      `Secret "${key}" (${scope} scope): the stored value is empty, likely lost by the OS keyring. ` +
+        `Run \`qring doctor\` to check the keyring, then set the secret again.`,
+    );
+    this.name = "EmptyStoredValueError";
+  }
+}
+
 function readEnvelope(service: string, key: string): QuantumEnvelope | null {
   const entry = new Entry(service, key);
   const raw = entry.getPassword();
   if (raw === null) return null;
+  if (raw === "") throw new EmptyStoredValueError(key, parseServiceName(service).scope);
 
   const envelope = parseEnvelope(raw);
   return envelope ?? wrapLegacy(raw);
+}
+
+/**
+ * readEnvelope for paths that must keep working on a key whose stored value
+ * is empty (re-set, delete, tag lookups): the empty entry reads as "no
+ * envelope here".
+ */
+function readEnvelopeOrNull(service: string, key: string): QuantumEnvelope | null {
+  try {
+    return readEnvelope(service, key);
+  } catch (err) {
+    if (err instanceof EmptyStoredValueError) return null;
+    throw err;
+  }
 }
 
 function writeEnvelope(
@@ -395,7 +435,7 @@ export function checkKeyWritePolicy(key: string, opts: KeyringOptions = {}): Pol
     ...resolveScope({ ...opts, scope: undefined }).map((s) => s.service),
   ]);
   for (const svc of services) {
-    const decision = writeDecision(key, readEnvelope(svc, key)?.meta.tags, opts);
+    const decision = writeDecision(key, readEnvelopeOrNull(svc, key)?.meta.tags, opts);
     if (!decision.allowed) return refuse(decision);
   }
   return byName;
@@ -441,7 +481,9 @@ export function setSecret(
   const { service } = scopes[0];
   const source = opts.source ?? "cli";
 
-  const current = readEnvelope(service, key);
+  // An empty stored value is "no previous envelope": the key can be set again
+  // and starts from fresh metadata.
+  const current = readEnvelopeOrNull(service, key);
 
   const decision = checkKeyWritePolicy(key, { ...opts, scope });
   if (!decision.allowed) {
@@ -634,7 +676,7 @@ export function deleteSecret(
   const copies = scopes.map(({ service, scope }) => ({
     service,
     scope,
-    existing: readEnvelope(service, key),
+    existing: readEnvelopeOrNull(service, key),
   }));
   for (const { existing } of copies) {
     if (existing) assertMcpTagPolicy(key, existing, opts);
@@ -716,7 +758,14 @@ export function hasSecret(
   const scopes = resolveScope(opts);
 
   for (const { service } of scopes) {
-    const envelope = readEnvelope(service, key);
+    let envelope: QuantumEnvelope | null;
+    try {
+      envelope = readEnvelope(service, key);
+    } catch (err) {
+      // The key is there, its value is lost: it still exists.
+      if (err instanceof EmptyStoredValueError) return true;
+      throw err;
+    }
     if (envelope) {
       if (source === "mcp" && envelope.meta.tags?.length) {
         if (!checkKeyReadPolicy(key, envelope.meta.tags, opts.projectPath).allowed) return false;
@@ -739,7 +788,13 @@ export function hasSecret(
  */
 export function secretExists(key: string, opts: KeyringOptions = {}): boolean {
   for (const { service } of resolveScope(opts)) {
-    const envelope = readEnvelope(service, key);
+    let envelope: QuantumEnvelope | null;
+    try {
+      envelope = readEnvelope(service, key);
+    } catch (err) {
+      if (err instanceof EmptyStoredValueError) return true;
+      throw err;
+    }
     if (envelope && !checkDecay(envelope).isExpired) return true;
   }
   return false;
@@ -782,6 +837,11 @@ export function listSecrets(opts: KeyringOptions = {}): SecretEntry[] {
         if (seen.has(id)) continue;
         seen.add(id);
 
+        if (cred.password === "") {
+          results.push({ key: cred.account, scope, emptyStored: true });
+          continue;
+        }
+
         const envelope = parseEnvelope(cred.password) ?? wrapLegacy(cred.password);
         const decay = checkDecay(envelope);
 
@@ -811,6 +871,51 @@ export function listSecrets(opts: KeyringOptions = {}): SecretEntry[] {
   }
 
   return sorted;
+}
+
+export interface StorageRisk {
+  key: string;
+  scope: Scope;
+  /**
+   * "escape": stored as plain JSON that contains a backslash, so a
+   * passwordless GNOME keyring empties it on its next restart; reading it
+   * once with this version rewrites it in the safe form.
+   * "empty": the stored value is already empty (lost).
+   */
+  kind: "escape" | "empty";
+}
+
+/**
+ * Scan the raw stored strings in global scope and, with a projectPath,
+ * project scope for entries a plaintext keyring can damage. Returns key
+ * names and scopes only, never values. Read-only: no writes, no audit
+ * events, no access counts.
+ */
+export function findStorageRisks(opts: { projectPath?: string } = {}): StorageRisk[] {
+  const services: { service: string; scope: Scope }[] = [
+    { service: globalService(), scope: "global" },
+  ];
+  if (opts.projectPath) {
+    services.push({ service: projectService(opts.projectPath), scope: "project" });
+  }
+
+  const risks: StorageRisk[] = [];
+  for (const { service, scope } of services) {
+    let credentials: { account: string; password: string }[];
+    try {
+      credentials = findCredentials(service);
+    } catch {
+      continue; // keyring unavailable; the backend check reports that
+    }
+    for (const cred of credentials) {
+      if (cred.password === "") {
+        risks.push({ key: cred.account, scope, kind: "empty" });
+      } else if (cred.password.includes("\\") && !isSafeForm(cred.password)) {
+        risks.push({ key: cred.account, scope, kind: "escape" });
+      }
+    }
+  }
+  return risks.sort((a, b) => a.key.localeCompare(b.key) || a.scope.localeCompare(b.scope));
 }
 
 /**
@@ -845,6 +950,10 @@ export function exportSecrets(
   const projectEntries = entries.filter((e) => e.scope === "project");
 
   for (const entry of [...globalEntries, ...orgEntries, ...teamEntries, ...projectEntries]) {
+    if (entry.emptyStored) {
+      console.warn(`Warning: skipped exporting ${entry.key} (${entry.scope} scope): its stored value is empty, likely lost by the OS keyring`);
+      continue;
+    }
     if (entry.envelope) {
       const decay = checkDecay(entry.envelope);
       if (decay.isExpired) continue;
@@ -945,8 +1054,8 @@ export function entangleSecrets(
   // The link is bidirectional, so each side takes the other's deny tags
   // now, before any value moves between them.
   const inherited: string[] = [];
-  const sourceEnv = readEnvelope(source.service, source.key);
-  const targetEnv = readEnvelope(target.service, target.key);
+  const sourceEnv = readEnvelopeOrNull(source.service, source.key);
+  const targetEnv = readEnvelopeOrNull(target.service, target.key);
   if (sourceEnv && targetEnv) {
     const toTarget = sharedDenyTags(sourceEnv.meta.tags, sourceOpts.projectPath);
     const toSource = sharedDenyTags(targetEnv.meta.tags, sourceOpts.projectPath);

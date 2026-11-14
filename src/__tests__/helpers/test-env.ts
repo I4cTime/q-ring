@@ -26,6 +26,8 @@ process.env.QRING_AUDIT_DIR = defaultAuditDir;
 // test files can't race on the same JSON file and nothing lands in the
 // developer's real ~/.config/q-ring.
 process.env.QRING_CONFIG_DIR = defaultConfigDir;
+// `qring doctor` sniffs $XDG_DATA_HOME/keyrings: never the developer's real one.
+process.env.XDG_DATA_HOME = mkdtempSync(join(tmpdir(), "qring-test-data-"));
 
 // Test files legitimately set their own QRING_AUDIT_DIR and delete it in
 // afterEach — restore the isolated default so later tests in the worker
