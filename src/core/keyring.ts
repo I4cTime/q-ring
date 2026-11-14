@@ -878,7 +878,8 @@ export interface StorageRisk {
   scope: Scope;
   /**
    * "escape": stored as plain JSON that contains a backslash, so a
-   * passwordless GNOME keyring empties it on its next restart; reading it
+   * passwordless GNOME keyring empties it the next time the daemon reloads
+   * its file (often on the next write, at the latest on restart); reading it
    * once with this version rewrites it in the safe form.
    * "empty": the stored value is already empty (lost).
    */
